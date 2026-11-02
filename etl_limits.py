@@ -21,7 +21,8 @@ class ETLLimits:
     max_record_chars: int = 131_072
     timeout_seconds: int = 60
     memory_mb: int = 384
-    max_output_bytes: int = 2 * 1024 * 1024
+    # A Curva ABC traz todos os produtos: cerca de 170 bytes por produto no resultado.
+    max_output_bytes: int = 4 * 1024 * 1024
 
     def __post_init__(self):
         for item in fields(self):

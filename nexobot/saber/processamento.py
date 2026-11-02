@@ -89,7 +89,7 @@ REGISTROS = (
         resumo=(
             "Apenas os resultados consolidados: faturamento total, total comprado, Indicador de Pressão de "
             "Estoque, produto mais vendido, produto de maior faturamento, produto com maior saldo estimado "
-            "parado, o ranking da Curva ABC (até 20 produtos) e o período lido do relatório."
+            "parado, o ranking completo da Curva ABC e o período lido do relatório."
         ),
         explicacao=(
             "As planilhas continuam guardadas para auditoria e reprocessamento, mas as linhas de venda e compra "

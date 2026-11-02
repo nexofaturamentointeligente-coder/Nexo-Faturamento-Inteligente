@@ -71,7 +71,7 @@ REGISTROS = (
         explicacao=(
             "Os gráficos são desenhados no navegador a partir dos indicadores já calculados; eles não "
             "recalculam nada. Na página de uma análise individual aparecem o comparativo e o Pareto daquela "
-            "análise, Na página de uma análise individual aparecem o comparativo e o Pareto daquela análise, além da tabela da Curva ABC com filtro por classe, que lista até 20 produtos (os de maior faturamento do período); o gráfico de Pareto mostra os 10 primeiros.."
+            "análise, Na página de uma análise individual aparecem o comparativo e o Pareto daquela análise, além da tabela da Curva ABC com filtro por classe, que lista todos os produtos do período, do maior para o menor faturamento; o gráfico de Pareto mostra os 10 primeiros.."
         ),
         perguntas=(
             "Quais gráficos existem?", "Como os gráficos são gerados?", "O que são os gráficos do painel?",

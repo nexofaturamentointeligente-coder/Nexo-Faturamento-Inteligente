@@ -546,8 +546,8 @@ class ProdutoCurvaABC(db.Model):
         Classe C (Operacionais):  os ~5% restantes (cauda longa).
 
     Diferente de indicador_analise (KPIs consolidados 1:1 com a análise), aqui
-    persistimos uma LINHA POR PRODUTO do topo do ranking (top-N), o que viabiliza
-    o gráfico de barras horizontais coloridas por classe no painel do cliente.
+    persistimos uma LINHA POR PRODUTO do período, o que viabiliza a tabela completa
+    e o gráfico de barras horizontais coloridas por classe no painel do cliente.
 
     Mantém a regra inegociável do ETL: NÃO há lucro/margem/CMV — apenas
     faturamento agregado por produto, que é dado bruto honesto do PDV.

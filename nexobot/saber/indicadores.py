@@ -1,7 +1,7 @@
 """Assuntos I e J — indicadores, semáforos e Curva ABC.
 
 Fontes: etl_processor.py (_calcular_kpis_local, _classificar_curva_abc,
-ABC_LIMITE_A/B, TOP_N_CURVA_ABC), insights.py (PRESSAO_CRITICA/ATENCAO),
+ABC_LIMITE_A/B), insights.py (PRESSAO_CRITICA/ATENCAO),
 models.py (IndicadorAnalise, ProdutoCurvaABC), templates/_macros.html
 (nota_pressao, nota_abc), templates/cliente/dashboard.html e analise.html.
 
@@ -215,7 +215,7 @@ REGISTROS = (
         ),
         explicacao=(
             "Essa escolha é apenas de apresentação: Essa escolha é apenas de apresentação: a Curva ABC continua "
-            "mostrando o topo do ranking por faturamento (10 produtos no gráfico e até 20 na tabela da análise "
+            "mostrando o topo do ranking por faturamento (10 produtos no gráfico e todos na tabela da análise "
             "completa), com o líder em primeiro lugar.."
         ),
         perguntas=(
@@ -349,13 +349,14 @@ REGISTROS = (
         explicacao=(
             "É a aplicação do Princípio de Pareto (regra 80/20) ao seu mix: poucos produtos costumam concentrar "
             "a maior parte das vendas. O portal mostra o gráfico de Pareto com os 10 primeiros e, na análise "
-            "completa, a tabela com até 20 produtos, com posição, classe, quantidade, faturamento, percentual "
+            "completa, a tabela com todos os produtos, com posição, classe, quantidade, faturamento, percentual "
             "individual e percentual acumulado, com filtro por classe."
         ),
         detalhes=(
-            "Regras do cálculo: só produtos com faturamento positivo entram; o percentual acumulado é somado na "
-            "ordem do ranking; o líder é sempre Classe A, mesmo que sozinho ultrapasse o limiar. As classes são "
-            "calculadas sobre todos os produtos do relatório, embora apenas o topo do ranking seja exibido."
+            "Regras do cálculo: todos os produtos entram, sobre a receita líquida (vendas canceladas ficam fora e "
+            "devoluções e trocas são deduzidas); o percentual acumulado é somado na ordem do ranking e fecha em "
+            "100%; o líder é sempre Classe A, mesmo que sozinho ultrapasse o limiar. Produto com devoluções acima "
+            "das vendas aparece no fim, com percentual negativo."
         ),
         exemplo=(
             "Exemplo hipotético: uma loja com 100 produtos descobre que 12 deles somam 80% do faturamento "

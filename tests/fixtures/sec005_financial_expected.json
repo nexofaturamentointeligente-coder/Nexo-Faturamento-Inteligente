@@ -1323,8 +1323,8 @@
               "nome": "Produto sintético A",
               "faturamento": 2469.12,
               "quantidade": 2.0,
-              "perc_individual": 98.74,
-              "perc_acumulado": 98.74,
+              "perc_individual": 98.84,
+              "perc_acumulado": 98.84,
               "classe": "A"
             },
             {
@@ -1333,6 +1333,15 @@
               "faturamento": 31.5,
               "quantidade": 3.0,
               "perc_individual": 1.26,
+              "perc_acumulado": 100.1,
+              "classe": "C"
+            },
+            {
+              "posicao": 3,
+              "nome": "Produto sintético C",
+              "faturamento": -2.5,
+              "quantidade": 1.0,
+              "perc_individual": -0.1,
               "perc_acumulado": 100.0,
               "classe": "C"
             }
@@ -1342,7 +1351,7 @@
               "classe": "A",
               "qtd_produtos": 1,
               "faturamento": 2469.12,
-              "perc_faturamento": 98.74
+              "perc_faturamento": 98.84
             },
             {
               "classe": "B",
@@ -1352,9 +1361,9 @@
             },
             {
               "classe": "C",
-              "qtd_produtos": 1,
-              "faturamento": 31.5,
-              "perc_faturamento": 1.26
+              "qtd_produtos": 2,
+              "faturamento": 29.0,
+              "perc_faturamento": 1.16
             }
           ]
         },
@@ -1377,7 +1386,9 @@
         "linhas_vendas": 3,
         "linhas_compras": 3
       },
-      "alertas": []
+      "alertas": [
+        "Curva ABC: 1 produto(s) têm receita líquida negativa e aparecem no fim da lista com percentual negativo; por isso, o acumulado pode passar de 100% antes de fechar em 100%."
+      ]
     },
     "purchase_products_total_priority": {
       "sucesso": true,

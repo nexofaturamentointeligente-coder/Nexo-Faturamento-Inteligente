@@ -3,6 +3,10 @@
 Expected gerado do blob do ETL em ff148796 com 22 pares inteiramente sintéticos.
 Não contém cópia do motor antigo, planilhas reais ou dados de clientes. Todos os
 campos de KPIs, Curva ABC, período, telemetria e alertas são comparados.
+
+Única revisão do expected: em sales_derived_mixed_money, a Curva ABC e os alertas seguem
+as regras financeiras de 11/2026 (ver test_etl_regras_financeiras): itens zerados ou
+negativos entram na curva. Os KPIs seguem iguais.
 """
 
 import json

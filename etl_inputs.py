@@ -27,6 +27,7 @@ ENCODINGS = ("utf-8-sig", "cp1252", "utf-8", "latin1")
 SEPARATORS = (";", ",", "\t", "|")
 _CHUNK = 65536
 _CELL = re.compile(r"([A-Za-z]{1,3})([1-9][0-9]{0,6})\Z")
+_LOOKS_LIKE_THOUSANDS = re.compile(r"-?[0-9]{1,3}\.[0-9]{3}")
 
 
 class ETLInputError(Exception):
@@ -523,6 +524,24 @@ def _filled(cell):
     return not (isinstance(value, str) and value in STR_NA_VALUES)
 
 
+def _disambiguate_numbers(frame, path, sheet, budget):
+    """Com dtype=str, o número 12.125 e o texto "12.125" ficam iguais, mas só o texto
+    pode ser milhar pt-BR. Um zero à direita preserva o valor do número e tira a dúvida."""
+    candidates = [(row, column) for column in range(frame.shape[1])
+                  for row, value in enumerate(frame.iloc[:, column].tolist())
+                  if isinstance(value, str) and _LOOKS_LIKE_THOUSANDS.fullmatch(value)]
+    if not candidates:
+        return frame
+    budget.check()
+    typed = pd.read_excel(path, dtype=object, header=None, engine="openpyxl", sheet_name=sheet)
+    if typed.shape != frame.shape:
+        _reject("invalid", "Não foi possível validar a estrutura do arquivo informado.")
+    for row, column in candidates:
+        if isinstance(typed.iat[row, column], float):
+            frame.iat[row, column] += "0"
+    return frame
+
+
 def _xlsx_input(path, size, budget, materialize):
     entries = _zip_preflight(path, size, budget)
     book = load_workbook(path, read_only=True, data_only=True, keep_links=False)
@@ -570,7 +589,7 @@ def _xlsx_input(path, size, budget, materialize):
         if frame.empty:
             _reject("empty", "O XLSX não contém dados na aba selecionada.")
         budget.check()
-        return _trim(frame)
+        return _trim(_disambiguate_numbers(frame, path, best_index, budget))
     if rows_max == 0 or columns_max == 0:
         _reject("empty", "O XLSX não contém dados nas abas.")
     return metadata

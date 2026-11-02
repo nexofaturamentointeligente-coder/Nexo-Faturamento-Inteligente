@@ -41,12 +41,16 @@ import re
 import csv
 import io
 import logging
+import math
+import numbers
 import unicodedata
 from datetime import datetime, timezone
-from collections import namedtuple
+from collections import Counter, namedtuple
+from decimal import Decimal
 
+import numpy as np
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import delete, insert, select
 
 from etl_inputs import ETLInputError, read_raw
 from etl_limits import get_limits
@@ -57,13 +61,10 @@ ResultadoETL = namedtuple(
     "ResultadoETL", ["sucesso", "mensagem", "kpis", "telemetria", "alertas"]
 )
 
-# Quantos produtos do topo do ranking persistir/exibir na Curva ABC.
-TOP_N_CURVA_ABC = 20
-
 # Limiares do Princípio de Pareto (Curva ABC) sobre o faturamento ACUMULADO:
 #   Classe A (Estratégicos): até 80%
-#   Classe B (Táticos):      de 80% a 95%
-#   Classe C (Operacionais): os ~5% restantes
+#   Classe B (Táticos):      acima de 80% até 95%
+#   Classe C (Operacionais): acima de 95%
 ABC_LIMITE_A = 80.0
 ABC_LIMITE_B = 95.0
 
@@ -148,6 +149,9 @@ def _parse_valor(bruto):
     """
     Aceita 'R$ 1.234,56', '1.234,56', '1234,56', '1,234.56', '1234.56',
     '(123,45)', ' - ', '', None — retorna float ou None se irrecuperável.
+
+    Só para quantidades e estoque: aqui o ponto único é decimal, porque "1.500" numa
+    coluna de quantidade costuma ser 1,5 kg. Dinheiro usa converter_valor_monetario.
     """
     if bruto is None:
         return None
@@ -187,6 +191,122 @@ def _parse_valor(bruto):
 
 def _converter_serie(serie: pd.Series) -> pd.Series:
     return pd.Series([_parse_valor(v) for v in serie], index=serie.index, dtype="float64")
+
+
+# Milhar só com grupos de 3 dígitos depois de um início sem zero: "0.125" nunca é milhar.
+_RE_MILHAR_PONTO = re.compile(r"[1-9][0-9]{0,2}(?:\.[0-9]{3})+")
+_RE_MILHAR_VIRGULA = re.compile(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+")
+_RE_DECIMAL = re.compile(r"[0-9]+[.,]?[0-9]*|[.,][0-9]+")
+_RE_CASAS_DECIMAIS = re.compile(r"[0-9]+")
+_RE_CIENTIFICO = re.compile(r"[0-9]+(?:[.,][0-9]+)?[eE][+-]?[0-9]+")
+_RE_PONTO_DECIMAL = re.compile(r"[0-9,]*\.[0-9]+")
+_RE_VIRGULA_DECIMAL = re.compile(r"[0-9.]*,[0-9]+")
+_RE_MOEDA = re.compile(r"r\$|us\$|brl|usd|\$", re.IGNORECASE)
+_SINAIS_DE_MENOS = str.maketrans({"−": "-", "–": "-", "﹣": "-", "－": "-"})
+_VALORES_EM_BRANCO = {"", "-", "--", "nan", "none", "null", "na", "n/a", "nd", "n/d"}
+
+
+def _limpar_monetario(valor) -> str:
+    """Tira espaços, caracteres invisíveis, aspas de texto do Excel e símbolo de moeda."""
+    texto = str(valor).translate(_SINAIS_DE_MENOS)
+    texto = "".join(c for c in texto if unicodedata.category(c)[0] not in "CZ")
+    return _RE_MOEDA.sub("", texto.strip("'\""))
+
+
+def _separar_sinal(corpo: str) -> tuple:
+    """(negativo, corpo sem sinal): aceita "(10)", "-10" e "10-", formatos de PDV."""
+    negativo = False
+    if corpo.startswith("(") and corpo.endswith(")"):
+        negativo, corpo = True, corpo[1:-1]
+    if corpo.startswith("-"):
+        negativo, corpo = True, corpo[1:]
+    elif corpo.endswith("-"):
+        negativo, corpo = True, corpo[:-1]
+    return negativo, corpo.removeprefix("+")
+
+
+def _normalizar_separadores(corpo: str, ponto_decimal: bool):
+    """Texto aceito por float(), ou None se os separadores não formam um número."""
+    if _RE_CIENTIFICO.fullmatch(corpo):
+        return corpo.replace(",", ".")
+    virgula, ponto = corpo.rfind(","), corpo.rfind(".")
+    if virgula >= 0 and ponto >= 0:
+        # O separador mais à direita é o decimal; o outro só pode agrupar milhares.
+        decimal_br = virgula > ponto
+        inteiro, _, casas = corpo.rpartition("," if decimal_br else ".")
+        agrupado = _RE_MILHAR_PONTO if decimal_br else _RE_MILHAR_VIRGULA
+        if not (agrupado.fullmatch(inteiro) and _RE_CASAS_DECIMAIS.fullmatch(casas)):
+            return None
+        return inteiro.replace("." if decimal_br else ",", "") + "." + casas
+    if corpo.count(",") > 1:
+        return corpo.replace(",", "") if _RE_MILHAR_VIRGULA.fullmatch(corpo) else None
+    if corpo.count(".") > 1:
+        return corpo.replace(".", "") if _RE_MILHAR_PONTO.fullmatch(corpo) else None
+    if _RE_MILHAR_PONTO.fullmatch(corpo) and not ponto_decimal:
+        return corpo.replace(".", "")
+    return corpo.replace(",", ".") if _RE_DECIMAL.fullmatch(corpo) else None
+
+
+def _interpretar_monetario(valor, ponto_decimal: bool = False):
+    """Float finito, ou None quando o valor é nulo ou inválido."""
+    if valor is None or isinstance(valor, bool):
+        return None
+    if isinstance(valor, (numbers.Real, Decimal)):
+        numero = float(valor)
+        return numero if math.isfinite(numero) else None
+    negativo, corpo = _separar_sinal(_limpar_monetario(valor))
+    texto = _normalizar_separadores(corpo, ponto_decimal)
+    if texto is None:
+        return None
+    numero = float(texto)
+    if not math.isfinite(numero):
+        return None
+    return -numero if (negativo and numero) else numero
+
+
+def converter_valor_monetario(valor, ponto_decimal: bool = False) -> float:
+    """
+    Converte um valor em dinheiro para float, sem nunca interromper o processamento:
+    nulo ou inválido vira 0.0.
+
+      "R$ 12.500,50" -> 12500.5     "12.500" -> 12500.0     "1.234.567" -> 1234567.0
+      "1,234.56"     -> 1234.56     "12,5"   -> 12.5        "0.125"     -> 0.125
+      "(10,00)"      -> -10.0       "10,00-" -> -10.0       "abc"       -> 0.0
+
+    `ponto_decimal=True` lê "12.500" como 12.5, para colunas que mostram usar o ponto
+    como decimal (ver _coluna_usa_ponto_decimal). Um valor sozinho não tem como revelar isso.
+    """
+    numero = _interpretar_monetario(valor, ponto_decimal)
+    return 0.0 if numero is None else numero
+
+
+def _coluna_usa_ponto_decimal(corpos: list) -> bool:
+    """A coluna tem valor com ponto que não pode ser milhar ("12.50", "1,234.56") e
+    nenhum com vírgula decimal ("1.234,50"): nela, "12.500" é 12,5, e não 12.500,00."""
+    com_ponto = com_virgula = False
+    for corpo in corpos:
+        if _RE_VIRGULA_DECIMAL.fullmatch(corpo):
+            com_virgula = True
+        elif _RE_PONTO_DECIMAL.fullmatch(corpo) and not _RE_MILHAR_PONTO.fullmatch(corpo):
+            com_ponto = True
+    return com_ponto and not com_virgula
+
+
+def _converter_serie_monetaria(serie: pd.Series, qualidade: Counter) -> pd.Series:
+    """Converte uma coluna em dinheiro e anota em `qualidade` o que pede revisão humana."""
+    corpos = [_separar_sinal(_limpar_monetario(v))[1] for v in serie]
+    ponto_decimal = _coluna_usa_ponto_decimal(corpos)
+    valores = []
+    for bruto, corpo in zip(serie, corpos):
+        numero = _interpretar_monetario(bruto, ponto_decimal)
+        if numero is None:
+            if corpo.lower() not in _VALORES_EM_BRANCO:
+                qualidade["invalidos"] += 1
+            numero = 0.0
+        elif corpo.count(".") == 1 and _RE_MILHAR_PONTO.fullmatch(corpo):
+            qualidade["lidos_como_decimal" if ponto_decimal else "lidos_como_milhar"] += 1
+        valores.append(numero)
+    return pd.Series(valores, index=serie.index, dtype="float64")
 
 
 # =====================================================================
@@ -403,6 +523,72 @@ def _filtrar_linhas_validas(df: pd.DataFrame, chave: str) -> pd.DataFrame:
 
 
 # =====================================================================
+# 5a) Situação da linha: cancelamentos, devoluções e trocas
+# =====================================================================
+# Lidas à parte de ALIAS_VENDAS de propósito: essas colunas não disputam lugar com os
+# canônicos nem mudam a escolha da linha de cabeçalho. A exclusão existe porque
+# "Status do Pagamento: Cancelado" não significa que a venda foi cancelada.
+_RE_COLUNA_SITUACAO = re.compile(
+    r"\b(?:status|situacao|operacao|natureza|movimento|movimentacao)\b"
+    r"|^tipo$|^tipo (?:de )?(?:venda|nota|documento|doc|registro|lancamento)\b"
+)
+_RE_COLUNA_DE_OUTRO_ASSUNTO = re.compile(
+    r"\b(?:pagamento|entrega|cliente|produto|estoque|financeiro|financeira|titulo|cadastro)\b"
+)
+# Início de palavra, para "MERCANCIA" não contar como "CANC"; e sem negação, porque
+# "NAO CANCELADA" é uma venda válida.
+_RE_LINHA_CANCELADA = re.compile(r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )(?:CANC|ESTORN|INUTILIZ)")
+_RE_LINHA_DEVOLUCAO = re.compile(r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )(?:DEVOL|TROCA)")
+
+
+def _situacao_das_linhas(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int):
+    """Texto normalizado das colunas de status/operação de cada linha; None se não houver."""
+    titulos = [[_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
+               for i in range(idx_cab, idx_cab + linhas_cab)]
+    usadas = set(mapa.values())
+    colunas = []
+    for indice, partes in enumerate(zip(*titulos)):
+        chave = " ".join(partes).strip()
+        if (indice not in usadas and _RE_COLUNA_SITUACAO.search(chave)
+                and not _RE_COLUNA_DE_OUTRO_ASSUNTO.search(chave)):
+            colunas.append(indice)
+    if not colunas:
+        return None
+    bloco = df_bruto.iloc[idx_cab + linhas_cab:, colunas]
+    return [" ".join(_norm_chave(v).upper() for v in linha if not pd.isna(v))
+            for linha in bloco.itertuples(index=False, name=None)]
+
+
+def _aplicar_situacao_das_vendas(df: pd.DataFrame, nome: str) -> pd.DataFrame:
+    """
+    Descarta as linhas canceladas e transforma devoluções e trocas em dedução: valor e
+    quantidade ficam negativos, tenham vindo positivos ou não na planilha. Assim, somar
+    o faturamento já dá o Líquido Real (vendas válidas - devoluções/trocas), sem subtrair
+    duas vezes. "DEVOLUCAO CANCELADA" não aconteceu: conta como cancelada.
+    """
+    canceladas = df["_situacao"].map(lambda s: bool(_RE_LINHA_CANCELADA.search(s))).astype(bool)
+    devolucoes = df["_situacao"].map(lambda s: bool(_RE_LINHA_DEVOLUCAO.search(s))).astype(bool)
+    valor_cancelado = float(df.loc[canceladas, "valor_venda"].abs().sum())
+    linhas_canceladas = int(canceladas.sum())
+    devolucoes = devolucoes[~canceladas].reset_index(drop=True)
+    df = df[~canceladas].drop(columns="_situacao").reset_index(drop=True)
+    if df.empty:
+        raise ETLValidationError(
+            f"Relatório de VENDAS '{nome}' sem vendas válidas: todas as linhas estão canceladas."
+        )
+    df["_devolucao"] = devolucoes
+    df.loc[devolucoes, "valor_venda"] = -df.loc[devolucoes, "valor_venda"].abs()
+    df.loc[devolucoes, "quantidade"] = -df.loc[devolucoes, "quantidade"].abs()
+    df.attrs["situacao"] = {
+        "linhas_canceladas": linhas_canceladas,
+        "valor_cancelado": valor_cancelado,
+        "linhas_devolucao": int(devolucoes.sum()),
+        "valor_devolucoes": float(-df.loc[devolucoes, "valor_venda"].sum()),
+    }
+    return df
+
+
+# =====================================================================
 # 6) Carregadores específicos (Vendas / Compras)
 # =====================================================================
 def _validar_vendas(mapa: dict) -> bool:
@@ -431,23 +617,27 @@ def carregar_vendas(caminho: str) -> pd.DataFrame:
 
     idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_VENDAS, _validar_vendas)
     df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
+    situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab)
+    if situacao is not None:
+        df["_situacao"] = situacao
     df = _filtrar_linhas_validas(df, "produto")
 
     # Conversões numéricas — NaN vira 0 (linha sem qtd/valor não impacta KPI)
+    qualidade = Counter()
     df["quantidade"] = _converter_serie(df["quantidade"]).fillna(0.0)
     if "valor_venda" in df.columns:
-        df["valor_venda"] = _converter_serie(df["valor_venda"]).fillna(0.0)
+        df["valor_venda"] = _converter_serie_monetaria(df["valor_venda"], qualidade)
     elif "preco_unitario" in df.columns:
         # Sem coluna de total: deriva o faturamento da linha (qtd x preço unitário).
         # Cálculo honesto a partir de colunas reais — não é dado inventado.
-        df["valor_venda"] = _converter_serie(df["preco_unitario"]).fillna(0.0) * df["quantidade"]
+        df["valor_venda"] = _converter_serie_monetaria(df["preco_unitario"], qualidade) * df["quantidade"]
         logger.info("VENDAS '%s': faturamento derivado de quantidade x preço unitário.", nome)
     else:
         raise ETLValidationError(
             f"Relatório de VENDAS '{nome}' sem coluna de valor (nem total, nem preço unitário)."
         )
     if "valor_custo" in df.columns:
-        df["valor_custo"] = _converter_serie(df["valor_custo"]).fillna(0.0)
+        df["valor_custo"] = _converter_serie_monetaria(df["valor_custo"], qualidade)
     if "estoque" in df.columns:
         df["estoque"] = _converter_serie(df["estoque"]).fillna(0.0)
 
@@ -463,6 +653,9 @@ def carregar_vendas(caminho: str) -> pd.DataFrame:
         raise ETLValidationError(
             f"Relatório de VENDAS '{nome}' sem nomes de produto válidos após a limpeza."
         )
+    if "_situacao" in df.columns:
+        df = _aplicar_situacao_das_vendas(df, nome)
+    df.attrs["qualidade"] = dict(qualidade)
     return df
 
 
@@ -484,17 +677,18 @@ def carregar_compras(caminho: str):
     chave_linha = "fornecedor" if "fornecedor" in df.columns else "produto"
     df = _filtrar_linhas_validas(df, chave_linha)
 
+    qualidade = Counter()
     if "produtos_total" in df.columns:
         coluna_valor = "produtos_total"
-        df[coluna_valor] = _converter_serie(df[coluna_valor]).fillna(0.0)
+        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade)
     elif "valor_nf" in df.columns:
         coluna_valor = "valor_nf"
-        df[coluna_valor] = _converter_serie(df[coluna_valor]).fillna(0.0)
+        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade)
     elif "custo_unitario" in df.columns and "qtde_comprada" in df.columns:
         # Sem coluna de total: deriva o total da linha (qtd x custo unitário).
         # Cálculo honesto a partir de colunas reais — não é dado inventado.
         qtd = _converter_serie(df["qtde_comprada"]).fillna(0.0)
-        custo = _converter_serie(df["custo_unitario"]).fillna(0.0)
+        custo = _converter_serie_monetaria(df["custo_unitario"], qualidade)
         coluna_valor = "valor_total_compra"
         df[coluna_valor] = qtd * custo
         logger.info("COMPRAS '%s': total derivado de quantidade x custo unitário.", nome)
@@ -509,6 +703,7 @@ def carregar_compras(caminho: str):
         df["qtde_comprada"] = _converter_serie(df["qtde_comprada"]).fillna(0.0)
     if "produto" in df.columns:
         df["_prod_norm"] = df["produto"].map(_normalizar_produto)
+    df.attrs["qualidade"] = dict(qualidade)
     return df, coluna_valor
 
 
@@ -568,67 +763,100 @@ def _classificar_curva_abc(grupo: pd.DataFrame) -> dict:
     """
     Recebe o DataFrame já agregado por produto (colunas: _prod_norm, qtde, fat,
     nome) e devolve um dict com:
-      - "produtos": lista (ordenada por faturamento desc) de dicts com posicao,
-        nome, faturamento, quantidade, perc_individual, perc_acumulado e classe.
-        Truncada em TOP_N_CURVA_ABC para persistência/exibição.
-      - "resumo": agregados por classe (qtd de produtos, faturamento e % do total)
-        calculados sobre o UNIVERSO COMPLETO de produtos (não só o top-N).
+      - "produtos": TODOS os produtos, da maior para a menor receita líquida, com
+        posicao, nome, faturamento, quantidade, perc_individual, perc_acumulado e classe.
+      - "resumo": agregados por classe (qtd de produtos, faturamento e % do total).
 
-    Regra Pareto: ordena por faturamento desc, acumula o percentual e classifica
-    A (<=80%), B (<=95%), C (resto). O produto líder é sempre Classe A — garante
-    que um único produto dominante não caia em C por ultrapassar o limiar sozinho.
+    A classe segue o acumulado: A (<=80%), B (<=95%), C (acima). O produto líder é sempre
+    Classe A, para um único produto dominante não cair em B ou C ao ultrapassar o limiar
+    sozinho; os demais seguem as faixas.
+
+    O total é a receita líquida de todos os itens, igual ao Faturamento Total. Por isso,
+    zerados e negativos (devoluções acima das vendas) entram no fim da lista, e o
+    acumulado pode passar de 100% antes de fechar.
     """
-    base = grupo[grupo["fat"] > 0].sort_values("fat", ascending=False).reset_index(drop=True)
-    total = float(base["fat"].sum())
-    if base.empty or total <= 0:
+    base = grupo.sort_values(["fat", "_prod_norm"], ascending=[False, True], kind="stable").reset_index(drop=True)
+    acumulado = base["fat"].cumsum()
+    total = float(acumulado.iloc[-1]) if not base.empty else 0.0
+    # Menos de meio centavo é ruído de ponto flutuante, não receita.
+    if round(total, 2) <= 0:
         return {"produtos": [], "resumo": []}
 
-    # Percentual individual e ACUMULADO calculados VETORIALMENTE no pandas:
-    # cumsum sobre o ranking decrescente de faturamento = curva de Pareto.
-    base["perc_ind"] = base["fat"] / total * 100.0
-    base["perc_acum"] = base["perc_ind"].cumsum().clip(upper=100.0)
+    # Em centésimos de ponto percentual, inteiros: cada individual é a diferença entre
+    # acumulados arredondados, então a soma fecha em exatamente 100,00. Arredondar os
+    # individuais um a um deixaria 99,99 ou 100,01; repartir essa sobra entre eles
+    # deslocaria o acumulado, e com ele as classes, em catálogos com muitos itens pequenos.
+    acum_centesimos = (acumulado / total * 10000).round().astype("int64")
+    ind_centesimos = acum_centesimos.diff().fillna(acum_centesimos.iloc[0]).astype("int64")
+    perc_acum = acum_centesimos / 100
+    classes = np.select([perc_acum <= ABC_LIMITE_A, perc_acum <= ABC_LIMITE_B], ["A", "B"], default="C")
+    classes[0] = "A"
 
-    # Classificação A/B/C VETORIZADA (np.select) — evita iterrows() sobre todo o
-    # universo de produtos (lento em catálogos grandes). O líder (posição 0) é
-    # forçado a 'A' para um único produto dominante não cair em C sozinho.
-    import numpy as np
-    base["classe"] = np.select(
-        [base["perc_acum"] <= ABC_LIMITE_A, base["perc_acum"] <= ABC_LIMITE_B],
-        ["A", "B"],
-        default="C",
-    )
-    base.loc[0, "classe"] = "A"
-
-    # Resumo por classe via groupby vetorizado (universo completo).
-    agg = base.groupby("classe")["fat"].agg(["count", "sum"])
-    contagem = {c: int(agg["count"].get(c, 0)) for c in ("A", "B", "C")}
-    fat_classe = {c: float(agg["sum"].get(c, 0.0)) for c in ("A", "B", "C")}
-
-    # Apenas o top-N é materializado para persistência/exibição — aqui sim
-    # iterrows é barato (no máximo TOP_N_CURVA_ABC linhas).
-    produtos = []
     tem_qtde = "qtde" in base.columns
-    for i, row in base.head(TOP_N_CURVA_ABC).iterrows():
-        produtos.append({
-            "posicao": i + 1,
-            "nome": str(row["nome"]),
-            "faturamento": float(row["fat"]),
-            "quantidade": float(row["qtde"]) if tem_qtde else None,
-            "perc_individual": round(float(row["perc_ind"]), 2),
-            "perc_acumulado": round(float(row["perc_acum"]), 2),
-            "classe": str(row["classe"]),
-        })
-
-    resumo = [
+    quantidades = base["qtde"].tolist() if tem_qtde else [None] * len(base)
+    produtos = [
         {
-            "classe": c,
-            "qtd_produtos": contagem[c],
-            "faturamento": round(fat_classe[c], 2),
-            "perc_faturamento": round(fat_classe[c] / total * 100.0, 2) if total else 0.0,
+            "posicao": posicao,
+            "nome": str(nome),
+            "faturamento": float(faturamento),
+            "quantidade": float(quantidade) if tem_qtde else None,
+            "perc_individual": individual / 100,
+            "perc_acumulado": acum / 100,
+            "classe": str(classe),
         }
-        for c in ("A", "B", "C")
+        for posicao, (nome, faturamento, quantidade, individual, acum, classe) in enumerate(
+            zip(base["nome"].tolist(), base["fat"].tolist(), quantidades,
+                ind_centesimos.tolist(), acum_centesimos.tolist(), classes.tolist()),
+            start=1,
+        )
     ]
+
+    resumo = []
+    for c in ("A", "B", "C"):
+        da_classe = classes == c
+        resumo.append({
+            "classe": c,
+            "qtd_produtos": int(da_classe.sum()),
+            "faturamento": round(float(base.loc[da_classe, "fat"].sum()), 2),
+            "perc_faturamento": int(ind_centesimos[da_classe].sum()) / 100,
+        })
     return {"produtos": produtos, "resumo": resumo}
+
+
+def _alertas_de_valores(qualidade: Counter, situacao, produtos_abc: list) -> list:
+    """Observações para o administrador conferir antes de publicar a devolutiva."""
+    alertas = []
+    if qualidade["invalidos"]:
+        alertas.append(
+            f"Qualidade dos dados: {qualidade['invalidos']} valor(es) em dinheiro não puderam ser "
+            "interpretados e entraram como R$ 0,00. Revise o relatório antes de publicar."
+        )
+    if qualidade["lidos_como_milhar"]:
+        alertas.append(
+            f"Confira os valores: {qualidade['lidos_como_milhar']} valor(es) com ponto e 3 casas, como "
+            "12.500, foram lidos como milhar (doze mil e quinhentos). Se o relatório usa ponto como "
+            "decimal, esses valores ficaram mil vezes maiores."
+        )
+    if qualidade["lidos_como_decimal"]:
+        alertas.append(
+            f"Confira os valores: {qualidade['lidos_como_decimal']} valor(es) com ponto e 3 casas, como "
+            "12.500, foram lidos como decimal (doze e meio), porque a mesma coluna usa ponto decimal "
+            "em outras linhas."
+        )
+    if situacao and (situacao["linhas_canceladas"] or situacao["linhas_devolucao"]):
+        alertas.append(
+            f"Faturamento líquido: {situacao['linhas_canceladas']} linha(s) canceladas ou estornadas "
+            f"ficaram fora do cálculo e {situacao['linhas_devolucao']} devolução(ões) ou troca(s) foram deduzidas."
+        )
+    negativos = sum(1 for p in produtos_abc if p["faturamento"] < 0)
+    if negativos:
+        alertas.append(
+            f"Curva ABC: {negativos} produto(s) têm receita líquida negativa e aparecem no fim da lista "
+            "com percentual negativo; por isso, o acumulado pode passar de 100% antes de fechar em 100%."
+        )
+    if not produtos_abc:
+        alertas.append("Curva ABC não calculada: a receita líquida do período não é positiva.")
+    return alertas
 
 
 # =====================================================================
@@ -733,8 +961,8 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
         )
 
     # ---- Telemetria (em memória, NÃO persistida — sem campo no DER V4) ----
-    colunas_v = [c for c in df_v.columns if c != "_prod_norm"]
-    colunas_c = [c for c in df_c.columns if c != "_prod_norm"]
+    colunas_v = [c for c in df_v.columns if not c.startswith("_")]
+    colunas_c = [c for c in df_c.columns if not c.startswith("_")]
     telemetria = {
         "coluna_valor_compras": col_valor_c,
         "colunas_vendas": colunas_v,
@@ -759,6 +987,8 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
     # Alerta: venda abaixo do custo informado pelo PDV (observação, NÃO margem)
     if "valor_custo" in df_v.columns:
         abaixo = (df_v["valor_custo"] > 0) & (df_v["valor_venda"] < df_v["valor_custo"])
+        if "_devolucao" in df_v.columns:
+            abaixo &= ~df_v["_devolucao"]
         n_abaixo = int(abaixo.sum())
         telemetria["itens_venda_abaixo_custo_pdv"] = n_abaixo
         if n_abaixo > 0:
@@ -768,6 +998,17 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
                 f"período. É um sinal extraído da coluna bruta de custo do PDV, NÃO "
                 f"um cálculo contábil de margem."
             )
+
+    # Faturamento Líquido Real = vendas válidas - devoluções/trocas. Só há o que somar
+    # aqui quando o relatório traz status ou operação; as devoluções já vêm negativas.
+    situacao = df_v.attrs.get("situacao")
+    if situacao:
+        telemetria.update(situacao)
+        telemetria["vendas_validas"] = faturamento_total + situacao["valor_devolucoes"]
+    qualidade = Counter(df_v.attrs.get("qualidade")) + Counter(df_c.attrs.get("qualidade"))
+    if qualidade:
+        telemetria["valores_monetarios"] = dict(qualidade)
+    alertas.extend(_alertas_de_valores(qualidade, situacao, curva_abc["produtos"]))
 
     kpis = {
         "faturamento_total": faturamento_total,
@@ -826,30 +1067,30 @@ def _persistir_indicadores(db_session, id_analise: int, kpis: dict) -> None:
 
 def _persistir_curva_abc(db_session, id_analise: int, kpis: dict) -> None:
     """
-    Regrava (idempotente) o ranking ABC do top-N em produto_curva_abc:
-    apaga as linhas anteriores desta análise e insere o ranking novo. Reflete
-    o reprocessamento — cada execução do ETL substitui a Curva ABC anterior.
+    Regrava (idempotente) a Curva ABC completa em produto_curva_abc: apaga as linhas
+    anteriores desta análise e insere o ranking novo. Reflete o reprocessamento — cada
+    execução do ETL substitui a Curva ABC anterior. Em lote, porque agora são todos os
+    produtos do período, e não só os primeiros.
     """
     from models import ProdutoCurvaABC
     # Limpa o ranking anterior desta análise (reprocessamento limpo).
-    antigos = db_session.execute(
-        select(ProdutoCurvaABC).where(ProdutoCurvaABC.id_analise == id_analise)
-    ).scalars().all()
-    for linha in antigos:
-        db_session.delete(linha)
-    db_session.flush()
+    db_session.execute(delete(ProdutoCurvaABC).where(ProdutoCurvaABC.id_analise == id_analise))
 
-    for p in kpis.get("curva_abc", {}).get("produtos", []):
-        db_session.add(ProdutoCurvaABC(
-            id_analise=id_analise,
-            posicao_ranking=p["posicao"],
-            produto_nome=p["nome"],
-            faturamento=p["faturamento"],
-            quantidade=p.get("quantidade"),
-            percentual_individual=p["perc_individual"],
-            percentual_acumulado=p["perc_acumulado"],
-            classe_abc=p["classe"],
-        ))
+    linhas = [
+        {
+            "id_analise": id_analise,
+            "posicao_ranking": p["posicao"],
+            "produto_nome": p["nome"],
+            "faturamento": p["faturamento"],
+            "quantidade": p.get("quantidade"),
+            "percentual_individual": p["perc_individual"],
+            "percentual_acumulado": p["perc_acumulado"],
+            "classe_abc": p["classe"],
+        }
+        for p in kpis.get("curva_abc", {}).get("produtos", [])
+    ]
+    if linhas:
+        db_session.execute(insert(ProdutoCurvaABC), linhas)
 
 
 def processar_arquivos_analise(caminho_vendas: str, caminho_compras: str,
