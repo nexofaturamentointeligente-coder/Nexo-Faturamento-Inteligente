@@ -217,7 +217,8 @@ REGISTROS = (
         ),
         explicacao=(
             "Análises individuais também podem ser excluídas pela equipe, com todos os seus dados. Nenhuma "
-            "exclusão é feita pelo cliente nem pelo NexoBot; pedidos desse tipo devem ser feitos pelo Suporte."
+            "exclusão é feita pelo cliente nem pelo NexoBot; o pedido é feito em Configurações (“Solicitar Exclusão "
+            "de Dados”, que abre um chamado) ou pelo Suporte."
         ),
         perguntas=(
             "O que é a Lixeira?", "O que acontece quando uma empresa vai para a lixeira?",
@@ -235,7 +236,7 @@ REGISTROS = (
         resumo=(
             "Não. O NexoBot explica como essas operações funcionam, mas não as executa: criação de análises, "
             "exclusões, publicações, mudanças de plano e alterações de cadastro são ações da equipe NEXO. Para "
-            "pedi-las, abra um chamado em Suporte."
+            "pedi-las, abra um chamado em Suporte. Nome, telefone e e-mail de acesso você altera em Configurações."
         ),
         explicacao=(
             "O assistente só faz duas coisas: responder perguntas e abrir páginas do portal do cliente. Ele não "

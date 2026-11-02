@@ -68,7 +68,7 @@ def _resolve_database_uri() -> str:
 def _env_texto(nome: str, padrao=None):
     """Valor textual do ambiente sem espaços nas pontas; vazio vale como ausente.
 
-    No painel do Render (e num .env copiado do .env.example) é comum a variável
+    No painel da hospedagem (e num .env copiado do .env.example) é comum a variável
     existir com valor vazio ou com espaço/quebra de linha colada junto: tratar
     isso como "não configurado" evita, por exemplo, remetente vazio, URL vazia
     ou chave de API com espaço (que o provedor recusaria como credencial).
@@ -171,11 +171,11 @@ class Config:
     # boot em produção.
     PUBLIC_URL = _env_texto("NEXO_PUBLIC_URL") or _env_texto("RENDER_EXTERNAL_URL") or ""
     PUBLIC_URL_PLATAFORMA = _env_texto("RENDER_EXTERNAL_URL") or ""
-    # Execução no Render (a plataforma injeta RENDER=true): o diagnóstico de
-    # e-mail avisa que o plano Free bloqueia SMTP (emails.py).
-    NEXO_RENDER = bool(os.environ.get("RENDER") or os.environ.get("RENDER_EXTERNAL_URL"))
-    # Instância PAGA do Render (libera as portas 465/587): com SMTP configurado,
-    # o diagnóstico deixa de tratar o SMTP como bloqueado. No plano Free, não use.
+    # Hospedagem cujas portas SMTP ficam bloqueadas: a plataforma injeta RENDER=true
+    # e, na máquina local, é sempre False. emails.py só lê este indicador neutro.
+    HOSPEDAGEM_BLOQUEIA_SMTP = bool(os.environ.get("RENDER") or os.environ.get("RENDER_EXTERNAL_URL"))
+    # A hospedagem liberou as portas 465/587: com SMTP configurado, o diagnóstico
+    # deixa de tratar o SMTP como bloqueado.
     SMTP_PERMITIDO = _env_booleano("NEXO_SMTP_PERMITIDO", False)
     # Hosts adicionais aceitos nas requisições (CSV; ".exemplo.com" aceita os
     # subdomínios). O host da origem pública e o da plataforma entram sempre
@@ -234,19 +234,28 @@ class Config:
     MAIL_SERVER = _env_texto("MAIL_SERVER", "smtp.gmail.com")
     MAIL_PORT = int(_env_texto("MAIL_PORT", "587"))
     MAIL_USE_TLS = _env_booleano("MAIL_USE_TLS", True)
-    MAIL_USE_SSL = _env_booleano("MAIL_USE_SSL", False)
+    # A porta 465 é SSL direto: sem a variável, o padrão acompanha a porta (um SMTP
+    # sem TLS nela só esgotaria o prazo). O valor explícito no .env sempre vale.
+    MAIL_USE_SSL = _env_booleano("MAIL_USE_SSL", MAIL_PORT == 465)
     MAIL_USERNAME = _env_texto("MAIL_USERNAME")
-    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD") or None
+    # Senha de app copiada da página do Google traz espaço especial (U+00A0) entre
+    # os blocos: o smtplib não o codifica, e o espaço comum funciona no login.
+    MAIL_PASSWORD = (os.environ.get("MAIL_PASSWORD") or "").replace("\u00a0", " ") or None
     MAIL_DEFAULT_SENDER = (
         _env_texto("MAIL_DEFAULT_SENDER") or MAIL_USERNAME or "nexofaturamentointeligente@gmail.com"
     )
+    # O remetente foi escolhido no .env, ou é só o MAIL_USERNAME por falta dele?
+    MAIL_DEFAULT_SENDER_EXPLICITO = bool(_env_texto("MAIL_DEFAULT_SENDER"))
     # SEGURANÇA: por padrão o Flask-Mail herda app.debug e, em modo debug, o
     # smtplib imprime toda a conversa SMTP no log — inclusive a linha AUTH em
     # base64, que contém a senha. Forçamos OFF para a credencial nunca vazar.
     MAIL_DEBUG = False
-    # Envio por API HTTPS do Brevo (porta 443). Necessário em hosts gratuitos
-    # que BLOQUEIAM SMTP (Render Free bloqueia as portas 25/465/587). Com a chave
-    # definida, emails.py usa a API em vez do SMTP; sem ela, segue o SMTP acima.
+    # O .env que load_dotenv lê acima; o Diagnóstico de e-mail mostra o caminho
+    # em ambiente local, porque é ali que as credenciais precisam estar.
+    ARQUIVO_ENV = str(BASE_DIR / ".env")
+    # Envio por API HTTPS do Brevo (porta 443), opcional. Serve a redes e hospedagens
+    # que bloqueiam as portas SMTP 25/465/587. Com a chave definida, emails.py usa a
+    # API em vez do SMTP; sem ela, segue o SMTP acima.
     # A chave é a de API (prefixo xkeysib-), não a chave SMTP (xsmtpsib-). O
     # remetente (MAIL_DEFAULT_SENDER) precisa estar verificado no Brevo e o IP de
     # saída do servidor autorizado (Docs/EMAILS_TRANSACIONAIS.md).
@@ -280,6 +289,7 @@ class Config:
     CONTRATO_FUSO_HORARIO = "America/Sao_Paulo"
     CONTRATO_ALERTA_VENCIMENTO_DIAS = 30  # visão geral: vigência terminando
     CONTRATO_ALERTA_SUSPENSAO_DIAS = 15   # visão geral: suspensão terminando
+    CONTRATO_AVISO_RENOVACAO_DIAS = 14    # lembrete ao cliente: vigência terminando
 
     # === IA (Claude / Anthropic) — geração automatizada da devolutiva ===
     # Sem a chave, o motor cai no fallback determinístico local (não quebra).

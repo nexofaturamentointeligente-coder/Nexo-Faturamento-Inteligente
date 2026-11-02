@@ -1,0 +1,31 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+{% if convite %}
+<h1 style="margin:0 0 8px;font-size:20px;color:#ffffff;">O convite de acesso ao NEXO foi cancelado 🔐</h1>
+<p style="margin:0 0 18px;color:#c4c6d2;">
+  O convite enviado a este endereço para acessar o portal NEXO deixou de valer: a equipe NEXO corrigiu o e-mail do cadastro.
+  Se você não conhece o NEXO, ignore este e-mail. Se esperava este acesso, responda a este e-mail.
+</p>
+<p style="margin:0;color:#9aa0b7;font-size:12px;line-height:1.5;">
+  Este aviso não contém senha nem links de acesso.
+</p>
+{% else %}
+<h1 style="margin:0 0 8px;font-size:20px;color:#ffffff;">Seu e-mail de acesso foi alterado 🔐</h1>
+<p style="margin:0 0 18px;color:#c4c6d2;">
+  Olá{% if usuario and usuario.nome %}, {{ usuario.nome.split(' ')[0] }}{% endif %}! O e-mail de acesso da sua conta NEXO
+  acaba de ser alterado {% if pela_equipe %}pela equipe NEXO{% else %}nas Configurações da conta{% endif %}, para <strong style="color:#ffffff;">{{ email_novo_mascarado }}</strong>.
+  {% if pela_equipe %}A senha anterior também deixou de valer. Se você pediu essa correção, não precisa fazer nada.{% else %}Se foi você, não precisa fazer nada.{% endif %}
+</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#181824;border-radius:12px;margin:0 0 22px;">
+  <tr><td style="padding:14px 18px;color:#fecaca;font-size:13px;line-height:1.5;">
+    ⚠️ <strong>{% if pela_equipe %}Não pediu essa correção?{% else %}Não foi você?{% endif %}</strong> Responda a este e-mail agora: este endereço deixou de receber os links de
+    redefinição de senha da conta, e a equipe NEXO pode devolver o acesso a você.
+  </td></tr>
+</table>
+
+<p style="margin:0;color:#9aa0b7;font-size:12px;line-height:1.5;">
+  Este aviso é enviado automaticamente a cada troca do e-mail de acesso e não contém sua senha nem links de acesso.
+</p>
+{% endif %}
+{% endblock %}

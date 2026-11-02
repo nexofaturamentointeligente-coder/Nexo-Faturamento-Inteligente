@@ -23,7 +23,7 @@ A auditoria anterior registra cópia privada dos arquivos do projeto. Ela não c
 
 ## 2. O que precisa ser protegido
 
-Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do banco, schema, dados, constraints, índices e estado das sequências. As 19 tabelas ORM atuais são (14 anteriores e 5 da gestão contratual, revisão `81287c74387a`):
+Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do banco, schema, dados, constraints, índices e estado das sequências. As 24 tabelas ORM atuais são (14 anteriores, 5 da gestão contratual, revisão `81287c74387a`, `sessao_autenticada` e 4 das Configurações da conta, revisão `c7d41e9a2b60`):
 
 | Tabelas | Dados e vínculos que devem sobreviver |
 |---|---|
@@ -39,6 +39,8 @@ Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do
 | `contrato`, `cobertura_paga` | Contratos com valor contratado (snapshot), vigência, situação e prazos da suspensão em `timestamptz`; períodos efetivamente pagos com referência da confirmação e revogação. FKs compostas garantem cobertura e contrato da mesma empresa; índice único parcial impede dois contratos vigentes. |
 | `evento_contratual` | Trilha de auditoria (somente inclusão) de contratação, renovação, troca de plano, suspensão, prorrogação, reativação, cancelamento, coberturas e regras. |
 | `historico_preco_plano` | Cada alteração de `plano.valor_mensal` feita pela atualização auditada do catálogo. |
+| `sessao_autenticada` | Sessões revogáveis: hash do identificador, dono, validade e revogação. |
+| `preferencia_usuario`, `documento_legal`, `aceite_documento`, `configuracao_sistema` | Avisos escolhidos, versões dos Termos e da Política, prova de aceite e caixa da cópia de chamados. Têm RLS ligado: um papel de backup que não seja dono das tabelas precisa de `BYPASSRLS`, ou o `pg_dump` falha. |
 
 Incluir também `alembic_version` e quaisquer objetos adicionais encontrados no inventário autorizado do banco. Não limitar o backup a essa lista de nomes nem usar somente `--data-only`/`--schema-only`.
 

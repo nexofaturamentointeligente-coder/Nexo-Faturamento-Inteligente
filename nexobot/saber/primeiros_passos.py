@@ -116,7 +116,7 @@ REGISTROS = (
         categoria="Primeiros passos",
         tipo="procedimento",
         resumo=(
-            "Tudo fica no menu lateral: Visão Geral, Enviar relatórios, Histórico, Guia e Suporte. No celular, "
+            "Tudo fica no menu lateral: Visão Geral, Enviar relatórios, Histórico, Guia, Suporte e Configurações. No celular, "
             "toque no botão de três linhas no canto superior esquerdo para abrir o menu."
         ),
         explicacao=(

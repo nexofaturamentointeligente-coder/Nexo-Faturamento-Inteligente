@@ -10,7 +10,7 @@ A geração de devolutivas com IA (`ai_devolutiva.py`) é uma funcionalidade sep
 
 | Antes (1.x) | 2.0 |
 | --- | --- |
-| Conhecimento limitado ao Guia do CMS e a onze "fatos" fixos; "o que é o NEXO?" caía em desconhecida. | Base interna versionada (`nexobot/saber/`): 172 registros, 850 formulações, 18 assuntos, cada um com resumo, explicação, passo a passo e aprofundamento, com as fontes do código citadas. |
+| Conhecimento limitado ao Guia do CMS e a onze "fatos" fixos; "o que é o NEXO?" caía em desconhecida. | Base interna versionada (`nexobot/saber/`): 173 registros, 881 formulações, 18 assuntos, cada um com resumo, explicação, passo a passo e aprofundamento, com as fontes do código citadas. |
 | Uma resposta por pergunta, sempre no mesmo tamanho. | Quatro níveis de resposta escolhidos pela formulação; aprofundamento sem repetir o que já foi dito; roteiros guiados ("e depois?"). |
 | Saudação e "ajuda" concatenavam as categorias do banco, inclusive `ZZTEST-guia` e `ZZTEST-guia <i>XSS</i>`. | Saudação curta e curada, com sugestões clicáveis. Conteúdo com sinais de teste é detectado, rebaixado na busca, excluído das listas e sinalizado no CMS para revisão (nada é apagado). |
 | Texto corrido com `**negrito**`. | Blocos estruturados (`cabecalho`, `texto`, `passos`, `secao`, `exemplo`, `aviso`) e sugestões (`sugestoes`) renderizados pelo widget sem HTML. |
@@ -76,6 +76,7 @@ Uma ordem só navega quando a página é **nomeada**. Assuntos apenas relacionad
 | `historico` | `cliente.historico` | Histórico de Análises |
 | `guia` | `cliente.guia` | Guia |
 | `suporte` | `cliente.tickets` | Suporte (lista e formulário; não cria chamado) |
+| `configuracoes` | `cliente.configuracoes` | Configurações |
 
 Para acrescentar uma página: crie a rota GET com as permissões adequadas, acrescente o `Destino` e seus padrões em `nexobot/navegacao.py` e testes de navegação e de bloqueio. Tópicos do Guia e registros da base interna nunca criam destinos: `destino` de um registro só pode ser uma destas chaves (verificado em teste).
 
@@ -114,7 +115,7 @@ Todos os 172 registros passaram por uma verificação independente contra o cód
 |---|---|---:|---:|---:|---:|---:|
 | Visão Geral (o que é, para que serve, como funciona) | `visao_geral.py` | 8 | 74 | 1 | 0 | 0 |
 | Primeiros passos | `primeiros_passos.py` | 7 | 47 | 3 | 0 | 0 |
-| Acesso e senha | `acesso.py` | 10 | 60 | 3 | 0 | 0 |
+| Acesso, senha e Configurações | `acesso.py` | 11 | 89 | 3 | 0 | 0 |
 | Empresa e cadastro | `empresas_planos.py` | 7 | 35 | 2 | 0 | 0 |
 | Planos | `empresas_planos.py` | 4 | 23 | 0 | 0 | 0 |
 | Análises | `analises.py` | 14 | 66 | 1 | 0 | 0 |
@@ -124,15 +125,15 @@ Todos os 172 registros passaram por uma verificação independente contra o cód
 | Curva ABC | `indicadores.py` | 8 | 34 | 0 | 2 | 0 |
 | Visão Geral do painel | `dashboard.py` | 10 | 43 | 0 | 0 | 0 |
 | Devolutiva | `devolutivas_historico.py` | 10 | 43 | 0 | 0 | 0 |
-| Histórico e PDF | `devolutivas_historico.py` | 7 | 30 | 1 | 0 | 0 |
+| Histórico e PDF | `devolutivas_historico.py` | 7 | 32 | 1 | 0 | 0 |
 | Notificações | `notificacoes.py` | 7 | 30 | 0 | 0 | 0 |
 | Suporte | `suporte_guia.py` | 10 | 45 | 2 | 0 | 0 |
 | Guia | `suporte_guia.py` | 7 | 26 | 0 | 0 | 0 |
 | Equipe NEXO (administração, explicada ao cliente) | `administracao.py` | 14 | 51 | 0 | 0 | 0 |
 | Tecnologia | `tecnologia.py` | 10 | 45 | 0 | 0 | 0 |
-| **Total** | 14 módulos | **172** | **850** | 20 | 3 | 4 |
+| **Total** | 14 módulos | **173** | **881** | 20 | 3 | 4 |
 
-Outros números: 58 arquivos do código citados como fonte; 119 termos no glossário; 14 encadeamentos `proximo`; 6 roteiros guiados (`nexo.primeiros_passos.roteiro`, `nexo.uploads.primeiro_envio`, `nexo.uploads.substituir`, `nexo.analises.nao_aparece`, `nexo.indicadores.interpretar`, `nexo.suporte.falar_com_equipe`). As perguntas obrigatórias e as variações linguísticas cobertas por teste estão em `tests/test_nexobot_saber.py` (`OBRIGATORIAS`, `VARIACOES`); todo título de registro é testado como pergunta.
+Outros números: 61 arquivos do código citados como fonte; 119 termos no glossário; 14 encadeamentos `proximo`; 6 roteiros guiados (`nexo.primeiros_passos.roteiro`, `nexo.uploads.primeiro_envio`, `nexo.uploads.substituir`, `nexo.analises.nao_aparece`, `nexo.indicadores.interpretar`, `nexo.suporte.falar_com_equipe`). As perguntas obrigatórias e as variações linguísticas cobertas por teste estão em `tests/test_nexobot_saber.py` (`OBRIGATORIAS`, `VARIACOES`); todo título de registro é testado como pergunta.
 
 ### Glossário
 
@@ -279,7 +280,7 @@ NEXO_TEST_BROWSER=1 python -m unittest tests.test_nexobot_navegador -v   # Chrom
 | Arquivo | Conteúdo |
 | --- | --- |
 | `tests/nexobot_corpus.py` | Corpus de frases por comportamento esperado. |
-| `test_nexobot_saber.py` | Integridade da base interna (schema, fontes, regras editoriais, referências); detector de higiene; matriz de 45 perguntas obrigatórias com fragmento esperado na resposta, 45 variações linguísticas e todos os títulos como pergunta; conversa (níveis, aprofundamento sem repetir, roteiro "e depois?", "como funciona isso?", "onde fica", multiassunto, comparações, contrato de blocos/chips, conhecer ≠ executar, contexto validado, desconhecido sem inventar); Guia com tópicos de teste (saudação limpa, log, CMS sinalizando). |
+| `test_nexobot_saber.py` | Integridade da base interna (schema, fontes, regras editoriais, referências); detector de higiene; matriz de 52 perguntas obrigatórias com fragmento esperado na resposta, 45 variações linguísticas e todos os títulos como pergunta; conversa (níveis, aprofundamento sem repetir, roteiro "e depois?", "como funciona isso?", "onde fica", multiassunto, comparações, contrato de blocos/chips, conhecer ≠ executar, contexto validado, desconhecido sem inventar); Guia com tópicos de teste (saudação limpa, log, CMS sinalizando). |
 | `test_nexobot_linguagem.py` | Normalização, corpus de intenções, regras de navegação e contexto. |
 | `test_nexobot_conhecimento.py` | Precisão e recusa da busca, ambiguidade, prioridade do Guia sobre a base interna (inclusive mesmo assunto), base grande, cache (ORM, operações em massa, rollback, TTL, CMS) e falha de banco. |
 | `test_nexobot_api.py` | Contrato HTTP, conversas com contexto, autenticação, CSRF, JSON inválido, 413, 429, isolamento entre usuários, ausência de efeitos nos dados, IA simulada e concorrência. |
@@ -301,7 +302,7 @@ Ambiente: contêiner Linux, Python 3.13, SQLite temporário, cliente de teste do
 | Resposta completa com índice em cache (591 amostras) | p50 0,29 ms · p95 2,09 ms · máx. 8,25 ms |
 | HTTP ponta a ponta no cliente de teste (60 amostras) | p50 2,0 ms · p95 2,4 ms |
 | Mensagem de 1000 caracteres | média 4,9 ms |
-| Construção da parte interna do índice (172 registros, 850 formulações normalizadas) | ≈ 280 ms, uma vez por processo |
+| Construção da parte interna do índice (173 registros, 881 formulações normalizadas) | ≈ 280 ms, uma vez por processo |
 | Reconstrução a cada mudança do Guia (Guia do seed) | média 1,5 ms |
 | Busca isolada na base interna | p50 0,56 ms · p95 0,91 ms |
 | Memória após 3000 mensagens únicas | +1,0 MB (caches LRU com tamanho máximo) |

@@ -165,7 +165,7 @@ REGISTROS = (
         ),
         explicacao=(
             "O portal tem dois perfis. O perfil CLIENTE acessa a Visão Geral, Enviar Relatórios, Histórico, "
-            "Guia e Suporte da própria empresa. O perfil ADMIN (equipe NEXO) administra empresas (incluindo o "
+            "Guia, Suporte e Configurações da própria empresa. O perfil ADMIN (equipe NEXO) administra empresas (incluindo o "
             "plano contratado por cada uma), análises, processamento, devolutivas, chamados e a Base de "
             "Conhecimento. Nenhuma dessas operações administrativas pode ser feita pelo cliente ou pelo "
             "NexoBot."
@@ -185,8 +185,9 @@ REGISTROS = (
         categoria="Visão Geral",
         tipo="visao_geral",
         resumo=(
-            "O portal do cliente tem cinco áreas: Visão Geral (indicadores e devolutiva mais recente), "
-            "Enviar Relatórios, Histórico de análises (com exportação em PDF), Guia e Suporte (chamados). "
+            "O portal do cliente tem seis áreas: Visão Geral (indicadores e devolutiva mais recente), "
+            "Enviar Relatórios, Histórico de análises (com exportação em PDF), Guia, Suporte (chamados) e "
+            "Configurações. "
             "Há ainda o sininho de notificações e este assistente, o NexoBot."
         ),
         explicacao=(

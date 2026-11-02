@@ -369,3 +369,64 @@ verdade):
    continua no ar.
 4. Depois, *Admin → Diagnóstico de e-mail* sem pendências bloqueantes e o teste
    real da seção 7.
+
+## 13. Ambiente local: SMTP pelo `.env`
+
+Em desenvolvimento (`FLASK_ENV=development`) o envio usa o SMTP definido no
+`.env` **da pasta de onde o servidor roda**, ao lado do `config.py`. O *Admin →
+Diagnóstico de e-mail* mostra o caminho exato do arquivo lido. Uma variável já
+definida no terminal tem prioridade sobre o arquivo, e o `.env` só é lido na
+inicialização: depois de alterá-lo, **reinicie o servidor**.
+
+```dotenv
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USE_TLS=True
+MAIL_USE_SSL=False
+MAIL_USERNAME=<conta>@<dominio>
+MAIL_PASSWORD=<senha de app ou token>
+MAIL_DEFAULT_SENDER=NEXO <<conta>@<dominio>>
+BREVO_API_KEY=
+```
+
+| Provedor | `MAIL_SERVER` | Observação |
+| --- | --- | --- |
+| Gmail / Google Workspace | `smtp.gmail.com` | Exige senha de app (seção 10). |
+| Zoho Mail | `smtp.zoho.com` | Contas de domínio próprio podem usar `smtppro.zoho.com`. |
+| cPanel | `mail.<seu-dominio>` | Use o nome coberto pelo certificado, senão a verificação TLS falha. |
+
+- **Porta 465:** é SSL direto. Sem `MAIL_USE_SSL` no `.env`, o padrão acompanha
+  a porta; com `MAIL_USE_SSL=true` explícito, o STARTTLS é ignorado.
+- **`BREVO_API_KEY`:** opcional. Definida, tem prioridade sobre o SMTP.
+- **Log de inicialização:** só uma linha, em nível DEBUG: `Transporte local
+  ativo` ou `Credenciais de e-mail não configuradas no .env`. As pendências
+  ficam no Diagnóstico de e-mail. Em produção o resumo e as pendências continuam
+  no log, como na seção 5.
+- **Links dos e-mails:** sem `NEXO_PUBLIC_URL`, ativação e recuperação de senha
+  usam `http://127.0.0.1:5000`, e os links só abrem na própria máquina. Em outra
+  porta, defina `NEXO_PUBLIC_URL`. Produção continua exigindo `https`.
+- **Conferir a conexão:** o botão *Testar conexão SMTP* abre a conexão, negocia
+  a criptografia e faz o login, sem enviar mensagem. O *Envio de teste* entrega
+  uma mensagem real ao e-mail do administrador logado. O status mostrado é o da
+  última tentativa desde o início do servidor, seja por esse botão ou por um
+  envio. Uma recusa depois do login (remetente, destinatário ou mensagem) não
+  altera o status: a conexão e o login funcionaram. Com `MAIL_USE_TLS` e
+  `MAIL_USE_SSL` desligados, o teste faz o login sem criptografia.
+- **Valores do `.env`:** o SMTP só aceita ASCII em `MAIL_SERVER`, `MAIL_USERNAME`
+  e `MAIL_PASSWORD`; o espaço especial que acompanha a senha de app copiada do
+  Google vira espaço comum. Outro caractere acentuado aparece no painel como
+  valor inválido, sem mostrar o valor.
+
+Em Configurações, cada novo chamado pode gerar uma cópia oculta (BCC) para a caixa
+escolhida pelo administrador. O destinatário visível é o próprio remetente do NEXO e
+a caixa não aparece nos cabeçalhos; sem caixa configurada, nenhum e-mail sai. Se o
+servidor recusar só a caixa da cópia, o envio conta como falha, com a categoria
+`smtp_destinatario_recusado`. A troca do e-mail de acesso avisa o endereço antigo e o
+lembrete de renovação sai pelo botão em Contratos ou pelo comando
+`flask contratos lembretes-renovacao`. Os avisos de senha e de e-mail alterados não
+têm opção de desligar; o de chamado resolvido e o lembrete de renovação respeitam as
+preferências do usuário.
+
+A detecção da hospedagem que bloqueia SMTP fica só em `config.py`
+(`HOSPEDAGEM_BLOQUEIA_SMTP`); o módulo de e-mails lê esse indicador neutro e, na
+máquina local, ele é sempre falso.

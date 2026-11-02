@@ -14,13 +14,14 @@ REGISTROS = (
         categoria="Notificações",
         resumo=(
             "O sininho, no topo da página, reúne os avisos do portal: recebimento e processamento de "
-            "relatórios, publicação de análises e movimentações nos seus chamados. Ele mostra a contagem de "
+            "relatórios, publicação de análises, movimentações nos seus chamados e o lembrete de renovação do "
+            "contrato, quando a equipe NEXO o dispara. Ele mostra a contagem de "
             "não lidas e as 5 mais recentes; clique em um aviso para abrir o item relacionado."
         ),
         explicacao=(
             "Os avisos chegam em tempo real enquanto o portal está aberto (aparece também um alerta no canto "
             "da tela) e ficam guardados para quando você entrar de novo. “Marcar todas como lidas” zera a "
-            "contagem. Cada aviso traz um selo: Nova Análise, Resolvido ou Aberto."
+            "contagem. Cada aviso traz um selo: Nova Análise, Resolvido, Aberto ou Contrato."
         ),
         perguntas=(
             "Para que serve o sininho?", "Como recebo as notificações?", "Onde vejo meus avisos?",
@@ -37,7 +38,8 @@ REGISTROS = (
         resumo=(
             "Para o cliente: relatórios processados pela equipe (“Recebemos e processamos seus relatórios”), "
             "análise publicada (“Seu Relatório Estratégico de MM/AAAA já está disponível”), resposta da "
-            "equipe em um chamado e chamado marcado como resolvido."
+            "equipe em um chamado, chamado marcado como resolvido e o lembrete de renovação do contrato, quando "
+            "a equipe NEXO o dispara."
         ),
         explicacao=(
             "A equipe NEXO, por sua vez, é avisada quando você envia um relatório, abre um chamado ou responde "
@@ -96,6 +98,10 @@ REGISTROS = (
             "chamado” com o assunto; quando o chamado é marcado como resolvido, recebe outro aviso e, com o "
             "e-mail ativo, uma mensagem por e-mail. Clique no aviso para abrir a conversa."
         ),
+        explicacao=(
+            "Você pode desligar esses alertas em Configurações. O e-mail de contato da empresa, se for outro, "
+            "continua recebendo o aviso de chamado resolvido."
+        ),
         perguntas=(
             "Vou ser avisado da resposta do chamado?", "Como sei que responderam meu ticket?",
             "Recebo e-mail quando o chamado é resolvido?",
@@ -111,8 +117,9 @@ REGISTROS = (
         categoria="Notificações",
         resumo=(
             "E-mails transacionais: boas-vindas com o link de definição de senha, link de recuperação de senha, "
-            "aviso de análise publicada e aviso de chamado resolvido. Eles complementam o sininho; o envio "
-            "depende da integração de e-mail configurada no servidor."
+            "avisos de senha e de e-mail alterados, aviso de análise publicada, aviso de chamado resolvido e "
+            "lembrete de renovação do contrato. Eles complementam o sininho; o envio depende da integração de "
+            "e-mail configurada no servidor."
         ),
         explicacao=(
             "Quando a integração não está configurada ou o serviço de e-mail está indisponível, o portal "

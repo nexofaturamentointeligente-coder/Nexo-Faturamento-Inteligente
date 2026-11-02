@@ -18,6 +18,7 @@ Rotas (todas exigem ADMIN; mutações só por POST com CSRF):
   /admin/empresas/<id>/regras-contratuais/<acao>   → ativar / desativar
   /admin/contratos                                 → visão geral
   /admin/contratos/reconciliar                     → vencimentos (simulação/aplicação)
+  /admin/contratos/lembretes-renovacao             → lembrete de vigência terminando
 
 As regras ficam em contract_admin/contract_policy; aqui só há leitura do
 formulário, transação e mensagens.
@@ -31,14 +32,17 @@ from flask_login import current_user
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+import configuracoes_conta
 import contract_admin as operacoes
 from blueprints.admin import _desconectar_revogados, _revogacoes_socket, admin_required
 from contract_policy import (
     EsquemaContratualIndisponivel, esquema_contratual_disponivel, formatar_instante,
     obter_coberturas_pagas, obter_contrato_aplicavel, obter_situacao_contratual, politica_prazos, utc,
 )
-from extensions import db
-from models import CoberturaPaga, Contrato, Empresa, EventoContratual, Plano
+from emails import envio_disponivel
+from extensions import chave_limite_usuario, db, limiter
+from models import CoberturaPaga, Contrato, Empresa, EventoContratual, Plano, Usuario
+from session_security import condicoes_empresa_acessivel
 
 contratos_bp = Blueprint("contratos", __name__, url_prefix="/admin")
 
@@ -231,7 +235,10 @@ def _detalhes_legiveis(bruto, planos):
 def empresa_detalhe(id_empresa):
     empresa = _empresa_ou_404(id_empresa)
     disponivel = esquema_contratual_disponivel()
-    contexto = {"empresa": empresa, "esquema_disponivel": disponivel, "politica": politica_prazos()}
+    contexto = {"empresa": empresa, "esquema_disponivel": disponivel, "politica": politica_prazos(),
+                "envio_ativo": envio_disponivel(current_app.config),
+                "conta_acessivel": db.session.scalar(select(Empresa.id_empresa).where(
+                    Empresa.id_empresa == empresa.id_empresa, *condicoes_empresa_acessivel())) is not None}
     if disponivel:
         situacao = obter_situacao_contratual(empresa)
         planos = {p.id_plano: p.nome_plano for p in db.session.scalars(select(Plano))}
@@ -451,9 +458,48 @@ def visao_geral():
         return render_template("admin/contratos.html", esquema_disponivel=False)
     painel = operacoes.visao_geral_contratual(db.session)
     simulacao = operacoes.reconciliar_vencimentos(db.session, aplicar=False)
+    lembretes = configuracoes_conta.enviar_lembretes_renovacao(aplicar=False)
     db.session.rollback()  # leitura pura; nada a confirmar
     return render_template("admin/contratos.html", esquema_disponivel=True, painel=painel,
-                           simulacao=simulacao)
+                           simulacao=simulacao, lembretes=lembretes)
+
+
+@contratos_bp.route("/contratos/lembretes-renovacao", methods=["POST"])
+@admin_required
+# Cada execução pode enviar um e-mail por pessoa, de forma síncrona: sem clique em série.
+@limiter.limit("10 per hour", key_func=chave_limite_usuario)
+def lembretes_renovacao():
+    """Mesma regra de `flask contratos lembretes-renovacao --aplicar`: uma vez por pessoa e por
+    data de término, respeitando quem desligou o aviso. Não há agendador configurado."""
+    if not esquema_contratual_disponivel():
+        return redirect(url_for("contratos.visao_geral"))
+    if not envio_disponivel(current_app.config):
+        flash("O envio de e-mail está indisponível: nenhum lembrete foi registrado. Confira o Diagnóstico de e-mail.", "warning")
+        return redirect(url_for("contratos.visao_geral"))
+    try:
+        relatorio = configuracoes_conta.enviar_lembretes_renovacao(aplicar=True)
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        current_app.logger.warning("Lembretes de renovação indisponíveis: %s", type(erro).__name__)
+        flash("Não foi possível concluir o envio dos lembretes. Tente novamente.", "danger")
+        return redirect(url_for("contratos.visao_geral"))
+    flash(f"Lembretes de renovação: {relatorio.notificados} pessoa(s) avisada(s).", "success")
+    if relatorio.emails_recusados:
+        # Até 10 nomes curtos: a mensagem viaja no cookie de sessão. A rodada já terminou: falha aqui não vira erro.
+        try:
+            nomes = list(db.session.scalars(select(Usuario.nome).where(
+                Usuario.id_usuario.in_([item["id_usuario"] for item in relatorio.recusados[:10]])).order_by(Usuario.id_usuario)))
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            current_app.logger.warning("Nomes dos endereços recusados indisponíveis: %s", type(erro).__name__)
+            nomes = []
+        quem = ", ".join(nome if len(nome) <= 40 else f"{nome[:39]}…" for nome in nomes)
+        resto = f" e mais {len(relatorio.recusados) - 10}" if len(relatorio.recusados) > 10 else ""
+        flash(f"{relatorio.emails_recusados} endereço(s) recusado(s) em definitivo: essas pessoas ficam só com o sininho. "
+              f"Corrija o e-mail delas em Empresas, Detalhes{f': {quem}{resto}' if quem else ''}.", "warning")
+    if relatorio.emails_nao_aceitos:
+        flash(f"{relatorio.emails_nao_aceitos} e-mail(s) não foram aceitos: a próxima execução tenta de novo. Se continuar, confira o Diagnóstico de e-mail.", "warning")
+    return redirect(url_for("contratos.visao_geral"))
 
 
 @contratos_bp.route("/contratos/reconciliar", methods=["POST"])

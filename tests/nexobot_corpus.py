@@ -53,6 +53,9 @@ NAVEGAR = [
     # Erros de digitação
     ("me leva pro dashbord", None, "dashboard"),
     ("abrir o historico", None, "historico"),
+    ("Abra a página de configurações", None, "configuracoes"),
+    ("me leva pro meu perfil", None, "configuracoes"),
+    ("abre as config", None, "configuracoes"),
     ("abra o hsitorico", None, "historico"),
     ("me leva pro suprote", None, "suporte"),
     ("abre o uplod", None, "upload"),
@@ -158,7 +161,6 @@ NAO_NAVEGAR = {
         ("Abra a página de investimentos.", None),
         ("Me leve para a página de controle de estoque físico.", "upload"),
         ("Me leve para controle de estoque upload.", "upload"),
-        ("Abra a página de configurações", None),
         ("Me leva para uma página que não existe.", "upload"),
         ("Eu quero ir para aquele módulo extraterrestre.", "upload"),
         ("Abra a página de notificações", None),

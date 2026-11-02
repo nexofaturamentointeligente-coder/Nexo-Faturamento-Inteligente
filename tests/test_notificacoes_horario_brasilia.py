@@ -200,6 +200,10 @@ class Portal:
             ident = re.search(r'<td class="t-mono t-mut">(\d+)</td>', tr)
             if ident:
                 linhas[int(ident.group(1))] = self.horarios(tr)[0]
+        # O painel do admin lista os chamados em cards, não em linhas de tabela.
+        for card in re.findall(r'<article class="nexo-card ticket-card">(.*?)</article>', pagina, re.S):
+            ident = re.search(r'<span class="t-mono t-mut">#(\d+)</span>', card)
+            linhas[int(ident.group(1))] = self.horarios(card)[0]
         return linhas
 
 

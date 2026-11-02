@@ -324,7 +324,7 @@ DADOS_NAO_CALCULADOS = (" O portal também não apresenta lucro, margem ou CMV: 
                         "sinalizações gerenciais estimadas.")
 FORA_ESCOPO = (
     "Sou o assistente do portal NEXO e só consigo ajudar com o uso do portal: envio de relatórios, "
-    "análises publicadas, indicadores, Guia e Suporte. Para outros assuntos, não tenho como responder.",
+    "análises publicadas, indicadores, Guia, Suporte e Configurações. Para outros assuntos, não tenho como responder.",
     "Esse assunto foge do que eu consigo fazer: sou focado no NEXO e no uso do portal. Posso ajudar com "
     "envio de relatórios, histórico de análises, indicadores, senha de acesso ou abrir um chamado.",
 )
@@ -407,7 +407,8 @@ def desconhecida(semente: str) -> Montagem:
 # --- Operações recusadas ----------------------------------------------------
 _OPERACOES = (
     (r"^(?:exclu|apag|delet|remov|limp|zer)", "excluir ou apagar dados",
-     "Exclusões não são feitas pelo portal do cliente. Se precisar, abra um chamado em Suporte.",
+     "Exclusões são tratadas pela equipe NEXO: abra um chamado em Suporte ou, para os dados da empresa, use "
+     "“Solicitar Exclusão de Dados” em Configurações.",
      "suporte"),
     (r"^(?:publiq|public|despubliq|despublic)", "publicar ou despublicar análises",
      "A publicação é feita pela equipe NEXO depois da validação, e você é avisado no sininho "
@@ -425,25 +426,68 @@ _OPERACOES = (
      "alterar contas, status ou chamados",
      "Pedidos desse tipo são tratados pela equipe NEXO: abra um chamado em Suporte.", "suporte"),
     (r"^(?:alter|edit|modific|mud|troc|atualiz|corrig|ajust|reset|redefin)", "alterar dados ou configurações",
-     "Alterações de cadastro são tratadas pela equipe NEXO: abra um chamado em Suporte.", "suporte"),
+     "Nome, telefone e e-mail de acesso você altera em Configurações; os demais dados do cadastro são "
+     "tratados pela equipe NEXO: abra um chamado em Suporte.", "suporte"),
 )
 _SENHA = re.compile(r"\bsenhas?\b")
 _VERBO_DE_ALTERACAO = re.compile(r"^(?:alter|mud|troc|reset|redefin|atualiz|edit|modific|corrig|ger|cri)")
 _EMAIL = re.compile(r"\b(?:email|emails|mensagem|mensagens)\b")
+_DADOS_DA_CONTA = re.compile(
+    r"\b(?:telefones?|celular|meu nome|nome do responsavel|meu e-?mail|e-?mail de acesso|meu perfil|perfil$|"
+    r"meus dados(?! d[eoa]s? (?!conta\b|contato\b|acesso\b|login\b|cadastro\b|usuario\b)"
+    r"| n[oa]s? (?!conta\b|portal\b|sistema\b)| em (?!configuracoes\b))|dados pessoais)\b"
+)
+_OBJETO_DA_CONTA = re.compile(
+    r"^(?:o |a |de |meu |minha )?(?:nome|e-?mail)"
+    r"(?: de (?:usuario|login|entrada)| d[ao] (?:minha |meu )?(?:conta|login)| do meu usuario| cadastrado)?$"
+)
+_VERBO_DA_CONTA = re.compile(r"^(?:alter|mud|troc|reset|redefin|atualiz|edit|modific|corrig)")
+_TEMA = re.compile(r"\b(?:tema(?: (?:para (?:o )?)?(?:claro|escuro)\b|(?: d[oa] (?:portal|tela|site|sistema))?$)|modo (?:claro|escuro)\b)")
+_AVISOS = re.compile(
+    r"\b(?:lembretes?|notificacoes|notificacao|(?<!\bde )(?:alertas?|avisos?)(?: d(?:e|os?) (?:chamados?|renovacao)| por email|$))"
+)
+_VERBO_DE_PREFERENCIA = re.compile(r"^(?:ativ|desativ|alter|mud|troc|edit|modific|ajust)")
+_MEUS_DADOS = re.compile(r"\b(?:meus dados|dados da (?:minha )?empresa)\b")
 _ANALISE = re.compile(r"\banalises?\b")
+_PEDIDO_DE_MUDANCA = re.compile(r"\b(?:alter|mud|troc|atualiz|corrig|edit|modific)\w*\b")
+_FECHO_DA_FRASE = re.compile(r"(?: ?(?:[.!?;:,]|por favor|obrigad[oa]))+$")
+
+
+def pede_alterar_a_conta(texto: str) -> bool:
+    return bool(_PEDIDO_DE_MUDANCA.search(texto) and _DADOS_DA_CONTA.search(texto) and not _SENHA.search(texto))
 
 
 def operacao(verbos, texto: str) -> tuple[str, str | None]:
     """Texto da recusa e página sugerida para a parte que o cliente pode fazer."""
+    texto = _FECHO_DA_FRASE.sub("", texto)  # os padrões ancorados no fim não veem pontuação nem cortesia
     descricoes, orientacoes, destino = [], [], None
     for verbo in verbos:
         for padrao, descricao, orientar, sugestao_destino in _OPERACOES:
             if re.match(padrao, verbo):
                 if _SENHA.search(texto) and _VERBO_DE_ALTERACAO.match(verbo):
                     descricao = "alterar a sua senha"
-                    orientar = ("Para trocar a senha, use “Esqueci minha senha” na tela de login: "
-                                "enviamos um link de redefinição válido por 15 minutos.")
+                    orientar = ("Para trocar a senha, abra Configurações e informe a senha atual. Se não "
+                                "lembra a senha, use “Esqueci minha senha” na tela de login: enviamos um "
+                                "link de redefinição válido por 15 minutos.")
+                    sugestao_destino = "configuracoes"
+                elif _VERBO_DA_CONTA.match(verbo) and (_DADOS_DA_CONTA.search(texto) or any(
+                        _OBJETO_DA_CONTA.match(resto) for resto in re.findall(rf"\b{verbo} (.+)$", texto))):
+                    descricao = "alterar os dados da sua conta"
+                    orientar = "Nome, telefone e e-mail de acesso você altera em Configurações, no menu lateral."
+                    sugestao_destino = "configuracoes"
+                elif _TEMA.search(texto) and _VERBO_DE_PREFERENCIA.match(verbo):
+                    descricao = "mudar o tema"
+                    orientar = "O tema claro ou escuro é escolhido no botão de sol ou lua, no topo da tela."
                     sugestao_destino = None
+                elif _AVISOS.search(texto) and _VERBO_DE_PREFERENCIA.match(verbo):
+                    descricao = "alterar os seus avisos"
+                    orientar = ("Os lembretes de renovação e os alertas de chamados você liga ou desliga em "
+                                "Configurações, na seção Preferências.")
+                    sugestao_destino = "configuracoes"
+                elif _MEUS_DADOS.search(texto) and verbo.startswith("baix"):
+                    descricao = "baixar os dados por você"
+                    orientar = "A cópia dos dados da conta e da empresa você baixa em Configurações, na exportação de dados."
+                    sugestao_destino = "configuracoes"
                 elif padrao.startswith("^(?:envi") and _EMAIL.search(texto):
                     descricao, orientar, sugestao_destino = "enviar e-mails ou mensagens", "", None
                 elif padrao.startswith("^(?:cri") and re.search(r"\b(?:chamados?|tickets?)\b", texto):

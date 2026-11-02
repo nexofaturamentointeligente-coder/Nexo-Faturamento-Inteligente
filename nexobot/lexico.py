@@ -113,6 +113,7 @@ historico analise analises anteriores antigas antigos passadas passados publicad
 publicados publicado concluidas concluida
 guia manual tutorial tutoriais conhecimento perguntas frequentes
 suporte chamado chamados ticket tickets atendimento atendente atendentes humano consultor
+configuracoes configuracao preferencias ajustes perfil
 senha senhas login acesso acessos entrar recuperar recupero redefinir alterar trocar
 esqueci esqueceu exportar exportacao sistema pdv erp portal sininho notificacao notificacoes
 email emails mensagem mensagens processado processamento processada validacao homologacao

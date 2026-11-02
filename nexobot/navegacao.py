@@ -57,12 +57,18 @@ DESTINOS = {
         "dos chamados já abertos.",
         "falar com a equipe NEXO",
     ),
+    "configuracoes": Destino(
+        "configuracoes", "cliente.configuracoes", "Configurações",
+        "Em Configurações, no menu lateral, você altera o nome do responsável, o telefone de contato, a "
+        "senha e o e-mail de acesso, exporta os dados da empresa e escolhe os avisos que quer receber.",
+        "alterar seus dados de acesso e preferências",
+    ),
 }
 
 ROTULOS = {chave: d.rotulo for chave, d in DESTINOS.items()}
 TIPOS_ACAO = frozenset({"navegar", "sugerir_navegacao"})
 
-_OUTRO_DESTINO = (r"(?:suporte|chamados?|tickets?|historico|uploads?|envio|guia|ajuda|"
+_OUTRO_DESTINO = (r"(?:suporte|chamados?|tickets?|historico|uploads?|envio|guia|ajuda|configuracoes|"
                   r"atendimento|administracao|admin\w*|analises|relatorios)")
 
 # Padrões sobre o texto canônico (minúsculo, sem acento, typos corrigidos).
@@ -110,6 +116,10 @@ _PADROES = {
         (FORTE, r"\bfalar com (?:a |o |um |uma |alguem (?:da |do )?)?(?:equipe|pessoa|humano|"
                 r"atendente|consultor|alguem)\b|\bfale conosco\b"),
         (FRACA, r"\bhumano\b|\bconsultor(?:es)?\b|\bequipe nexo\b|\bcontato\b"),
+    ),
+    "configuracoes": (
+        (FORTE, r"\bconfiguracoes\b|\bpreferencias\b|\bmeu perfil\b|\b(?:pagina|tela) de perfil\b"),
+        (FRACA, r"\bconfiguracao\b|\bajustes\b"),
     ),
 }
 _COMPILADOS = {

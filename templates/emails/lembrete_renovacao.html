@@ -1,0 +1,20 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<h1 style="margin:0 0 8px;font-size:20px;color:#ffffff;">Seu contrato está perto do fim 📅</h1>
+<p style="margin:0 0 18px;color:#c4c6d2;">
+  Olá{% if usuario and usuario.nome %}, {{ usuario.nome.split(' ')[0] }}{% endif %}! A vigência do contrato da sua empresa
+  com a NEXO vai até <strong style="color:#ffffff;">{{ data_fim.strftime('%d/%m/%Y') }}</strong>. Fale com a equipe NEXO para renovar.
+</p>
+
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 22px;">
+  <tr><td style="border-radius:10px;background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);">
+    <a href="{{ link_url }}" style="display:inline-block;padding:13px 28px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">
+      Abrir o portal →
+    </a>
+  </td></tr>
+</table>
+
+<p style="margin:0;color:#9aa0b7;font-size:12px;line-height:1.5;">
+  Você pode desligar este lembrete em Configurações, no portal.
+</p>
+{% endblock %}

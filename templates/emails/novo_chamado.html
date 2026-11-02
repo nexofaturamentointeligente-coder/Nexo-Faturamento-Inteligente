@@ -1,0 +1,27 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<h1 style="margin:0 0 8px;font-size:20px;color:#ffffff;">Novo chamado de suporte 🎫</h1>
+<p style="margin:0 0 18px;color:#c4c6d2;">
+  <strong style="color:#ffffff;">{{ nome_empresa }}</strong> abriu um chamado no portal NEXO.
+</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#181824;border-radius:12px;margin:0 0 22px;">
+  <tr><td style="padding:18px 20px;">
+    <div style="color:#9aa0b7;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;">Chamado #{{ chamado.id_chamado }} · {{ rotulo_categoria }}</div>
+    <div style="color:#ffffff;font-size:16px;font-weight:700;margin:4px 0 10px;">{{ chamado.assunto }}</div>
+    <div style="color:#c4c6d2;font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;">{{ mensagem[:2000] }}</div>
+  </td></tr>
+</table>
+
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 22px;">
+  <tr><td style="border-radius:10px;background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);">
+    <a href="{{ link_url }}" style="display:inline-block;padding:13px 28px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">
+      Abrir chamado no portal →
+    </a>
+  </td></tr>
+</table>
+
+<p style="margin:0;color:#9aa0b7;font-size:12px;line-height:1.5;">
+  Cópia automática para a caixa definida em Configurações do painel administrativo.
+</p>
+{% endblock %}

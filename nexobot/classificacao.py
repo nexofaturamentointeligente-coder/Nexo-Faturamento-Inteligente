@@ -140,8 +140,15 @@ _INVESTIMENTO = re.compile(
 )
 _ASSUNTO_GERAL = re.compile(
     r"\b(?:futebol|campeonato|filmes?|series?|novela|receita de (?:bolo|comida|\w+ caseir\w)|"
-    r"culinaria|politica|eleicao|eleicoes|horoscopo|signo|namorad[oa]|clima|temperatura|"
+    r"culinaria|eleicao|eleicoes|horoscopo|signo|namorad[oa]|clima|temperatura|"
     r"noticias?|jogo do|time do|copa do mundo)\b"
+)
+# "Política" é assunto externo, salvo se o texto apontar para o documento do portal ou para a regra de senha.
+_POLITICA = re.compile(r"\bpolitica\b")
+_POLITICA_DO_PORTAL = re.compile(
+    r"\bpolitica (?:(?:de|da) )?(?:privacidade|(?:troca de )?senhas?)\b|\btermos?(?: de uso)? e (?:a )?politica\b"
+    r"|\bpolitica e (?:os )?termos?\b"
+    r"|\baceit\w* (?:de novo )?(?:a |da |esta |essa )?(?:nova )?politica\b|\bpolitica (?:[\w,]+ ){0,5}aceit\w*\b"
 )
 _DADOS = re.compile(
     r"\b(?:qual|quais|quanto|quantos|quantas|me (?:diga|diz|fala|passa|informe|mostre|mostra)|"
@@ -772,7 +779,8 @@ def classificar(normalizado: TextoNormalizado, contexto: Contexto | None = None)
     # 7) Assuntos externos ao portal (antes das perguntas genéricas).
     if not any(f >= FORTE for f in destinos_mencionados.values()) and (
             _CONHECIMENTO_GERAL.search(canonico) or _INVESTIMENTO.search(canonico)
-            or _ASSUNTO_GERAL.search(canonico)):
+            or _ASSUNTO_GERAL.search(canonico)
+            or (_POLITICA.search(canonico) and not _POLITICA_DO_PORTAL.search(canonico))):
         return _resultado(Intencao.FORA_DO_ESCOPO, 0.85, ev, motivo="assunto_externo", **base)
 
     # 8) Confirmação/recusa de uma oferta anterior.

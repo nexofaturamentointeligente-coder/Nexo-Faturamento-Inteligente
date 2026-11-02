@@ -77,6 +77,7 @@ python -m playwright install chromium
 export NEXO_TEST_POSTGRES_BIN=/caminho/absoluto/postgresql/bin
 NEXO_TEST_BROWSER=1 python -B -m unittest discover -s tests -t . -v
 python -B -m unittest tests.postgresql_auth_tokens -v
+python -B -m unittest tests.postgresql_configuracoes -v
 python -B -m unittest tests.postgresql_session_revocation -v
 python -B -m unittest tests.postgresql_company_restore_security -v
 python -B -m unittest tests.postgresql_company_restore_migration -v

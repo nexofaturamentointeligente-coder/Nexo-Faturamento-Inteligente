@@ -13,9 +13,11 @@ EVENT LISTENER CRÍTICO:
     SEM ISSO, qualquer FK no schema é decorativa.
 """
 
+import math
 import os
 import secrets
 import logging
+import time
 from pathlib import Path
 
 from flask import Flask, redirect, url_for, render_template, session, request, abort, make_response, g
@@ -362,20 +364,25 @@ def create_app(config_name: str = None) -> Flask:
     def _csrf_error(e):
         if request.path.startswith("/api/"):
             return _erro_api("Sua sessão expirou. Atualize a página e tente novamente.", 400)
-        # Token ausente/expirado → mensagem clara e volta para a origem (re-render
-        # com token novo). Evita expor o traceback de "The CSRF token is missing".
-        from flask import flash
-        flash("Sua sessão expirou ou o formulário é inválido. Tente novamente.", "warning")
-        return redirect(request.referrer or url_for("auth.login")), 400
+        # Token ausente/expirado → página do portal com a mensagem: o navegador não segue
+        # Location numa resposta 400. Evita expor o traceback de "The CSRF token is missing".
+        return _pagina_erro(400, "Formulário expirado",
+                            "Sua sessão expirou ou este formulário é antigo. Nada foi gravado: "
+                            "abra a página de novo e repita.")
 
     @app.errorhandler(429)
     def _rate_limit(e):
         if request.path.startswith("/api/"):
             return _erro_api("Você enviou muitas mensagens em pouco tempo. "
                              "Aguarde um minuto e tente novamente.", 429)
-        return render_template("erro_simples.html", titulo="Muitas tentativas",
+        # O limite pode durar de um minuto a uma hora: o texto acompanha o que estourou.
+        limite = limiter.current_limit
+        minutos = max(1, math.ceil((limite.reset_at - 1 - time.time()) / 60)) if limite else 1
+        espera = "um minuto" if minutos == 1 else f"{minutos} minutos"
+        return render_template("erro_simples.html", titulo="Muitas tentativas", codigo=429,
+                               painel_url=_painel_url(),
                                mensagem="Você fez muitas requisições em pouco tempo. "
-                                        "Aguarde um minuto e tente novamente."), 429
+                                        f"Aguarde {espera} e tente novamente."), 429
 
     # Páginas de erro na identidade do NEXO (antes: a página padrão do servidor,
     # branca e em inglês). O status HTTP não muda; chamadas /api/ recebem JSON.

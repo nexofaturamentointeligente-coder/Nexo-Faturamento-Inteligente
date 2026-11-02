@@ -103,9 +103,12 @@ class PasswordPolicyFlowTests(_TokenCase):
         self.assertEqual(self._account("pending")[0], FIXTURE_HASH)
         self._assert_success(self._post(token, "activation", password=FRASE))
         # Primeiro acesso obrigatório (sessão autenticada): senha igual à temporária é recusada.
+        with self.app.app_context():
+            db.session.get(Usuario, self.ids["active"]).primeiro_acesso = True
+            db.session.commit()
         client = self.app.test_client()
         response = client.post("/auth/login", data={
-            "email": "admin@example.invalid", "senha": OLD_PASSWORD, "csrf_token": self._csrf(client),
+            "email": "active@example.invalid", "senha": OLD_PASSWORD, "csrf_token": self._csrf(client),
         })
         self.assertEqual(response.status_code, 302)
         response = client.post("/auth/primeiro-acesso", data={
@@ -113,13 +116,13 @@ class PasswordPolicyFlowTests(_TokenCase):
             "csrf_token": self._csrf(client, "/auth/primeiro-acesso"),
         })
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self._account("admin")[0], FIXTURE_HASH)
+        self.assertEqual(self._account("active")[0], FIXTURE_HASH)
         response = client.post("/auth/primeiro-acesso", data={
             "nova_senha": FRASE, "confirma_senha": FRASE,
             "csrf_token": self._csrf(client, "/auth/primeiro-acesso"),
         })
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(check_password_hash(self._account("admin")[0], FRASE))
+        self.assertTrue(check_password_hash(self._account("active")[0], FRASE))
 
     def test_reset_sends_a_password_changed_notice_without_tokens(self):
         token = self._token()

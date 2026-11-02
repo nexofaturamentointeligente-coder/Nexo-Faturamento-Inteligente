@@ -33,22 +33,29 @@ db = SQLAlchemy(model_class=Base)
 login_manager = LoginManager()
 # Flask-Migrate (Alembic): versionamento de schema do Postgres/Supabase.
 migrate = Migrate()
+class ValorSMTPInvalido(smtplib.SMTPException):
+    """MAIL_SERVER, MAIL_USERNAME ou MAIL_PASSWORD com caractere que o smtplib não codifica."""
+
+
 class _ConexaoSMTPComPrazo(Connection):
     """Conexão SMTP do Flask-Mail com prazo e certificado TLS verificado.
 
-    O Flask-Mail 0.10 abre o SMTP sem timeout (uma porta bloqueada, como no
-    Render Free, prende a thread por minutos) e o starttls() padrão do smtplib
-    não confere o certificado do servidor (a senha SMTP poderia ser entregue a
-    um intermediário). Mesmo fluxo da classe original: SSL/STARTTLS, login.
+    O Flask-Mail 0.10 abre o SMTP sem timeout (uma porta bloqueada prende a
+    thread por minutos) e o starttls() padrão do smtplib não confere o
+    certificado do servidor (a senha SMTP poderia ser entregue a um
+    intermediário). Mesmo fluxo da classe original: SSL/STARTTLS, login.
     """
 
     def configure_host(self):
         prazo = current_app.config.get("EMAIL_TIMEOUT_SEGUNDOS", 15.0)
         contexto = ssl.create_default_context()
-        if self.mail.use_ssl:
-            host = smtplib.SMTP_SSL(self.mail.server, self.mail.port, timeout=prazo, context=contexto)
-        else:
-            host = smtplib.SMTP(self.mail.server, self.mail.port, timeout=prazo)
+        try:
+            if self.mail.use_ssl:
+                host = smtplib.SMTP_SSL(self.mail.server, self.mail.port, timeout=prazo, context=contexto)
+            else:
+                host = smtplib.SMTP(self.mail.server, self.mail.port, timeout=prazo)
+        except UnicodeError:
+            raise ValorSMTPInvalido() from None
         try:
             host.set_debuglevel(int(self.mail.debug))
             # STARTTLS só numa conexão ainda sem TLS. Sobre SMTP_SSL (porta 465)
@@ -57,7 +64,10 @@ class _ConexaoSMTPComPrazo(Connection):
             if self.mail.use_tls and not self.mail.use_ssl:
                 host.starttls(context=contexto)
             if self.mail.username and self.mail.password:
-                host.login(self.mail.username, self.mail.password)
+                try:
+                    host.login(self.mail.username, self.mail.password)
+                except UnicodeError:
+                    raise ValorSMTPInvalido() from None
         except BaseException:
             host.close()
             raise
@@ -67,7 +77,22 @@ class _ConexaoSMTPComPrazo(Connection):
         # A partir daqui a mensagem está na transação SMTP (MAIL/RCPT/DATA): uma
         # queda agora deixa o resultado incerto (emails.py não afirma "não saiu").
         message.nexo_fase_smtp = "envio"
-        return super().send(message, envelope_from)
+        if self.host is None:
+            return super().send(message, envelope_from)
+        # O Flask-Mail descarta o retorno de sendmail, onde estão os destinatários recusados
+        # quando ao menos um foi aceito. emails.py confere a cópia oculta com esta lista.
+        host = self.host  # com MAIL_MAX_EMAILS, o send troca self.host por uma conexão nova
+        sendmail = host.sendmail
+
+        def sendmail_com_recusados(*args, **kwargs):
+            message.nexo_recusados = sendmail(*args, **kwargs) or {}
+            return message.nexo_recusados
+
+        host.sendmail = sendmail_com_recusados
+        try:
+            return super().send(message, envelope_from)
+        finally:
+            host.sendmail = sendmail
 
     def __exit__(self, exc_type, exc_value, tb):
         # O QUIT final não muda o resultado: com a mensagem já aceita (ou com a

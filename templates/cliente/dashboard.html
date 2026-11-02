@@ -19,6 +19,16 @@
 {# ---------------- Barra de auditoria: origem dos dados ---------------- #}
 {{ audit.barra(auditoria) }}
 
+{% if aviso_renovacao %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-calendar-event" aria-hidden="true"></i>
+    <div>
+        <strong>{% if aviso_renovacao.dias == 0 %}Seu contrato vence hoje.{% elif aviso_renovacao.dias == 1 %}Seu contrato vence amanhã.{% else %}Seu contrato vence em {{ aviso_renovacao.dias }} dias.{% endif %}</strong>
+        <p>Vigência até {{ aviso_renovacao.data_fim.strftime('%d/%m/%Y') }}. Fale com a equipe NEXO para renovar: <a href="{{ url_for('cliente.tickets') }}">abrir um chamado</a>. Você pode desligar este lembrete em <a href="{{ url_for('cliente.configuracoes') }}">Configurações</a>.</p>
+    </div>
+</div>
+{% endif %}
+
 {% if suspensao_contratual %}
 <div class="banner-suspensa" role="status">
     <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
@@ -266,7 +276,7 @@
   (function () {
     var labels = dashboardData.comparativo.labels;
     var values = dashboardData.comparativo.values;
-    var cores  = ['#f59e0b', '#38bdf8'];  /* compras = âmbar, vendas = azul neon */
+    var cores  = [NEXO.colors.amber, NEXO.colors.info];  /* compras = âmbar, vendas = azul neon */
     /* Faixa do eixo fixada pelo maior valor: o gráfico nasce em zero e anima
        (redraw: false não recalcula o eixo), então sem isso as barras estourariam
        a faixa [0, 1] e os rótulos do eixo ficariam sem sentido. */
@@ -279,7 +289,7 @@
       y: labels.map(function () { return 0; }),   /* start at 0 para animar */
       marker: {
         color: cores,
-        line: { color: 'rgba(255,255,255,0.22)', width: 1 }
+        line: { color: NEXO.colors.barEdge, width: 1 }
       },
       width: 0.5,
       /* customdata leva o valor já formatado em pt-BR para a tooltip */
@@ -287,14 +297,14 @@
       hovertemplate: '<b>%{x}</b><br>R$ %{customdata}<extra></extra>',
       text: values.map(function (v) { return 'R$ ' + nexoFmtBRLshort(v); }),
       textposition: 'outside',
-      textfont: { color: '#ece9f8', size: 12.5, family: 'JetBrains Mono, monospace' },
+      textfont: { color: NEXO.colors.textStrong, size: 12.5, family: 'JetBrains Mono, monospace' },
       cliponaxis: false
     }], {
       yaxis: {
         tickprefix: 'R$ ', tickformat: ',.0f',
         range: faixa, fixedrange: true, automargin: true
       },
-      xaxis: { fixedrange: true, tickfont: { size: 13, color: '#ece9f8' } },
+      xaxis: { fixedrange: true, tickfont: { size: 13, color: NEXO.colors.textStrong } },
       height: 260,
       margin: { l: 64, r: 18, t: 32, b: 42 },
       bargap: 0.45
@@ -335,9 +345,9 @@
       return Math.max(16, Math.min(32, Math.floor(largura / (digitos * 0.64))));
     }
     var tamanho = tamanhoNumero();
-    if (v > 0)      { cor = '#fbd07a'; legenda = 'Pressão de estoque'; }
-    else if (v < 0) { cor = '#22c55e'; legenda = 'Giro saudável';      }
-    else            { cor = '#9aa0b7'; legenda = 'Equilíbrio';          }
+    if (v > 0)      { cor = NEXO.colors.amberSoft; legenda = 'Pressão de estoque'; }
+    else if (v < 0) { cor = NEXO.colors.greenText; legenda = 'Giro saudável';      }
+    else            { cor = NEXO.colors.neutral;   legenda = 'Equilíbrio';          }
 
     NEXO.plot('chartPressaoCliente', [{
       type: 'indicator',
@@ -352,7 +362,7 @@
       title: {
         text: '<span style="font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;">'
               + legenda + '</span>',
-        font: { color: '#aaa6c8' }
+        font: { color: NEXO.colors.text }
       },
       domain: { x: [0, 1], y: [0, 1] }
     }], {

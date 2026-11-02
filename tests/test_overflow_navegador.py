@@ -560,7 +560,7 @@ class OverflowNavegadorTests(NavegadorCase):
             if email.startswith("admin"):
                 # Pré-condição: a premissa "Dashboard é o rótulo mais largo" só vale com estes seis itens.
                 self.assertEqual([r.strip() for r in pagina.locator(".sidebar-nav .nav-item").all_text_contents()],
-                                 ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte"])
+                                 ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"])
             m = self.medir(pagina)
             self.assertEqual(m["sidebar"]["rotulo"], rotulo, m["sidebar"])
             self.assertTrue(m["sidebar"]["fluxo"], "o indicador deve ser um item do flex, não absoluto")
@@ -574,7 +574,7 @@ class OverflowNavegadorTests(NavegadorCase):
         rotulos = pagina.locator(".sidebar-nav .nav-item").all_text_contents()
         rotulos = [r.strip() for r in rotulos]
         self.assertNotIn("Base de Conhecimento", rotulos, rotulos)
-        self.assertEqual(rotulos, ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte"])
+        self.assertEqual(rotulos, ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"])
 
     def test_upload_acessivel_pelo_teclado_e_sem_envio_vazio(self):
         pagina = self.abrir(1366, 768)

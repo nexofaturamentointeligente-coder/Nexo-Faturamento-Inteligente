@@ -89,6 +89,7 @@ def seed_admin(app):
         email=email,
         role="ADMIN",
         ativo=True,
+        primeiro_acesso=False,
     )
     admin.set_senha(senha)
     db.session.add(admin)

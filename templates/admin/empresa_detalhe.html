@@ -66,6 +66,29 @@
                     </form>
                     {% endif %}
                 </div>
+                {% if u.ativo and conta_acessivel %}
+                <details class="usuario-corrigir-email w-100">
+                    <summary>Corrigir e-mail de acesso</summary>
+                    <p class="field-hint mt-2">Use depois de confirmar quem é o dono da conta. As sessões do usuário caem, a senha atual deixa de valer e {% if envio_ativo %}o link para definir outra vai para o novo endereço. O endereço anterior recebe um aviso sem link.{% else %}o envio de e-mail está indisponível: o link não sai agora, e o dono usa “Esqueci minha senha” quando o envio voltar.{% endif %}</p>
+                    <form method="post" action="{{ url_for('admin.usuario_corrigir_email', id_usuario=u.id_usuario) }}" class="config-form" data-envio-unico
+                          data-confirm="Corrigir o e-mail de acesso de {{ u.nome }}? A senha atual dessa pessoa deixará de valer.">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div>
+                            <label class="nexo-label" for="novo_email_{{ u.id_usuario }}">Novo e-mail de acesso</label>
+                            <input type="email" class="form-control" id="novo_email_{{ u.id_usuario }}" name="novo_email" autocomplete="off" maxlength="254" required>
+                        </div>
+                        <div>
+                            <label class="nexo-label" for="confirmacao_novo_email_{{ u.id_usuario }}">Confirme o novo e-mail</label>
+                            <input type="email" class="form-control" id="confirmacao_novo_email_{{ u.id_usuario }}" name="confirmacao_novo_email" autocomplete="off" maxlength="254" required>
+                        </div>
+                        <div>
+                            <label class="nexo-label" for="senha_confirmacao_{{ u.id_usuario }}">Sua senha de administrador</label>
+                            <input type="password" class="form-control" id="senha_confirmacao_{{ u.id_usuario }}" name="senha_confirmacao" autocomplete="current-password" required>
+                        </div>
+                        <button type="submit" class="btn-ghost btn-sm-x"><i class="bi bi-envelope-check" aria-hidden="true"></i> Corrigir e-mail</button>
+                    </form>
+                </details>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>

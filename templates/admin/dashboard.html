@@ -224,7 +224,7 @@
     var maior = Math.max.apply(null, valores.concat([1]));
     return Math.max(1, Math.ceil(maior / 4));
   }
-  var rotuloNum = { color: '#ece9f8', size: 13, family: 'JetBrains Mono, monospace' };
+  var rotuloNum = { color: NEXO.colors.textStrong, size: 13, family: 'JetBrains Mono, monospace' };
 
   (function () {
     var st = dashboardData.empresas_status;
@@ -233,7 +233,7 @@
       type: 'pie', hole: 0.72, sort: false, direction: 'clockwise',
       labels: st.labels.map(function (l, i) { return l + ' · ' + st.values[i]; }),
       values: st.values,
-      marker: { colors: ['#22c55e', '#f59e0b', '#ef4444'], line: { color: 'rgba(17,13,32,0.92)', width: 3 } },
+      marker: { colors: [NEXO.colors.green, NEXO.colors.amber, NEXO.colors.red], line: { color: NEXO.colors.sliceLine, width: 3 } },
       textinfo: 'none',
       hoverinfo: 'label+value+percent'
     }], {
@@ -242,8 +242,8 @@
       legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.02, yanchor: 'top', font: { size: 11.5 } },
       annotations: [{
         x: 0.5, y: 0.5, showarrow: false,
-        text: '<b>' + total + '</b><br><span style="font-size:11px;color:#aaa6c8;font-family:Inter,sans-serif;">empresas</span>',
-        font: { size: 26, color: '#ffffff', family: 'JetBrains Mono, monospace' }
+        text: '<b>' + total + '</b><br><span style="font-size:11px;color:' + NEXO.colors.text + ';font-family:Inter,sans-serif;">empresas</span>',
+        font: { size: 26, color: NEXO.colors.textMax, family: 'JetBrains Mono, monospace' }
       }]
     });
     NEXO.descrever('chartStatus', 'Empresas por status, ' + total + ' no total: ' + st.labels.map(function (l, i) { return l + ' ' + st.values[i]; }).join(', ') + '.');
@@ -254,15 +254,15 @@
     x: dashboardData.empresas_plano.labels,
     y: dashboardData.empresas_plano.values,
     marker: {
-      color: ['rgba(224,168,120,0.92)', 'rgba(203,213,225,0.92)', 'rgba(245,215,110,0.92)'],
-      line: { color: 'rgba(255,255,255,0.28)', width: 1 }
+      color: [NEXO.colors.planBronze, NEXO.colors.planPrata, NEXO.colors.planOuro],
+      line: { color: NEXO.colors.barEdgeStrong, width: 1 }
     },
     width: 0.5,
     text: dashboardData.empresas_plano.values, textposition: 'outside', textfont: rotuloNum, cliponaxis: false,
     hovertemplate: '%{x}: %{y} empresa(s)<extra></extra>'
   }], {
     yaxis: { dtick: nexoPasso(dashboardData.empresas_plano.values), rangemode: 'tozero', tickformat: 'd' },
-    xaxis: { tickfont: { size: 12, color: '#ece9f8' } },
+    xaxis: { tickfont: { size: 12, color: NEXO.colors.textStrong } },
     height: 240, margin: { l: 36, r: 12, t: 26, b: 36 }
   });
   NEXO.descrever('chartPlano', 'Empresas por plano: ' + dashboardData.empresas_plano.labels.map(function (l, i) {
@@ -275,8 +275,8 @@
     x: dashboardData.analises_status.values,
     y: dashboardData.analises_status.labels,
     marker: {
-      color: ['rgba(245,158,11,0.9)', 'rgba(56,189,248,0.9)', 'rgba(168,85,247,0.9)', 'rgba(34,197,94,0.9)'],
-      line: { color: 'rgba(255,255,255,0.22)', width: 1 }
+      color: [NEXO.colors.barAmber, NEXO.colors.barInfo, NEXO.colors.barPurple, NEXO.colors.barGreen],
+      line: { color: NEXO.colors.barEdge, width: 1 }
     },
     width: 0.58,
     text: dashboardData.analises_status.values, textposition: 'outside', textfont: rotuloNum, cliponaxis: false,
@@ -284,7 +284,7 @@
   }], {
     margin: { l: 128, r: 30, t: 10, b: 34 },
     xaxis: { dtick: nexoPasso(dashboardData.analises_status.values), rangemode: 'tozero', tickformat: 'd', showgrid: true },
-    yaxis: { tickfont: { size: 12, color: '#ece9f8' }, autorange: 'reversed', automargin: true },
+    yaxis: { tickfont: { size: 12, color: NEXO.colors.textStrong }, autorange: 'reversed', automargin: true },
     height: 240
   });
   NEXO.descrever('chartAnalisesStatus', 'Análises por status: ' + dashboardData.analises_status.labels.map(function (l, i) {

@@ -1244,7 +1244,7 @@ class RenderEConfiguracaoTests(unittest.TestCase):
             "    assert link.startswith('https://nexo-teste.example.invalid/auth/resetar-senha/'), link\n"
             "    d = emails.diagnostico_configuracao()\n"
             "    assert d['transporte'] == 'brevo' and d['api_https'] and d['api_host'] == 'api.brevo.com', d\n"
-            "    assert d['render'] is True and d['alerta_admin'] is True and not d['bloqueante'], d\n"
+            "    assert d['hospedagem_bloqueia_smtp'] is True and d['alerta_admin'] is True and not d['bloqueante'], d\n"
             "    assert app.config['BREVO_API_URL'] == 'https://api.brevo.com/v3/smtp/email'\n",
             RENDER="true", RENDER_EXTERNAL_URL="https://nexo-teste.example.invalid",
             BREVO_API_KEY="xkeysib-synthetic-PRIVATE-KEY", MAIL_DEFAULT_SENDER="NEXO <nexo@example.invalid>",

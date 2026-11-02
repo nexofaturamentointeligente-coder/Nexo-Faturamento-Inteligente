@@ -4,7 +4,7 @@ Conhecimento" saiu do menu administrativo (PR #33, 28/10/2026).
 
 Em toda página administrativa — inclusive as do CMS do Guia, que continuam
 alcançáveis por URL — a sidebar renderiza exatamente Dashboard, Empresas,
-Contratos, Lixeira, Análises e Suporte; nenhum link da sidebar (menu ou rodapé)
+Contratos, Lixeira, Análises, Suporte e Configurações; nenhum link da sidebar (menu ou rodapé)
 aponta para /admin/guia; fora das páginas do próprio CMS, "/admin/guia" não
 aparece em lugar nenhum da página; o item ativo é o da página corrente e, no
 CMS, nenhum; "Sair" segue único no rodapé. A sidebar do cliente não ganha o
@@ -22,8 +22,8 @@ import unittest
 
 from tests.deploy_support import DeployTestCase
 
-ROTULOS_ADMIN = ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte"]
-ROTULOS_CLIENTE = ["Visão Geral", "Enviar relatórios", "Histórico", "Guia", "Suporte"]
+ROTULOS_ADMIN = ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"]
+ROTULOS_CLIENTE = ["Visão Geral", "Enviar relatórios", "Histórico", "Guia", "Suporte", "Configurações"]
 
 _ASIDE = re.compile(r'<aside\b[^>]*\bclass="[^"]*\bsidebar\b[^"]*"[^>]*>(.*?)</aside>', re.S)
 _NAV = re.compile(r'<nav\b[^>]*\bclass="[^"]*\bsidebar-nav\b[^"]*"[^>]*>(.*?)</nav>', re.S)
@@ -98,7 +98,8 @@ class NavegacaoAdminSemBaseDeConhecimentoTests(DeployTestCase):
             "/admin/analises": "Análises", "/admin/analises/nova": "Análises",
             "/admin/analises/gerenciar": "Análises", f"/admin/analises/gerenciar/{e}": "Análises",
             f"/admin/analise/{a}/upload": "Análises", f"/admin/analise/{a}/relatorio": "Análises",
-            "/admin/tickets": "Suporte",
+            "/admin/tickets": "Suporte", "/admin/suporte": "Suporte",
+            "/admin/configuracoes": "Configurações",
             "/admin/guia": None, "/admin/guia/novo": None, f"/admin/guia/editar/{t}": None,
         }
 
@@ -121,12 +122,48 @@ class NavegacaoAdminSemBaseDeConhecimentoTests(DeployTestCase):
     def test_sidebar_do_cliente_nao_ganha_o_item_nem_aponta_para_a_administracao(self):
         self.login("cliente-test@example.invalid")
         for caminho in ("/cliente/dashboard", "/cliente/upload", "/cliente/historico",
-                        f"/cliente/analise/{self.analise_id}", "/cliente/guia", "/cliente/tickets"):
+                        f"/cliente/analise/{self.analise_id}", "/cliente/guia", "/cliente/tickets", "/cliente/configuracoes"):
             with self.subTest(caminho=caminho):
                 sidebar = _Sidebar(self._pagina(caminho), caminho)
                 self.assertEqual(sidebar.rotulos, ROTULOS_CLIENTE)
                 self.assertNotIn("Base de Conhecimento", sidebar.aside)
                 self.assertEqual([h for h, _, _ in sidebar.links_aside if h.startswith("/admin")], [])
+
+
+class ConfiguracoesESuporteTests(DeployTestCase):
+    def setUp(self):
+        super().setUp()
+        from models import Analise, ChamadoSuporte, MensagemSuporte
+        self.fixtures()
+        empresa = self.db.session.get(Analise, self.analise_id).id_empresa
+        chamado = ChamadoSuporte(id_empresa=empresa, id_usuario_cliente=self.cliente_id, assunto="Assunto fictício",
+                                 categoria="DUVIDA_TECNICA")
+        chamado.mensagens = [MensagemSuporte(id_usuario_remetente=self.cliente_id, mensagem="<b>Texto longo</b> " * 200)]
+        self.db.session.add(chamado)
+        self.db.session.commit()
+        self.chamado_id = chamado.id_chamado
+
+    def test_configuracoes_respeitam_o_perfil(self):
+        self.assertIn("/auth/login", self.client.get("/admin/configuracoes").headers["Location"])
+        self.login("cliente-test@example.invalid")
+        self.assertEqual(self.client.get("/cliente/configuracoes").status_code, 200)
+        self.assertEqual(self.client.get("/admin/configuracoes").status_code, 403)
+        self.logout()
+        self.login("admin-test@example.invalid")
+        self.assertEqual(self.client.get("/admin/configuracoes").status_code, 200)
+        self.assertEqual(self.client.get("/cliente/configuracoes").status_code, 403)
+
+    def test_cards_de_suporte_escapam_o_texto_e_levam_ao_chamado_completo(self):
+        self.login("admin-test@example.invalid")
+        for caminho in ("/admin/suporte", "/admin/tickets"):
+            html = self.client.get(caminho).get_data(as_text=True)
+            self.assertIn('class="ticket-card-mensagem"', html)
+            self.assertIn("&lt;b&gt;Texto longo", html)
+            self.assertNotIn("<b>Texto longo", html)
+            self.assertIn(f'href="/admin/tickets/{self.chamado_id}"', html)
+            self.assertIn("Ver chamado", html)
+        detalhe = self.client.get(f"/admin/tickets/{self.chamado_id}").get_data(as_text=True)
+        self.assertEqual(detalhe.count("&lt;b&gt;Texto longo"), 200)
 
 
 if __name__ == "__main__":

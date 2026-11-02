@@ -1,0 +1,600 @@
+/* ===================================================================
+   NEXO — Tema claro do portal autenticado
+   -------------------------------------------------------------------
+   O tema escuro de nexo.css é o padrão e não muda. Esta folha só atua com
+   <html data-theme="light">, definido pelo script do <head> de base.html
+   (localStorage.theme); todo seletor começa por html[data-theme="light"].
+   Carregada só por base.html, depois de nexo.css, e só com sessão: login,
+   landing e páginas de erro continuam sempre escuras.
+
+   - A sidebar continua escura, em superfície quase opaca: os tokens voltam
+     aos valores do tema escuro dentro dela. A logo e o texto "NEXO
+     Faturamento Inteligente" não mudam; .brand-logo, .auth-logo e
+     .brand-symbol nunca são estilizados aqui (test_identidade_visual.py).
+   - O resto fica claro: superfícies opacas sobre um fundo lavanda liso
+     (o contraste é calculado sobre o fundo real, sem depender de desfoque).
+   - WCAG AA: texto 4,5:1; texto grande 3:1; borda de campo e foco 3:1.
+     Medido por tests/test_tema_navegador.py.
+   - O prefixo soma especificidade: uma regra de repouso daqui vence o :hover e o
+     :focus de nexo.css. Quem pinta o repouso repete o estado logo abaixo (e, dentro
+     da folha, o repouso vem antes do estado). tests/test_tema_interface.py confere.
+   A ordem das seções acompanha nexo.css.
+   =================================================================== */
+
+/* ============================ TOKENS ============================== */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  /* Fundos */
+  --bg:            #f3f0fa;
+  --bg-2:          #ffffff;
+  --surface:       #ffffff;
+  --surface-2:     #f7f5fc;
+  --surface-3:     #ece8f6;
+  --surface-hover: #f0ecf9;
+
+  /* Bordas */
+  --border:        rgba(45, 27, 94, 0.14);
+  --border-strong: rgba(45, 27, 94, 0.26);
+  /* Borda de campo de formulário: 3:1 também sobre --surface-3. */
+  --campo-borda:   #857f9f;
+
+  /* Texto */
+  --text:          #1b1630;
+  --text-muted:    #4f4a66;
+  --text-dim:      #5f5a78;
+
+  /* Roxo da marca, nos tons que passam AA sobre fundo claro */
+  --primary:       #7c3aed;
+  --primary-2:     #6d28d9;
+  --primary-3:     #5b21b6;
+  --primary-soft:  rgba(124, 58, 237, 0.10);
+  --primary-glow:  rgba(124, 58, 237, 0.32);
+  --grad:          linear-gradient(135deg, #6d28d9 0%, #9333ea 100%);
+  --grad-hover:    linear-gradient(135deg, #5b21b6 0%, #7e22ce 100%);
+  --grad-cta:      linear-gradient(135deg, #6d28d9 0%, #9333ea 100%);
+  --grad-cta-hover: linear-gradient(135deg, #5b21b6 0%, #7e22ce 100%);
+  /* Roxo de texto sobre as tintas lilases. */
+  --roxo-texto:    #5b21b6;
+  --roxo-forte:    #3b1d80;
+  --lilas-opaco:   #f3edfe;
+
+  /* Estados: tinta de fundo e tom de texto legível sobre ela */
+  --success:    #15803d;  --success-bg: rgba(22, 163, 74, 0.12);
+  --warning:    #b45309;  --warning-bg: rgba(245, 158, 11, 0.16);
+  --danger:     #dc2626;  --danger-bg:  rgba(220, 38, 38, 0.09);
+  --info:       #0369a1;  --info-bg:    rgba(2, 132, 199, 0.10);
+  --verde-texto:    #166534;
+  --ambar-texto:    #92400e;
+  --vermelho-texto: #b91c1c;
+  --azul-texto:     #075985;
+
+  /* Sombras em roxo acinzentado (o preto pesa sobre o claro) */
+  --shadow-sm: 0 2px 8px rgba(45, 27, 94, 0.08);
+  --shadow:    0 10px 30px -12px rgba(45, 27, 94, 0.18);
+  --shadow-lg: 0 24px 60px -20px rgba(45, 27, 94, 0.28);
+
+  /* Superfícies opacas: sem nada a desfocar, o desfoque não entra. */
+  --glass:          #ffffff;
+  --glass-strong:   #ffffff;
+  --glass-chrome:   #ffffff;
+  --glass-hover:    #f7f5fc;
+  --glass-border:   rgba(45, 27, 94, 0.13);
+  --glass-border-2: rgba(109, 40, 217, 0.30);
+  --glass-shine:    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --glass-blur:     none;
+  --glass-blur-sm:  none;
+  --shadow-glass:   0 1px 2px rgba(45, 27, 94, 0.06), 0 12px 28px -16px rgba(45, 27, 94, 0.22);
+
+  --divisoria: rgba(45, 27, 94, 0.09);
+
+  /* Bootstrap: o que nexo.css alinha só em [data-bs-theme="dark"]. */
+  --bs-body-bg: var(--bg);
+  --bs-body-color: var(--text);
+  --bs-border-color: var(--border);
+  --bs-primary: #7c3aed;
+  --bs-primary-rgb: 124, 58, 237;
+  --bs-link-color: #6d28d9;
+  --bs-link-hover-color: #5b21b6;
+  --bs-link-color-rgb: 109, 40, 217;
+  --bs-link-hover-color-rgb: 91, 33, 182;
+  --bs-emphasis-color: var(--text);
+  --bs-secondary-color: var(--text-muted);
+  --bs-code-color: #86198f;
+}
+
+/* ============================ BASE ================================ */
+html[data-theme="light"] body {
+  background-color: var(--bg);
+  background-image: none;
+}
+html[data-theme="light"] ::selection { background: rgba(124, 58, 237, 0.24); color: var(--text); }
+
+/* Scrollbar */
+html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c9c2dc; border: 3px solid transparent; background-clip: content-box; }
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #a9a1c2; border: 3px solid transparent; background-clip: content-box; }
+
+/* Foco visível padrão: 3:1 sobre as superfícies claras (a sidebar tem os seus). */
+html[data-theme="light"] .main-area a:focus-visible,
+html[data-theme="light"] .main-area .btn:focus-visible,
+html[data-theme="light"] .btn-close:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; box-shadow: none; opacity: 1; }
+
+/* ===================== AUTH (só "Como obter acesso" com sessão) ==== */
+/* Só o cartão e os textos: .auth-logo não recebe nenhuma regra. */
+html[data-theme="light"] .auth-card {
+  background: var(--surface);
+  border-color: var(--glass-border);
+  box-shadow: var(--shadow-lg);
+}
+html[data-theme="light"] .auth-eyebrow { color: var(--roxo-forte); }
+html[data-theme="light"] .auth-eyebrow span,
+html[data-theme="light"] .auth-sub,
+html[data-theme="light"] .auth-tagline { color: var(--text-muted); }
+
+/* ===================== APP SHELL ================================= */
+/* nexo.css reforça estes tons no .app-shell, para o fundo escuro. */
+html[data-theme="light"] .app-shell {
+  --text-dim: #5f5a78;
+  --bs-link-color-rgb: 109, 40, 217;
+  --bs-link-hover-color-rgb: 91, 33, 182;
+}
+/* Sem a paisagem: fundo liso e limpo, na tonalidade roxa suave da marca. */
+html[data-theme="light"] .app-shell::before { background: var(--bg); }
+
+/* Sidebar: continua escura. Os tokens claros são desfeitos aqui dentro, e a
+   superfície fica quase opaca para o fundo claro não lavar o texto. */
+html[data-theme="light"] .sidebar {
+  color-scheme: dark;
+  --text:           #e8e9f0;
+  --text-muted:     #9aa0b7;
+  --text-dim:       #9d98ba;
+  --border:         rgba(255, 255, 255, 0.07);
+  --border-strong:  rgba(255, 255, 255, 0.13);
+  --primary:        #a855f7;
+  --primary-2:      #a78bfa;
+  --primary-glow:   rgba(168, 85, 247, 0.45);
+  --grad:           linear-gradient(135deg, #6d28d9 0%, #9333ea 100%);
+  --success:        #22c55e;
+  --danger-bg:      rgba(239, 68, 68, 0.13);
+  --glass-border:   rgba(255, 255, 255, 0.09);
+  --glass-border-2: rgba(196, 160, 251, 0.24);
+  --glass-shine:    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --shadow-glass:   0 18px 44px -22px rgba(27, 16, 64, 0.55), 0 2px 10px -4px rgba(27, 16, 64, 0.3);
+  --divisoria:      rgba(255, 255, 255, 0.055);
+  --divisoria-forte: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+  background: rgba(22, 16, 42, 0.985);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: var(--shadow-glass), var(--glass-shine);
+}
+html[data-theme="light"] .sidebar-overlay { background: rgba(27, 22, 48, 0.45); }
+/* O botão de fechar a gaveta fica fora da sidebar, sobre o véu claro: o lilás de nexo.css some ali. */
+html[data-theme="light"] .sidebar-close:focus-visible { outline-color: var(--roxo-forte); }
+
+/* Topbar: as duas camadas de desfoque continuam, em véu branco. A de cima é quase
+   opaca: o título passa AA com qualquer conteúdo rolando por baixo. */
+html[data-theme="light"] .topbar::before { background: rgba(255, 255, 255, 0.6); }
+html[data-theme="light"] .topbar::after {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px var(--glass-border), var(--glass-shine);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-theme="light"] .topbar { background: #ffffff; border-color: var(--glass-border); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html[data-theme="light"] .topbar { background: #ffffff; border-color: var(--glass-border); }
+  html[data-theme="light"] .sidebar { background: #140f27; }
+}
+html[data-theme="light"] .topbar-title { color: var(--text); }
+html[data-theme="light"] .topbar-title small { color: var(--text-muted); }
+html[data-theme="light"] .nav-toggle { background: var(--surface); border-color: var(--glass-border); }
+html[data-theme="light"] .nav-toggle:hover { background: var(--lilas-opaco); border-color: var(--glass-border-2); }
+html[data-theme="light"] .user-chip { background: var(--surface-2); border-color: var(--glass-border); }
+html[data-theme="light"] .user-meta small { color: var(--text-muted); }
+
+/* Cabeçalho de página: o texto em degradê vira cor sólida. */
+html[data-theme="light"] .page-head h1 {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--text);
+}
+html[data-theme="light"] .page-head .sub { color: var(--text-muted); }
+
+/* ===================== CARDS ===================================== */
+html[data-theme="light"] .nexo-card-head .sub { color: var(--text-muted); }
+html[data-theme="light"] .card {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass);
+}
+html[data-theme="light"] .card-header { background: transparent; border-bottom: 1px solid var(--glass-border); }
+
+/* ===================== KPI TILES ================================= */
+/* Sem o degradê de canto: a cor de destaque fica no ícone e no filete do topo. */
+html[data-theme="light"] .kpi-tile { background: var(--surface); }
+html[data-theme="light"] .kpi-tile:hover {
+  border-color: rgba(var(--kpi-accent), 0.5);
+  box-shadow: 0 16px 32px -20px rgba(45, 27, 94, 0.32), 0 10px 24px -16px rgba(var(--kpi-accent), 0.5);
+}
+html[data-theme="light"] .kpi-label { color: var(--text-muted); }
+html[data-theme="light"] .kpi-icon {
+  background: var(--primary-soft); color: var(--primary-2);
+  border-color: rgba(124, 58, 237, 0.28);
+  box-shadow: none;
+}
+html[data-theme="light"] .kpi-icon.is-green { background: var(--success-bg); color: var(--verde-texto); border-color: rgba(22, 163, 74, 0.32); }
+html[data-theme="light"] .kpi-icon.is-amber { background: var(--warning-bg); color: var(--ambar-texto); border-color: rgba(217, 119, 6, 0.36); }
+html[data-theme="light"] .kpi-icon.is-red   { background: var(--danger-bg);  color: var(--vermelho-texto); border-color: rgba(220, 38, 38, 0.32); }
+html[data-theme="light"] .kpi-icon.is-info  { background: var(--info-bg);    color: var(--azul-texto); border-color: rgba(2, 132, 199, 0.32); }
+html[data-theme="light"] .kpi-value { color: var(--text); text-shadow: none; }
+html[data-theme="light"] .kpi-value small { color: var(--text-muted); }
+html[data-theme="light"] .kpi-foot { color: var(--text-muted); }
+
+/* ===================== TABELAS =================================== */
+html[data-theme="light"] .nexo-table thead th { color: var(--text-muted); background: var(--surface-2); }
+html[data-theme="light"] .nexo-table tbody td { border-bottom-color: var(--divisoria); }
+html[data-theme="light"] .nexo-table tbody tr:nth-child(even) { background: rgba(45, 27, 94, 0.022); }
+html[data-theme="light"] .nexo-table tbody tr:hover > td { background: rgba(124, 58, 237, 0.08); }
+html[data-theme="light"] .nexo-table tbody tr.is-selecionada > td,
+html[data-theme="light"] .nexo-table tbody tr:focus-within > td { background: rgba(124, 58, 237, 0.09); }
+html[data-theme="light"] .table-responsive-x { scrollbar-color: rgba(109, 40, 217, 0.45) transparent; }
+html[data-theme="light"] .table-responsive-x::-webkit-scrollbar-thumb { background: rgba(109, 40, 217, 0.38); }
+/* Tabela que rola: a máscara de nexo.css apagaria o texto da última coluna (nos 72 px da
+   direita o contraste cairia abaixo de AA). A sombra interna e a dica "Deslize" indicam
+   que há mais colunas; o texto fica inteiro. */
+html[data-theme="light"] .table-responsive-x.rola-mais {
+  -webkit-mask-image: none;
+  mask-image: none;
+  box-shadow: inset -14px 0 12px -12px rgba(45, 27, 94, 0.35);
+}
+html[data-theme="light"] .dica-rolagem { color: var(--primary-2); background: var(--surface-2); }
+/* Modo cartões */
+html[data-theme="light"] .table-responsive-x.em-cartoes .nexo-table tbody tr { background: var(--surface-2); box-shadow: none; }
+html[data-theme="light"] .table-responsive-x.em-cartoes .nexo-table tbody tr:hover { background: var(--lilas-opaco); box-shadow: inset 0 0 0 1px var(--glass-border-2); }
+html[data-theme="light"] .table-responsive-x.em-cartoes .nexo-table tbody td { border-bottom-color: var(--divisoria); }
+html[data-theme="light"] .table-responsive-x.em-cartoes .nexo-table tbody td::before { color: var(--text-muted); }
+
+/* ===================== BADGES =================================== */
+html[data-theme="light"] .b-green  { color: var(--verde-texto); border-color: rgba(22, 163, 74, 0.34); }
+html[data-theme="light"] .b-amber  { color: var(--ambar-texto); border-color: rgba(217, 119, 6, 0.38); }
+html[data-theme="light"] .b-red    { color: var(--vermelho-texto); border-color: rgba(220, 38, 38, 0.32); }
+html[data-theme="light"] .b-info   { color: var(--azul-texto); border-color: rgba(2, 132, 199, 0.34); }
+html[data-theme="light"] .b-purple { color: var(--roxo-texto); border-color: rgba(124, 58, 237, 0.32); }
+html[data-theme="light"] .b-muted  { background: rgba(45, 27, 94, 0.06); color: var(--text-muted); border-color: var(--border); }
+
+/* Planos */
+html[data-theme="light"] .plan-bronze { background: rgba(180, 83, 9, 0.11); color: #7c3a0a; border-color: rgba(180, 83, 9, 0.36); }
+html[data-theme="light"] .plan-prata  { background: rgba(100, 116, 139, 0.13); color: #3a4657; border-color: rgba(100, 116, 139, 0.4); }
+html[data-theme="light"] .plan-ouro   { background: rgba(202, 138, 4, 0.15); color: #6b4e00; border-color: rgba(202, 138, 4, 0.45); }
+
+/* ===================== BOTÕES =================================== */
+html[data-theme="light"] .app-shell .btn-nexo { box-shadow: 0 10px 22px -12px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
+html[data-theme="light"] .app-shell .btn-nexo:hover { box-shadow: 0 12px 24px -10px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
+html[data-theme="light"] .app-shell .btn-nexo:disabled,
+html[data-theme="light"] .app-shell .btn-nexo.disabled { box-shadow: none; }
+html[data-theme="light"] .app-shell .btn-nexo:focus-visible,
+html[data-theme="light"] .app-shell .btn-ghost:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+html[data-theme="light"] .btn-nexo.is-danger,
+html[data-theme="light"] .app-shell .btn-nexo.is-danger,
+html[data-theme="light"] .app-shell .btn-nexo.is-danger:hover { box-shadow: 0 10px 22px -12px rgba(220, 38, 38, 0.5); }
+
+html[data-theme="light"] .btn-ghost,
+html[data-theme="light"] .app-shell .btn-ghost {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+html[data-theme="light"] .btn-ghost:hover,
+html[data-theme="light"] .app-shell .btn-ghost:hover { background: var(--lilas-opaco); border-color: var(--glass-border-2); color: var(--roxo-forte); }
+html[data-theme="light"] .btn-ghost.is-danger,
+html[data-theme="light"] .app-shell .btn-ghost.is-danger { color: var(--vermelho-texto); border-color: rgba(220, 38, 38, 0.42); }
+html[data-theme="light"] .btn-ghost.is-danger:hover,
+html[data-theme="light"] .app-shell .btn-ghost.is-danger:hover { background: #fdecec; color: #991b1b; border-color: rgba(220, 38, 38, 0.6); }
+
+/* O que nexo.css alinha só em [data-bs-theme="dark"]. */
+html[data-theme="light"] .btn-primary,
+html[data-theme="light"] .btn-dark { background: var(--grad); border: none; color: #fff; box-shadow: 0 8px 18px -10px var(--primary-glow); }
+html[data-theme="light"] .btn-primary:hover,
+html[data-theme="light"] .btn-dark:hover { background: var(--grad-hover); color: #fff; }
+html[data-theme="light"] .btn-secondary { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); }
+
+/* ===================== GERENCIAR ANÁLISES ======================== */
+html[data-theme="light"] .trilha { color: var(--text-muted); }
+html[data-theme="light"] .trilha a { color: var(--primary-2); }
+html[data-theme="light"] .trilha-sep { color: var(--text-dim); }
+html[data-theme="light"] .empresa-card { background: var(--surface); }
+html[data-theme="light"] a.empresa-card:hover,
+html[data-theme="light"] a.empresa-card:focus-visible {
+  background: var(--lilas-opaco);
+  box-shadow: 0 16px 34px -20px rgba(124, 58, 237, 0.5);
+  color: var(--text);
+}
+html[data-theme="light"] a.empresa-card:hover .ec-seta,
+html[data-theme="light"] a.empresa-card:focus-visible .ec-seta { color: var(--primary-2); }
+html[data-theme="light"] .empresa-card.is-selecionada {
+  border-color: rgba(109, 40, 217, 0.5);
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.28), 0 14px 30px -22px rgba(124, 58, 237, 0.55);
+  background: var(--lilas-opaco);
+}
+html[data-theme="light"] .ec-icone { background: var(--primary-soft); border-color: rgba(124, 58, 237, 0.26); }
+html[data-theme="light"] .ec-icone img { filter: none; }
+html[data-theme="light"] .ec-razao { color: var(--text-muted); }
+html[data-theme="light"] .ec-meta { color: var(--text-muted); }
+html[data-theme="light"] .ec-sep { color: var(--text-dim); }
+html[data-theme="light"] .ec-seta { color: var(--text-dim); }
+html[data-theme="light"] .ec-check { color: var(--primary-2); }
+html[data-theme="light"] .resumo-exclusao div { background: var(--surface-2); }
+html[data-theme="light"] .resumo-exclusao dt { color: var(--text-muted); }
+html[data-theme="light"] .aviso-perigo { color: var(--vermelho-texto); }
+
+/* ===================== FORMULÁRIOS ============================== */
+html[data-theme="light"] .nexo-label .req { color: var(--primary-2); }
+html[data-theme="light"] .form-control,
+html[data-theme="light"] .form-select,
+html[data-theme="light"] .app-shell .form-control,
+html[data-theme="light"] .app-shell .form-select {
+  background-color: var(--surface);
+  border-color: var(--campo-borda);
+}
+html[data-theme="light"] .form-control:focus,
+html[data-theme="light"] .form-select:focus,
+html[data-theme="light"] .app-shell .form-control:focus,
+html[data-theme="light"] .app-shell .form-select:focus {
+  background-color: var(--surface);
+  border-color: var(--primary-2);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.28);
+}
+html[data-theme="light"] .form-control:disabled,
+html[data-theme="light"] .form-select:disabled { background-color: var(--surface-3); }
+html[data-theme="light"] .app-shell .form-check-input { background-color: var(--surface); border-color: var(--campo-borda); }
+html[data-theme="light"] .app-shell .form-check-input:checked { background-color: var(--primary-3); border-color: var(--primary-3); }
+html[data-theme="light"] .app-shell .form-check-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.28); }
+/* Caixa marcada e interruptor ligado: a borda quase não muda e o halo não chega a 3:1. */
+html[data-theme="light"] .app-shell .form-check-input:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+/* Interruptor desligado: um tom de 3:1 (o cinza do Bootstrap fica abaixo disso). */
+html[data-theme="light"] .app-shell .form-switch .form-check-input:not(:checked) {
+  --bs-form-switch-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%235f5a78'/%3e%3c/svg%3e");
+}
+html[data-theme="light"] .input-group-text { border-color: var(--campo-borda); }
+html[data-theme="light"] .check-inline input { accent-color: var(--primary-3); }
+
+/* ===================== DROPZONE / UPLOAD ======================== */
+html[data-theme="light"] .dropzone { border-color: var(--campo-borda); background: var(--surface-2); }
+html[data-theme="light"] .dropzone:hover,
+html[data-theme="light"] .dropzone.is-drag { border-color: var(--primary-2); background: var(--lilas-opaco); }
+html[data-theme="light"] .dropzone:has(input:focus-visible) { border-color: var(--primary-2); }
+html[data-theme="light"] .dropzone .dz-estado { color: var(--text-muted); }
+html[data-theme="light"] .dropzone .dz-erro { color: var(--vermelho-texto); }
+html[data-theme="light"] .dropzone.is-erro { border-color: var(--danger); }
+html[data-theme="light"] .dropzone.is-recebido { border-color: var(--success); }
+html[data-theme="light"] .dropzone.is-recebido .dz-icon { color: var(--verde-texto); }
+html[data-theme="light"] .dropzone.is-recebido .dz-estado { color: var(--verde-texto); }
+html[data-theme="light"] .dropzone.is-selecionado { background: var(--lilas-opaco); }
+html[data-theme="light"] .dropzone.is-selecionado .dz-estado { color: var(--roxo-texto); }
+html[data-theme="light"] .upload-slot.is-done { border-color: rgba(22, 163, 74, 0.45); }
+html[data-theme="light"] .upload-slot.is-error { border-color: rgba(220, 38, 38, 0.45); }
+
+/* ===================== ALERTAS / AVISOS ========================= */
+html[data-theme="light"] .alert { border-radius: var(--radius-sm); border: 1px solid var(--border); }
+html[data-theme="light"] .alert-success { background: #e8f6ee; border-color: rgba(22, 163, 74, 0.34); color: #14532d; }
+html[data-theme="light"] .alert-warning { background: #fff4de; border-color: rgba(217, 119, 6, 0.38); color: #78350f; }
+html[data-theme="light"] .alert-danger  { background: #fdecec; border-color: rgba(220, 38, 38, 0.32); color: #991b1b; }
+html[data-theme="light"] .alert-info    { background: #e6f3fa; border-color: rgba(2, 132, 199, 0.34); color: #0c4a6e; }
+html[data-theme="light"] .alert-secondary { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+html[data-theme="light"] .alert h2 { color: inherit; }
+
+html[data-theme="light"] .nota-pressao { border-color: rgba(217, 119, 6, 0.36); color: #78350f; }
+/* Variante verde (style= fixo em upload e detalhe do chamado). */
+html[data-theme="light"] .nota-pressao[style*="--success-bg"] { color: #14532d; border-color: rgba(22, 163, 74, 0.36) !important; }
+html[data-theme="light"] .nota-pressao[style*="--warning-bg"] { border-color: rgba(217, 119, 6, 0.4) !important; }
+
+html[data-theme="light"] .banner-suspensa { background: #fff4de; border-color: rgba(217, 119, 6, 0.42); }
+html[data-theme="light"] .banner-suspensa strong { color: #78350f; }
+
+html[data-theme="light"] .contact-card { background: var(--lilas-opaco); }
+html[data-theme="light"] .contact-card-icon { background: #e6dafc; color: var(--roxo-texto); }
+
+/* ===================== ATENDIMENTO ROADMAP ====================== */
+html[data-theme="light"] .roadmap-notice { border-color: rgba(124, 58, 237, 0.32); color: var(--roxo-forte); }
+html[data-theme="light"] .roadmap-tab:hover,
+html[data-theme="light"] .roadmap-tab.active { border-color: rgba(124, 58, 237, 0.42); color: var(--roxo-forte); background: var(--lilas-opaco); }
+
+/* ===================== RELATÓRIO ESTRATÉGICO ==================== */
+html[data-theme="light"] .relatorio-block .rb-body { color: var(--text); }
+html[data-theme="light"] .relatorio-block.is-conclusao .rb-body { background: var(--lilas-opaco); border-color: rgba(124, 58, 237, 0.3); color: var(--roxo-forte); }
+
+/* ===================== CHARTS =================================== */
+html[data-theme="light"] .chart-box .hoverlayer .hovertext path { filter: drop-shadow(0 8px 14px rgba(45, 27, 94, 0.22)); }
+
+/* ===================== EMPTY STATE ============================== */
+html[data-theme="light"] .empty-state .es-icon {
+  background: var(--lilas-opaco);
+  color: var(--primary-2);
+  box-shadow: 0 12px 24px -18px var(--primary-glow);
+}
+
+/* ===================== HELPERS ================================== */
+html[data-theme="light"] .text-purple { color: var(--primary-2) !important; }
+html[data-theme="light"] .text-green { color: var(--verde-texto) !important; }
+html[data-theme="light"] .text-amber { color: var(--ambar-texto) !important; }
+html[data-theme="light"] .text-red { color: var(--vermelho-texto) !important; }
+/* Utilitários do Bootstrap pensados para o fundo escuro dos modais. */
+html[data-theme="light"] .text-light { color: var(--text) !important; }
+html[data-theme="light"] .text-white-50 { color: var(--text-muted) !important; }
+html[data-theme="light"] .text-muted { color: var(--text-muted) !important; }
+html[data-theme="light"] .text-warning { color: var(--warning) !important; }
+html[data-theme="light"] .text-danger { color: var(--vermelho-texto) !important; }
+
+/* ===================== PAINEL: LEITURA E NAVEGAÇÃO =============== */
+html[data-theme="light"] .nexo-card-head.px-0 h2 > .bi:first-child { color: var(--primary-2); border-color: rgba(124, 58, 237, 0.3); }
+html[data-theme="light"] .nexo-card-head.px-0 .sub { color: var(--text-muted); text-shadow: none; }
+html[data-theme="light"] .app-shell .texto-solto { color: var(--text-muted); text-shadow: none; }
+
+/* Link "Pular para o conteúdo": no desktop cai sobre a sidebar escura e o fundo claro.
+   Anel duplo: o branco de fora aparece na sidebar; o roxo de dentro, no claro. */
+html[data-theme="light"] .skip-link:focus { outline-color: #ffffff; box-shadow: 0 0 0 4px var(--roxo-forte), var(--shadow-lg); }
+
+/* Modais */
+html[data-theme="light"] .nexo-modal .modal-content { background: var(--surface); border-color: var(--glass-border-2); }
+html[data-theme="light"] .nexo-modal.is-perigo .modal-content { border-color: rgba(220, 38, 38, 0.5); }
+html[data-theme="light"] .nexo-modal .btn-outline-light { border-color: var(--border-strong); color: var(--text); background: var(--surface); }
+html[data-theme="light"] .nexo-modal .btn-outline-light:hover { background: var(--lilas-opaco); border-color: var(--glass-border-2); color: var(--roxo-forte); }
+html[data-theme="light"] .nexo-modal .btn-danger { background: linear-gradient(135deg, #b91c1c 0%, #dc2626 100%); }
+html[data-theme="light"] .nexo-modal .text-muted { color: var(--text-muted) !important; }
+html[data-theme="light"] .nexo-modal .btn:focus-visible { outline-color: var(--primary-2); }
+/* O X branco do Bootstrap some sobre o claro. */
+html[data-theme="light"] .btn-close-white { filter: none; }
+html[data-theme="light"] .modal-backdrop { background-color: rgba(27, 22, 48, 0.5); }
+
+/* Foco nos itens do sino */
+html[data-theme="light"] .bell-item:focus-visible { outline-color: var(--primary-2); }
+html[data-theme="light"] .bell-foot .bell-mark:focus-visible { outline-color: var(--primary-2); }
+
+/* ===================================================================
+   CURVA ABC — badges de classe
+   =================================================================== */
+html[data-theme="light"] .abc-a { color: var(--verde-texto); border-color: rgba(22, 163, 74, 0.42); }
+html[data-theme="light"] .abc-b { color: var(--ambar-texto); border-color: rgba(217, 119, 6, 0.46); }
+html[data-theme="light"] .abc-c { background: rgba(79, 74, 102, 0.1); color: #3f3b52; border-color: rgba(79, 74, 102, 0.36); }
+html[data-theme="light"] .nota-abc { border-color: rgba(124, 58, 237, 0.3); color: var(--roxo-forte); }
+
+/* ===================================================================
+   SÍNTESE EXECUTIVA — cards-semáforo
+   =================================================================== */
+html[data-theme="light"] .semaforo-card .sc-val { color: var(--text); }
+html[data-theme="light"] .semaforo-card.s-critico .sc-dot { color: var(--vermelho-texto); }
+html[data-theme="light"] .semaforo-card.s-atencao .sc-dot { color: var(--ambar-texto); }
+html[data-theme="light"] .semaforo-card.s-oportunidade .sc-dot { color: var(--verde-texto); }
+
+/* ===================================================================
+   SININHO E BOTÃO DE TEMA (topbar)
+   =================================================================== */
+html[data-theme="light"] .bell-btn { background: var(--surface); border-color: var(--glass-border); color: var(--text); }
+html[data-theme="light"] .bell-btn:hover { background: var(--lilas-opaco); border-color: var(--glass-border-2); }
+html[data-theme="light"] .bell-btn[aria-expanded="true"] { border-color: var(--primary); color: var(--primary-2); }
+html[data-theme="light"] .bell-menu {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: 0 24px 48px -20px rgba(45, 27, 94, 0.38), 0 0 0 1px rgba(124, 58, 237, 0.06);
+}
+html[data-theme="light"] .bell-head { background: var(--surface-2); }
+html[data-theme="light"] .bell-mark { color: var(--primary-2); }
+html[data-theme="light"] .bell-mark:hover { color: var(--roxo-texto); }
+html[data-theme="light"] .bell-foot { background: var(--surface-2); }
+html[data-theme="light"] .bell-foot .bell-mark { background: var(--primary-soft); border-color: rgba(124, 58, 237, 0.3); color: var(--roxo-texto); }
+html[data-theme="light"] .bell-foot .bell-mark:hover { background: rgba(124, 58, 237, 0.18); color: var(--roxo-forte); }
+html[data-theme="light"] .bell-item.is-unread { background: rgba(124, 58, 237, 0.05); }
+html[data-theme="light"] .bell-item:hover,
+html[data-theme="light"] .bell-item:focus-visible { background: var(--lilas-opaco); }
+html[data-theme="light"] .nb-aberto { background: rgba(225, 29, 72, 0.1); color: #9f1239; border-color: rgba(225, 29, 72, 0.36); text-shadow: none; }
+html[data-theme="light"] .nb-resolvido { background: var(--success-bg); color: var(--verde-texto); border-color: rgba(22, 163, 74, 0.38); }
+html[data-theme="light"] .nb-analise { background: var(--primary-soft); color: var(--roxo-texto); border-color: rgba(124, 58, 237, 0.36); text-shadow: none; }
+
+/* ===================================================================
+   BADGES DE CATEGORIA DE TICKET + PILL DE CONTAGEM
+   =================================================================== */
+html[data-theme="light"] .cat-fin { color: var(--verde-texto); border-color: rgba(22, 163, 74, 0.34); }
+html[data-theme="light"] .cat-tec { color: var(--azul-texto); border-color: rgba(2, 132, 199, 0.34); }
+html[data-theme="light"] .cat-err { color: var(--vermelho-texto); border-color: rgba(220, 38, 38, 0.32); }
+html[data-theme="light"] .count-pill { color: var(--roxo-texto); border-color: rgba(124, 58, 237, 0.32); }
+
+/* ===================================================================
+   CHAT DE TICKETS
+   =================================================================== */
+html[data-theme="light"] .chat-msg.is-mine .chat-bubble { background: var(--lilas-opaco); border-color: rgba(124, 58, 237, 0.3); }
+html[data-theme="light"] .chat-bubble.b-admin .chat-author { color: var(--primary-2); }
+html[data-theme="light"] .chat-text { color: var(--text); }
+
+/* ===================================================================
+   TEMPO REAL — toasts
+   =================================================================== */
+html[data-theme="light"] .nexo-toast .nt-icon { color: var(--primary-2); }
+
+/* ===================================================================
+   BARRA DE AUDITORIA
+   =================================================================== */
+html[data-theme="light"] .audit-bar { border-color: var(--glass-border); border-left-color: var(--primary); }
+html[data-theme="light"] .audit-ico { color: var(--primary-2); }
+html[data-theme="light"] .audit-foot { background: var(--surface-2); }
+html[data-theme="light"] .audit-foot .bi-shield-check { color: var(--verde-texto); }
+
+/* ===================================================================
+   FILTRO DINÂMICO DA CURVA ABC (pílulas)
+   =================================================================== */
+html[data-theme="light"] .abc-pill:hover { color: var(--text); }
+html[data-theme="light"] .abc-pill.is-active { background: var(--lilas-opaco); border-color: rgba(124, 58, 237, 0.5); color: var(--roxo-forte); }
+html[data-theme="light"] .abc-pill-count { background: rgba(45, 27, 94, 0.08); }
+html[data-theme="light"] .abc-pill.is-active .abc-pill-count { background: rgba(124, 58, 237, 0.16); color: var(--roxo-forte); }
+html[data-theme="light"] .abc-dot.abc-a { background: #16a34a; }
+html[data-theme="light"] .abc-dot.abc-b { background: #d97706; }
+html[data-theme="light"] .abc-dot.abc-c { background: #6b6783; }
+
+/* ===================================================================
+   SELO "GERADO POR IA NEXO" na devolutiva
+   =================================================================== */
+html[data-theme="light"] .nexo-card.ia-doc { border-color: rgba(124, 58, 237, 0.32); }
+html[data-theme="light"] .ia-banner { background: var(--lilas-opaco); border-bottom-color: rgba(124, 58, 237, 0.26); color: var(--roxo-texto); }
+html[data-theme="light"] .ia-banner strong { color: var(--roxo-forte); }
+
+/* ===================================================================
+   GUIA / WIKI
+   =================================================================== */
+html[data-theme="light"] .guia-item.accordion-item { border-color: var(--glass-border); }
+html[data-theme="light"] .guia-item .accordion-button:not(.collapsed) { background: var(--lilas-opaco); color: var(--roxo-forte); }
+html[data-theme="light"] .guia-item .accordion-button:focus-visible { outline-color: var(--primary-2); }
+html[data-theme="light"] .guia-item .accordion-button::after { filter: none; }
+html[data-theme="light"] .guia-ico { color: var(--primary-2); border-color: rgba(124, 58, 237, 0.28); }
+html[data-theme="light"] .guia-passos { color: var(--text); }
+html[data-theme="light"] .guia-cta { background: var(--lilas-opaco); border-color: rgba(124, 58, 237, 0.28); }
+html[data-theme="light"] .guia-cta > div { color: var(--text); }
+html[data-theme="light"] .guia-resposta { color: var(--text); }
+
+/* ===================================================================
+   NEXOBOT
+   =================================================================== */
+html[data-theme="light"] .nexobot-launcher { box-shadow: 0 12px 28px -10px var(--primary-glow), 0 4px 12px rgba(45, 27, 94, 0.2); }
+html[data-theme="light"] .nexobot-launcher:hover { box-shadow: 0 16px 32px -12px var(--primary-glow), 0 6px 14px rgba(45, 27, 94, 0.24); }
+html[data-theme="light"] .nexobot-head { background: var(--lilas-opaco); }
+html[data-theme="light"] .nexobot-avatar { background: #e6dafc; color: var(--roxo-texto); border-color: rgba(124, 58, 237, 0.32); }
+html[data-theme="light"] .nexobot-close:hover { background: rgba(45, 27, 94, 0.07); }
+html[data-theme="light"] .nb-bubble { color: var(--text); }
+html[data-theme="light"] .nb-user .nb-bubble { background: #ece3fd; border-color: rgba(124, 58, 237, 0.34); color: #2e1065; }
+html[data-theme="light"] .nb-erro .nb-bubble { background: #fff4de; border-color: rgba(217, 119, 6, 0.42); color: #78350f; }
+html[data-theme="light"] .nb-rotulo { color: var(--primary-2); }
+html[data-theme="light"] .nb-passos li::before { color: var(--roxo-forte); border-color: rgba(124, 58, 237, 0.36); }
+html[data-theme="light"] .nb-secao { background: rgba(124, 58, 237, 0.06); }
+html[data-theme="light"] .nb-exemplo { background: rgba(124, 58, 237, 0.04); }
+html[data-theme="light"] .nb-exemplo .nb-rotulo { color: var(--ambar-texto); }
+html[data-theme="light"] .nb-aviso { background: #fff4de; border-color: rgba(217, 119, 6, 0.36); color: #78350f; }
+html[data-theme="light"] .nb-navigation,
+html[data-theme="light"] .nb-opcao { background: var(--lilas-opaco); color: var(--roxo-texto); }
+html[data-theme="light"] .nb-navigation:hover,
+html[data-theme="light"] .nb-opcao:hover { background: var(--grad-hover); color: #fff; border-color: transparent; }
+html[data-theme="light"] .nb-chips-inicial .nb-chip { background: var(--lilas-opaco); color: var(--roxo-texto); }
+/* Sugestão já usada: sem opacidade reduzida (ainda é clicável), o tom e o tracejado marcam o estado. */
+html[data-theme="light"] .nb-chip.is-usada { opacity: 1; background: transparent; border-style: dashed; color: var(--text-dim); }
+html[data-theme="light"] .nb-chip.is-usada:hover { background: var(--surface-hover); color: var(--text); }
+html[data-theme="light"] .nexobot-input { background: var(--surface); border-color: var(--campo-borda); }
+html[data-theme="light"] .nexobot-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.28); }
+@media (min-width: 640px) {
+  html[data-theme="light"] .nexobot-panel {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border-color: var(--border-strong);
+    box-shadow: 0 28px 60px -22px rgba(45, 27, 94, 0.45);
+  }
+}
+
+/* ===================================================================
+   GESTÃO CONTRATUAL
+   =================================================================== */
+html[data-theme="light"] .aviso-contrato { border-color: rgba(124, 58, 237, 0.32); color: var(--roxo-forte); }
+html[data-theme="light"] .aviso-contrato.is-alerta { border-color: rgba(217, 119, 6, 0.4); }
+html[data-theme="light"] .aviso-contrato.is-perigo { border-color: rgba(220, 38, 38, 0.36); }
+
+/* ---- style= fixos nos templates: seletor pelo próprio atributo ---- */
+html[data-theme="light"] .table-wrap[style*="rgba(56,189,248"] { border-color: rgba(2, 132, 199, 0.4) !important; }
+html[data-theme="light"] .nexo-card[style*="rgba(168,85,247"] { border-color: rgba(124, 58, 237, 0.4) !important; }

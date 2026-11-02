@@ -140,13 +140,17 @@ class GmailSMTPTests(_GmailBase):
                         MAIL_PASSWORD="PRIVATE_APP_PASSWORD", MAIL_DEFAULT_SENDER="")
         fora = self._executar(codigo, **ambiente)
         self.assertIn("BLOQUEANTE=False", fora.stdout)
-        self.assertIn("própria conta autenticada em MAIL_USERNAME", fora.stdout)
+        # O remetente é a própria conta autenticada: nada a conferir.
+        self.assertNotIn("própria conta autenticada em MAIL_USERNAME", fora.stdout)
+        outro = emails.diagnostico_configuracao(dict(MAIL_ATIVO=True, MAIL_USERNAME="conta.teste@gmail.com",
+                                                     MAIL_PASSWORD="x", MAIL_DEFAULT_SENDER="outra.conta@gmail.com"))
+        self.assertTrue(any("própria conta autenticada em MAIL_USERNAME" in p["texto"] for p in outro["pendencias"]))
         self.assertNotIn("PRIVATE_APP_PASSWORD", fora.stdout + fora.stderr)
         # O mesmo .env no Render Free: SMTP bloqueado vira pendência que impede o envio.
         render = self._executar(codigo, RENDER="true", RENDER_EXTERNAL_URL="https://nexo.example.invalid",
                                 **ambiente)
         self.assertIn("BLOQUEANTE=True", render.stdout)
-        self.assertIn("o Render Free bloqueia as portas SMTP", render.stdout)
+        self.assertIn("a hospedagem atual bloqueia as portas SMTP", render.stdout)
 
     def test_t05_gmail_na_587_usa_starttls_com_certificado_verificado(self):
         falso, instancias = self._smtp_falso()
@@ -642,12 +646,12 @@ class RevisaoRecuperacaoTests(_EmailCase):
             ("chave SMTP no lugar da de API", dict(BREVO_API_KEY="xsmtpsib-" + "synthetic-smtp-key")),
             ("URL da API sem https", dict(BREVO_API_KEY=CHAVE_API,
                                           BREVO_API_URL="http://api.brevo-test.example.invalid/v3/smtp/email")),
-            ("SMTP no Render Free", dict(BREVO_API_KEY=None, NEXO_RENDER=True, MAIL_USERNAME="c@example.invalid",
+            ("SMTP no Render Free", dict(BREVO_API_KEY=None, HOSPEDAGEM_BLOQUEIA_SMTP=True, MAIL_USERNAME="c@example.invalid",
                                          MAIL_PASSWORD="PRIVATE")),
         )
         for nome, config in casos:
             with self.subTest(nome):
-                self.app.config.update({"BREVO_API_KEY": None, "BREVO_API_URL": URL_BREVO, "NEXO_RENDER": False,
+                self.app.config.update({"BREVO_API_KEY": None, "BREVO_API_URL": URL_BREVO, "HOSPEDAGEM_BLOQUEIA_SMTP": False,
                                         "SMTP_PERMITIDO": False, **config})
                 with patch.object(emails.urllib.request, "urlopen") as http:
                     pagina = self._request_link("active@example.invalid").get_data(as_text=True)
@@ -657,13 +661,13 @@ class RevisaoRecuperacaoTests(_EmailCase):
                 self.assertNotIn("Se o e-mail estiver cadastrado", pagina)
                 self.assertEqual(self._ultimo("recuperacao_senha").categoria, "envio_bloqueado")
         # Remetente inválido também bloqueia (verificado antes de qualquer conta).
-        self.app.config.update(BREVO_API_KEY=CHAVE_API, NEXO_RENDER=False)
+        self.app.config.update(BREVO_API_KEY=CHAVE_API, HOSPEDAGEM_BLOQUEIA_SMTP=False)
         self.app.config["MAIL_DEFAULT_SENDER"] = "NEXO sem endereco"
         pagina = self._request_link("active@example.invalid").get_data(as_text=True)
         self.assertIn("No momento não é possível enviar o link de redefinição", pagina)
 
     def test_smtp_em_instancia_paga_do_render_com_nexo_smtp_permitido(self):
-        self.app.config.update(BREVO_API_KEY=None, NEXO_RENDER=True, SMTP_PERMITIDO=True,
+        self.app.config.update(BREVO_API_KEY=None, HOSPEDAGEM_BLOQUEIA_SMTP=True, SMTP_PERMITIDO=True,
                                MAIL_USERNAME="c@example.invalid", MAIL_PASSWORD="PRIVATE")
         pagina = self._request_link("active@example.invalid").get_data(as_text=True)
         self.assertIn("Se o e-mail estiver cadastrado, enviaremos um link", pagina)
@@ -704,7 +708,7 @@ class RevisaoDiagnosticoTests(unittest.TestCase):
         self.assertIn("não são usadas", " ".join(p["texto"] for p in explicito["pendencias"]))
 
     def test_smtp_no_render_so_deixa_de_bloquear_com_nexo_smtp_permitido(self):
-        smtp = dict(self.BASE, BREVO_API_KEY=None, MAIL_DEFAULT_SENDER="conta.teste@gmail.com", NEXO_RENDER=True)
+        smtp = dict(self.BASE, BREVO_API_KEY=None, MAIL_DEFAULT_SENDER="conta.teste@gmail.com", HOSPEDAGEM_BLOQUEIA_SMTP=True)
         self.assertTrue(emails.diagnostico_configuracao(smtp)["bloqueante"])
         self.assertFalse(emails.envio_disponivel(smtp))
         liberado = dict(smtp, SMTP_PERMITIDO=True)

@@ -144,7 +144,7 @@ class LandingCommercialHTTPTests(DeployTestCase):
         self.assertNotIn("suporte@nexofaturamento.com.br", dom.text)
         self.assertNotIn("5511999999999", dom.text)
         self.assertNotRegex(dom.text, r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b")
-        self.assertIn("ainda não foram publicados", dom.text)
+        self.assertIn("ainda não estão disponíveis nesta página", dom.text)
         self.assertFalse(any(token in link.casefold() for link in links for token in ("privacidade", "termos", "cancelamento")))
 
     def test_empty_reviews_have_no_fictitious_customer_or_testimonial(self):

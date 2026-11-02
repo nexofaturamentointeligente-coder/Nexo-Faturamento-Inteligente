@@ -31,10 +31,12 @@ logger = logging.getLogger("nexobot")
 
 _NAO_PAGINAS = (
     (re.compile(r"\bnotificac"), "As notificações ficam no sininho, no topo da página."),
-    (re.compile(r"\bsenhas?\b"), "Para trocar a senha, use “Esqueci minha senha” na tela de login."),
+    (re.compile(r"\bsenhas?\b"), "Para trocar a senha, use Configurações, no menu lateral. Se não lembra a senha, "
+                                 "use “Esqueci minha senha” na tela de login."),
     (re.compile(r"\b(?:sair|logout|deslog\w*)\b"), "Para sair, use “Sair” no fim do menu lateral."),
-    (re.compile(r"\b(?:perfil|cadastro|configurac\w*|minha conta|meus dados cadastrais)\b"),
-     "O portal do cliente não tem página de perfil; para alterar dados cadastrais, abra um chamado em Suporte."),
+    (re.compile(r"\b(?:perfil|cadastro|minha conta|meus dados cadastrais)\b"),
+     "Nome, telefone e e-mail de acesso ficam em Configurações; para os demais dados cadastrais, abra um "
+     "chamado em Suporte."),
 )
 _SEM_CALCULO = re.compile(r"\b(?:lucro|lucrei|margem|margens|cmv|rentabilidade|prejuizo)\b")
 
@@ -318,6 +320,10 @@ class _Decisao:
         A página nomeada pelo usuário (`destino_forte`) prevalece sobre a página do
         registro; uma página apenas inferida (`destino_fraco`) só entra na falta das duas.
         """
+        # Pedido de mudar o que a própria pessoa altera: o caminho é Configurações, não o chamado nem a senha.
+        if (registro.id in ("nexo.empresas.alterar_cadastro", "nexo.acesso.recuperar_senha")
+                and respostas.pede_alterar_a_conta(self.texto.canonico)):
+            registro = saber.POR_ID["nexo.acesso.configuracoes"]
         nivel = nivel or nivel_pedido(self.texto.canonico, registro)
         montagem = respostas.conhecimento(registro, nivel, ja_mostrado, modo)
         if lead:
@@ -338,6 +344,9 @@ class _Decisao:
         if self.intencao == Intencao.DESCONHECIDA:
             self.intencao = Intencao.DUVIDA_FUNCIONAL
         destino = destino_forte or registro.destino or destino_fraco
+        if registro.id == "nexo.acesso.configuracoes":
+            # O que este registro descreve acontece em Configurações, mesmo se a pergunta citar chamados.
+            destino = registro.destino
         return self._sugerir(montagem, destino, assunto=registro.id, nivel=mostrado)
 
     def _sobre_o_nexo(self):

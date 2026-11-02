@@ -1,8 +1,23 @@
 <!DOCTYPE html>
-<html lang="pt-BR" data-bs-theme="dark">
+<html lang="pt-BR" data-bs-theme="dark" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Tema do portal (localStorage.theme = dark | light): só com sessão. A tela de login
+       e demais páginas públicas continuam sempre escuras. Roda antes das folhas de
+       estilo e da primeira pintura; armazenamento bloqueado ou valor inválido: escuro. #}
+    {% if current_user.is_authenticated %}
+    <script nonce="{{ csp_nonce }}">
+      (function () {
+        var tema = null;
+        try { tema = window.localStorage.getItem('theme'); } catch (erro) { /* bloqueado: fica no escuro */ }
+        if (tema === 'light' || tema === 'dark') {
+          document.documentElement.setAttribute('data-theme', tema);
+          document.documentElement.setAttribute('data-bs-theme', tema);
+        }
+      })();
+    </script>
+    {% endif %}
     {# Token CSRF exposto para chamadas fetch/AJAX (enviado no header X-CSRFToken). #}
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}NEXO — Faturamento Inteligente{% endblock %}</title>
@@ -18,6 +33,23 @@
 
     <!-- Design system interno NEXO -->
     <link href="{{ url_for('static', filename='css/nexo.css') }}" rel="stylesheet">
+    {% if current_user.is_authenticated %}
+    {# Tema claro: só atua com <html data-theme="light"> (ver o script do início do <head>). #}
+    <link href="{{ url_for('static', filename='css/nexo-tema-claro.css') }}" rel="stylesheet">
+    {# Abaixo de 390 px o avatar da topbar (sem ação; o usuário também aparece na gaveta do
+       menu) cede lugar ao botão de tema, para o título da página não ser cortado. Vale nos
+       dois temas, por isso não fica na folha clara.
+       No desktop o botão também toma largura do título: um nome muito longo é que cede, e
+       só quando o maior título do portal não caberia. 810 px = o resto da topbar (538), a
+       barra de rolagem (até 17) e esse título (cerca de 255 na Inter). A folga de 2 px
+       (padding e margem negativa) impede o corte de tirar as descendentes do nome que cabe;
+       o nome inteiro fica no title, porque a sidebar também o corta. #}
+    <style>
+      @media (max-width: 389.98px) { .topbar-right .user-chip { display: none; } }
+      .user-meta { max-width: calc(100vw - 810px); }
+      .user-meta strong { margin: 0 -2px -2px; padding: 0 2px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
+    {% endif %}
 
     {% block extra_head %}{% endblock %}
     {% block extra_css %}{% endblock %}
@@ -75,6 +107,9 @@
             <a class="nav-item {{ 'active' if request.endpoint in ['admin.tickets', 'admin.ticket_detalhe'] }}" href="{{ url_for('admin.tickets') }}">
                 <i class="bi bi-life-preserver"></i> Suporte
             </a>
+            <a class="nav-item {{ 'active' if request.endpoint in ['admin.configuracoes', 'admin.configuracoes_documento'] }}" href="{{ url_for('admin.configuracoes') }}">
+                <i class="bi bi-gear"></i> Configurações
+            </a>
             {# A Base de Conhecimento (CMS do Guia) saiu do menu administrativo em 28/10/2026
                por decisão do proprietário; o conteúdo do Guia do cliente e do NexoBot
                continua existindo e sendo servido normalmente. #}
@@ -94,6 +129,9 @@
             </a>
             <a class="nav-item {{ 'active' if request.endpoint in ['cliente.tickets', 'cliente.ticket_detalhe'] }}" href="{{ url_for('cliente.tickets') }}">
                 <i class="bi bi-life-preserver"></i> Suporte
+            </a>
+            <a class="nav-item {{ 'active' if request.endpoint == 'cliente.configuracoes' }}" href="{{ url_for('cliente.configuracoes') }}">
+                <i class="bi bi-gear"></i> Configurações
             </a>
             {% endif %}
         </nav>
@@ -126,6 +164,81 @@
             </button>
             <div class="topbar-title"><small>{{ 'Administração' if current_user.is_admin else 'Minha empresa' }}</small>{% block page_title %}NEXO{% endblock %}</div>
             <div class="topbar-right">
+                {# ---------------- Tema claro/escuro ---------------- #}
+                <button type="button" id="themeToggle" class="bell-btn theme-toggle" aria-label="Ativar tema claro" title="Ativar tema claro">
+                    <i class="bi bi-sun" aria-hidden="true"></i>
+                </button>
+                <script nonce="{{ csp_nonce }}">
+                  /* Logo depois do botão: o ícone e o rótulo já saem certos na primeira pintura.
+                     O tema vale entre páginas (script do <head>) e entre abas (evento storage).
+                     O Plotly desenha com as cores calculadas na chamada: com gráfico na página,
+                     a troca recarrega; sem gráfico, é instantânea. */
+                  (function () {
+                    var raiz = document.documentElement;
+                    var botao = document.getElementById('themeToggle');
+                    var icone = botao.querySelector('i');
+                    function temaAtual() { return raiz.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+                    function temaSalvo() {
+                      try { return window.localStorage.getItem('theme'); } catch (erro) { return null; }
+                    }
+                    function refletir() {
+                      var claro = temaAtual() === 'light';
+                      var rotulo = claro ? 'Ativar tema escuro' : 'Ativar tema claro';
+                      botao.setAttribute('aria-label', rotulo);
+                      botao.setAttribute('title', rotulo);
+                      icone.className = 'bi ' + (claro ? 'bi-moon' : 'bi-sun');
+                    }
+                    function aplicar(tema, gravado) {
+                      var graficos = document.querySelectorAll('.js-plotly-plot');
+                      if (graficos.length && gravado) { window.location.reload(); return; }
+                      raiz.setAttribute('data-theme', tema);
+                      raiz.setAttribute('data-bs-theme', tema);
+                      refletir();
+                      /* Página ainda carregando (CDN lenta), nada desenhado: os gráficos que vierem
+                         já saem na paleta do tema novo, sem recarregar. */
+                      if (!graficos.length) {
+                        if (window.NEXO && NEXO.definirPaleta) NEXO.definirPaleta(tema);
+                        return;
+                      }
+                      /* Sem armazenamento a recarga perderia a escolha: a página alterna sem
+                         recarregar e os gráficos ficam com a paleta em que foram desenhados, sobre
+                         um fundo dessa paleta, para continuarem legíveis. */
+                      graficos.forEach(function (grafico) {
+                        var diferente = tema !== NEXO.tema;
+                        grafico.style.backgroundColor = diferente ? (NEXO.tema === 'dark' ? '#140f27' : '#ffffff') : '';
+                        grafico.style.borderRadius = diferente ? '12px' : '';
+                      });
+                    }
+                    botao.addEventListener('click', function () {
+                      var novo = temaAtual() === 'light' ? 'dark' : 'light';
+                      var gravado = true;
+                      try { window.localStorage.setItem('theme', novo); } catch (erro) { gravado = false; }
+                      /* Pelo teclado, o foco volta ao botão depois da recarga. */
+                      try {
+                        if (gravado && botao.matches(':focus-visible') && document.querySelector('.js-plotly-plot')) window.sessionStorage.setItem('themeFoco', '1');
+                      } catch (erro) { /* sem foco de volta */ }
+                      aplicar(novo, gravado);
+                    });
+                    /* Outra aba trocou o tema (evento só dispara com armazenamento disponível). */
+                    window.addEventListener('storage', function (evento) {
+                      if (evento.key !== 'theme' && evento.key !== null) return;
+                      var novo = (evento.key === 'theme' && evento.newValue === 'light') ? 'light' : 'dark';
+                      if (novo !== temaAtual()) aplicar(novo, true);
+                    });
+                    /* Página restaurada do cache de navegação (voltar/avançar). */
+                    window.addEventListener('pageshow', function (evento) {
+                      var salvo = temaSalvo();
+                      if (evento.persisted && (salvo === 'light' || salvo === 'dark') && salvo !== temaAtual()) aplicar(salvo, true);
+                    });
+                    refletir();
+                    try {
+                      if (window.sessionStorage.getItem('themeFoco')) {
+                        window.sessionStorage.removeItem('themeFoco');
+                        botao.focus({ preventScroll: true });
+                      }
+                    } catch (erro) { /* bloqueado: segue sem restaurar o foco */ }
+                  })();
+                </script>
                 {# ---------------- Sininho de notificações ---------------- #}
                 <div class="dropdown nexo-bell">
                     {% set _c = notif_nao_lidas or 0 %}
@@ -167,7 +280,7 @@
                 <div class="user-chip">
                     <span class="user-avatar">{{ (current_user.nome or '?')[:1]|upper }}</span>
                     <div class="user-meta">
-                        <strong>{{ current_user.nome }}</strong>
+                        <strong title="{{ current_user.nome }}">{{ current_user.nome }}</strong>
                         <small>{{ 'Administrador' if current_user.is_admin else 'Cliente' }}</small>
                     </div>
                 </div>
@@ -216,18 +329,37 @@
 
     <!-- Bootstrap bundle (Popper incluso). SEC-009: SRI em todo script de CDN. -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    <!-- Plotly.js (gráficos em tema escuro) -->
+    <!-- Plotly.js (gráficos na paleta do tema: NEXO.colors) -->
     <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" integrity="sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7" crossorigin="anonymous"></script>
 
     <script nonce="{{ csp_nonce }}">
       /* ---- Confirmação de formulários (sem manipuladores inline: CSP, SEC-010) ----
-         <form data-confirm="Pergunta?"> pede confirmação antes de enviar. */
+         <form data-confirm="Pergunta?"> pede confirmação antes de enviar.
+         <form data-envio-unico> ignora novo envio enquanto o primeiro está em curso; libera depois
+         de um prazo (a rede pode ter caído) ou quando o navegador devolve a página pelo Voltar. */
       document.addEventListener('submit', function (evento) {
         var formulario = evento.target;
-        if (formulario && formulario.dataset && formulario.dataset.confirm && !window.confirm(formulario.dataset.confirm)) {
+        if (!formulario || !formulario.dataset) return;
+        var unico = formulario.dataset.envioUnico !== undefined;
+        if (unico && formulario.dataset.enviado) {
           evento.preventDefault();
+          return;
+        }
+        if (formulario.dataset.confirm && !window.confirm(formulario.dataset.confirm)) {
+          evento.preventDefault();
+          return;
+        }
+        if (unico) {
+          formulario.dataset.enviado = '1';
+          window.setTimeout(function () { delete formulario.dataset.enviado; }, 10000);
         }
       }, true);
+      window.addEventListener('pageshow', function (evento) {
+        if (!evento.persisted) return;
+        document.querySelectorAll('form[data-enviado]').forEach(function (formulario) {
+          delete formulario.dataset.enviado;
+        });
+      });
 
       /* ---- Toggle da sidebar no mobile ---- */
       (function () {
@@ -489,23 +621,61 @@
         });
       })();
 
-      /* ---- Helper de Plotly em tema escuro NEXO ----
+      /* ---- Helper de Plotly na paleta do tema NEXO ----
          Uso nos templates:
            NEXO.plot('idDoDiv', [ {type:'bar', x:[...], y:[...]} ], { yaxis:{...} });
          Verifica se o elemento e a lib existem antes de desenhar. */
       window.NEXO = window.NEXO || {};
       /* Respeita "reduzir movimento" do sistema nas animações dos gráficos. */
       NEXO.reduzMovimento = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-      NEXO.colors = {
-        purple: '#a855f7', purpleSoft: '#7c3aed', lilac: '#c4a0fb', green: '#22c55e',
-        amber: '#f59e0b', red: '#ef4444', info: '#38bdf8',
-        grid: 'rgba(255,255,255,0.07)', axis: 'rgba(255,255,255,0.12)',
-        text: '#aaa6c8', textStrong: '#ece9f8', tooltip: 'rgba(17,13,32,0.96)'
+      /* Paleta dos gráficos conforme o tema lido no carregamento. O botão de tema recarrega
+         a página que já tem gráfico; antes do primeiro desenho ele só chama esta função.
+         Texto e contorno em chaves próprias: no claro, o âmbar de texto e o contorno de
+         marcador são outros tons. */
+      NEXO.definirPaleta = function (tema) {
+        NEXO.tema = tema === 'light' ? 'light' : 'dark';
+        NEXO.colors = NEXO.tema === 'light' ? {
+          purple: '#7c3aed', purpleSoft: '#6d28d9', lilac: '#6d28d9', green: '#16a34a',
+          amber: '#d97706', red: '#dc2626', info: '#0284c7',
+          grid: 'rgba(45,27,94,0.10)', axis: 'rgba(45,27,94,0.30)',
+          text: '#4f4a66', textStrong: '#1b1630', textMax: '#1b1630', tooltip: 'rgba(255,255,255,0.98)',
+          tooltipBorder: 'rgba(109,40,217,0.45)', spike: 'rgba(109,40,217,0.55)', neutral: '#4f4a66',
+          amberText: '#92400e', amberLine: '#d97706', amberGuide: 'rgba(180,83,9,0.55)', amberSoft: '#92400e',
+          greenText: '#15803d', markerLine: 'rgba(255,255,255,0.95)', sliceLine: 'rgba(255,255,255,0.95)',
+          barEdge: 'rgba(27,22,48,0.28)', barEdgeStrong: 'rgba(27,22,48,0.32)',
+          barAmber: 'rgba(217,119,6,0.9)', barInfo: 'rgba(2,132,199,0.9)',
+          barPurple: 'rgba(124,58,237,0.9)', barGreen: 'rgba(22,163,74,0.9)',
+          infoFade: 'rgba(2,132,199,0)', infoFill: 'rgba(2,132,199,0.16)',
+          abcA: 'rgba(124,58,237,0.92)', abcB: 'rgba(124,58,237,0.62)', abcC: 'rgba(124,58,237,0.36)',
+          abcEdge: 'rgba(91,33,182,0.7)',
+          planBronze: 'rgba(180,83,9,0.85)', planPrata: 'rgba(100,116,139,0.85)', planOuro: 'rgba(202,138,4,0.85)'
+        } : {
+          purple: '#a855f7', purpleSoft: '#7c3aed', lilac: '#c4a0fb', green: '#22c55e',
+          amber: '#f59e0b', red: '#ef4444', info: '#38bdf8',
+          grid: 'rgba(255,255,255,0.07)', axis: 'rgba(255,255,255,0.12)',
+          text: '#aaa6c8', textStrong: '#ece9f8', textMax: '#ffffff', tooltip: 'rgba(17,13,32,0.96)',
+          tooltipBorder: 'rgba(196,160,251,0.55)', spike: 'rgba(196,160,251,0.6)', neutral: '#9aa0b7',
+          amberText: '#fbbf24', amberLine: '#fbbf24', amberGuide: 'rgba(251, 191, 36, 0.45)', amberSoft: '#fbd07a',
+          greenText: '#22c55e', markerLine: 'rgba(17,13,32,0.95)', sliceLine: 'rgba(17,13,32,0.92)',
+          barEdge: 'rgba(255,255,255,0.22)', barEdgeStrong: 'rgba(255,255,255,0.28)',
+          barAmber: 'rgba(245,158,11,0.9)', barInfo: 'rgba(56,189,248,0.9)',
+          barPurple: 'rgba(168,85,247,0.9)', barGreen: 'rgba(34,197,94,0.9)',
+          infoFade: 'rgba(56,189,248,0)', infoFill: 'rgba(56,189,248,0.24)',
+          abcA: 'rgba(168, 85, 247, 0.92)', abcB: 'rgba(168, 85, 247, 0.6)', abcC: 'rgba(168, 85, 247, 0.34)',
+          abcEdge: 'rgba(216, 194, 253, 0.55)',
+          planBronze: 'rgba(224,168,120,0.92)', planPrata: 'rgba(203,213,225,0.92)', planOuro: 'rgba(245,215,110,0.92)'
+        };
+        /* Cores oficiais da Curva ABC (consistentes com os badges do CSS). */
+        NEXO.abcColor = { A: NEXO.colors.green, B: NEXO.colors.amber, C: NEXO.colors.neutral };
+        /* Linha-guia do hover unificado: fina, pontilhada e lilás. Espessura
+           negativa elimina o contorno branco (espessura + 2) que o Plotly desenha. */
+        NEXO.spike = { spikecolor: NEXO.colors.spike, spikethickness: -2, spikedash: 'dot' };
       };
+      NEXO.definirPaleta(document.documentElement.getAttribute('data-theme'));
       /* Fonte única do tema dos gráficos: grade pontilhada suave, eixos limpos,
-         barras com cantos arredondados, tooltip escura com borda lilás e legenda
-         horizontal. Os eixos e a tooltip de cada gráfico se fundem ao tema (não o
-         substituem), então os ajustes locais continuam valendo. */
+         barras com cantos arredondados, tooltip na superfície do tema com borda lilás
+         e legenda horizontal. Os eixos e a tooltip de cada gráfico se fundem ao tema
+         (não o substituem), então os ajustes locais continuam valendo. */
       NEXO.plotlyLayout = function (extra) {
         var c = NEXO.colors;
         var eixo = {
@@ -528,7 +698,7 @@
           showlegend: false,
           legend: { orientation: 'h', x: 0, y: 1.14, bgcolor: 'rgba(0,0,0,0)', font: { color: c.textStrong, size: 11.5 } },
           hoverlabel: {
-            bgcolor: c.tooltip, bordercolor: 'rgba(196,160,251,0.55)', align: 'left',
+            bgcolor: c.tooltip, bordercolor: c.tooltipBorder, align: 'left',
             font: { family: 'Inter, system-ui, sans-serif', color: c.textStrong, size: 12.5 }
           }
         };
@@ -589,12 +759,6 @@
           showTips: false
         });
       };
-
-      /* Cores oficiais da Curva ABC (consistentes com os badges do CSS). */
-      NEXO.abcColor = { A: '#22c55e', B: '#f59e0b', C: '#9aa0b7' };
-      /* Linha-guia do hover unificado: fina, pontilhada e lilás. Espessura
-         negativa elimina o contorno branco (espessura + 2) que o Plotly desenha. */
-      NEXO.spike = { spikecolor: 'rgba(196,160,251,0.6)', spikethickness: -2, spikedash: 'dot' };
 
       /* ---- Utilidades de apresentação ---- */
       NEXO.fmtBRL = function (v) {
@@ -694,7 +858,7 @@
             el._nexoObservador = true;
           }
         }
-        var tom = { A: 'rgba(168, 85, 247, 0.92)', B: 'rgba(168, 85, 247, 0.6)', C: 'rgba(168, 85, 247, 0.34)' };
+        var tom = { A: NEXO.colors.abcA, B: NEXO.colors.abcB, C: NEXO.colors.abcC };
         var cores = classes.length ? classes.map(function (c) { return tom[c] || tom.A; }) : tom.A;
         var custom = labels.map(function (t, i) { return [t, classes[i] || '', Number(acum[i] || 0)]; });
         /* Até três linhas por nome (até 18 caracteres por linha no celular, 26 no
@@ -721,7 +885,7 @@
         var barras = {
           type: 'bar', orientation: 'h', name: 'Faturamento',
           x: values, y: pos, customdata: custom,
-          marker: { color: cores, line: { color: 'rgba(216, 194, 253, 0.55)', width: 1 } },
+          marker: { color: cores, line: { color: NEXO.colors.abcEdge, width: 1 } },
           hovertemplate: hoverBarra
         };
         /* Eixo do faturamento com marcas redondas e compactas ("R$ 25 mil"), em
@@ -750,7 +914,7 @@
              linha do computador), não fora da barra: sobra largura para o nome e
              para o eixo em vez de uma margem direita de 84 px. */
           layout.yaxis.ticktext = nomes.map(function (nome, i) {
-            return nome + '<br><span style="color:#fbbf24">' +
+            return nome + '<br><span style="color:' + NEXO.colors.amberText + '">' +
                    Number(acum[i] || 0).toFixed(1).replace('.', ',') + '% acum.</span>';
           });
           /* Área útil de 100 a 200 px: só duas ou três marcas (o topo é a última),
@@ -772,8 +936,8 @@
           {
             type: 'scatter', mode: 'lines+markers', name: '% acumulado',
             x: acum, y: pos, xaxis: 'x2',
-            line: { color: '#fbbf24', width: 2.5, shape: 'spline', smoothing: 0.6 },
-            marker: { color: '#fbbf24', size: 7, line: { color: 'rgba(17,13,32,0.95)', width: 2 } },
+            line: { color: NEXO.colors.amberLine, width: 2.5, shape: 'spline', smoothing: 0.6 },
+            marker: { color: NEXO.colors.amberLine, size: 7, line: { color: NEXO.colors.markerLine, width: 2 } },
             hovertemplate: '% acumulado: <b>%{x:.1f}%</b><extra></extra>'
           }
         ], Object.assign(layout, {
@@ -784,12 +948,12 @@
           /* Referência de 80% (fronteira da classe A) no eixo do acumulado. */
           shapes: [{
             type: 'line', xref: 'x2', x0: 80, x1: 80, yref: 'paper', y0: 0, y1: 1,
-            line: { color: 'rgba(251, 191, 36, 0.45)', width: 1, dash: 'dot' }
+            line: { color: NEXO.colors.amberGuide, width: 1, dash: 'dot' }
           }],
           xaxis2: {
             overlaying: 'x', side: 'top', range: [0, 100], ticksuffix: '%', dtick: 20,
             showgrid: false, zeroline: false, showline: false, fixedrange: true,
-            tickfont: { color: '#fbbf24', size: 10.5 }
+            tickfont: { color: NEXO.colors.amberText, size: 10.5 }
           }
         }));
       };
@@ -833,18 +997,18 @@
           {
             type: 'scatter', mode: 'lines+markers', name: 'Vendas',
             x: data.labels, y: data.vendas,
-            line: { color: '#38bdf8', width: 2.5, shape: 'spline', smoothing: 0.7 },
-            marker: { size: 7, color: '#38bdf8', line: { color: 'rgba(17,13,32,0.95)', width: 2 } },
+            line: { color: NEXO.colors.info, width: 2.5, shape: 'spline', smoothing: 0.7 },
+            marker: { size: 7, color: NEXO.colors.info, line: { color: NEXO.colors.markerLine, width: 2 } },
             fill: 'tozeroy',
-            fillgradient: { type: 'vertical', colorscale: [[0, 'rgba(56,189,248,0)'], [1, 'rgba(56,189,248,0.24)']] },
+            fillgradient: { type: 'vertical', colorscale: [[0, NEXO.colors.infoFade], [1, NEXO.colors.infoFill]] },
             hovertemplate: '<b>Vendas</b>: R$ %{y:,.2f}<extra></extra>'
           },
           {
             type: 'scatter', mode: 'lines+markers', name: 'Compras',
             x: data.labels, y: data.compras,
-            line: { color: '#f59e0b', width: 2.5, shape: 'spline', smoothing: 0.7 },
+            line: { color: NEXO.colors.amber, width: 2.5, shape: 'spline', smoothing: 0.7 },
             /* Losango: distingue Compras de Vendas também sem depender da cor. */
-            marker: { size: 8, symbol: 'diamond', color: '#f59e0b', line: { color: 'rgba(17,13,32,0.95)', width: 2 } },
+            marker: { size: 8, symbol: 'diamond', color: NEXO.colors.amber, line: { color: NEXO.colors.markerLine, width: 2 } },
             hovertemplate: '<b>Compras</b>: R$ %{y:,.2f}<extra></extra>'
           }
         ], {

@@ -1,22 +1,26 @@
 import logging
 import hashlib
 import hmac
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, session, current_app, has_request_context, make_response
+from werkzeug.exceptions import HTTPException
+from werkzeug.routing import RequestRedirect
 from flask_login import login_user, logout_user, login_required, current_user
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadData
 from sqlalchemy import and_, or_, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from extensions import chave_limite_conta, db, limiter
+from extensions import chave_limite_conta, chave_limite_usuario, db, limiter
 from models import Empresa, Usuario
-from contas_email import buscar_usuario_por_email
+from contas_email import buscar_usuario_por_email, email_em_uso, email_valido, normalizar_email
 from emails import (
-    email_boas_vindas, email_recuperacao_senha, email_senha_alterada, envio_disponivel,
+    email_boas_vindas, email_email_alterado, email_recuperacao_senha, email_senha_alterada, envio_disponivel,
     registrar_envio_suprimido,
 )
 from contract_policy import obter_situacao_contratual
@@ -33,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 # Criação do Blueprint de Autenticação
 auth_bp = Blueprint("auth", __name__)
+
+# Reautenticação nas Configurações: por usuário e somando as rotas (senha errada
+# também conta), para um cookie sequestrado não testar senhas em série alternando
+# entre a troca de senha e a de e-mail.
+limite_reautenticacao = limiter.shared_limit("10 per 15 minutes", scope="reautenticacao-configuracoes",
+                                             key_func=chave_limite_usuario)
 
 
 def _destino_seguro(alvo: str) -> bool:
@@ -52,6 +62,18 @@ def _destino_seguro(alvo: str) -> bool:
         and not alvo.startswith("//")
         and not alvo.startswith("/\\")
     )
+
+def _destino_abre_por_get(alvo: str) -> bool:
+    """O login volta ao destino com GET. Uma ação só POST (sessão expirada no meio de
+    um envio de formulário) viraria a página de "método não permitido"."""
+    try:
+        current_app.url_map.bind("").match(urlparse(alvo).path, method="GET")
+    except RequestRedirect:
+        return True
+    except HTTPException:
+        return False
+    return True
+
 
 # --- Tokens de senha v2: finalidade, credencial e consumo atômico ---
 _ATIVACAO = "activation"
@@ -177,6 +199,17 @@ def _ler_token_ativacao(token: str):
     return _ler_token_senha(token, _ATIVACAO)
 
 
+def _conta_segue_acessivel():
+    """Condição dos CAS de credencial: ADMIN sem empresa ou CLIENTE de empresa acessível."""
+    return or_(
+        and_(Usuario.role == "ADMIN", Usuario.id_empresa.is_(None)),
+        and_(Usuario.role == "CLIENTE", select(Empresa.id_empresa).where(
+            Empresa.id_empresa == Usuario.id_empresa,
+            *condicoes_empresa_acessivel(),
+        ).exists()),
+    )
+
+
 def _atualizar_credencial(estado: _CredencialEsperada, nova_senha: str, *, renovar_sessao=False) -> bool:
     """CAS transacional: só uma requisição substitui a credencial esperada.
 
@@ -191,13 +224,7 @@ def _atualizar_credencial(estado: _CredencialEsperada, nova_senha: str, *, renov
         Usuario.geracao_autorizacao == estado.geracao_autorizacao,
         Usuario.id_empresa == estado.id_empresa,
         Usuario.ativo.is_(True),
-        or_(
-            and_(Usuario.role == "ADMIN", Usuario.id_empresa.is_(None)),
-            and_(Usuario.role == "CLIENTE", select(Empresa.id_empresa).where(
-                Empresa.id_empresa == Usuario.id_empresa,
-                *condicoes_empresa_acessivel(),
-            ).exists()),
-        ),
+        _conta_segue_acessivel(),
         Usuario.role == estado.role,
         Usuario.primeiro_acesso.is_(estado.primeiro_acesso),
     ).values(
@@ -280,15 +307,185 @@ def _conta_encerrada(usuario) -> bool:
         return False
 
 
-def _validar_nova_senha(nova: str, confirma: str, estado: _CredencialEsperada | None = None):
+def _validar_nova_senha(nova: str, confirma: str, estado: _CredencialEsperada | None = None, **regras):
     """Política de senha (politica_senha.py) aplicada à credencial que será
     substituída: a senha não pode conter o e-mail/nome nem repetir a atual."""
     usuario = estado.usuario if estado is not None else None
     return validar_nova_senha(
         nova, confirma,
         email=getattr(usuario, "email", None), nome=getattr(usuario, "nome", None),
-        hash_atual=estado.senha_hash if estado is not None else None,
+        hash_atual=estado.senha_hash if estado is not None else None, **regras,
     )
+
+
+def _senha_atual_confere(estado: _CredencialEsperada, senha) -> bool:
+    # Sem teto, um formulário de 20 MB viraria trabalho de hash a cada tentativa.
+    return isinstance(senha, str) and len(senha) <= 1024 and check_password_hash(estado.senha_hash, senha)
+
+
+def trocar_senha_autenticada(usuario: Usuario, senha_atual, nova, confirmacao) -> str | None:
+    """Troca feita pelo próprio dono, logado. Devolve a mensagem de erro ou None.
+
+    A senha atual reautentica (um cookie sozinho não troca a credencial) e o CAS de
+    _atualizar_credencial derruba as demais sessões e renova esta na mesma transação.
+    """
+    estado = _estado_credencial(usuario)
+    if not _senha_atual_confere(estado, senha_atual):
+        return "A senha atual está incorreta."
+    erro = _validar_nova_senha(nova or "", confirmacao or "", estado, exigir_letras_e_numeros=True)
+    if erro:
+        return erro
+    if not _atualizar_credencial(estado, nova, renovar_sessao=True):
+        return "Não foi possível alterar a senha. Atualize a página e tente novamente."
+    logger.info("Senha alterada nas Configurações | usuario=%s", estado.id_usuario)
+    # Senha já trocada: falha no aviso nunca vira erro da operação.
+    try:
+        email_senha_alterada(estado.usuario, url_publica("auth.recuperar_senha"), nas_configuracoes=True)
+    except Exception as erro_aviso:  # noqa: BLE001
+        logger.warning("Aviso de senha alterada não preparado (%s).", type(erro_aviso).__name__)
+    return None
+
+
+_EMAIL_INDISPONIVEL = "Este e-mail não pode ser usado. Informe outro."
+
+
+def _recusa_novo_email(novo: str, email_anterior: str, id_usuario: int) -> str | None:
+    if not email_valido(novo):
+        return "Informe um e-mail válido."
+    if novo == normalizar_email(email_anterior):
+        return "Este já é o e-mail de acesso da conta."
+    try:
+        em_uso = email_em_uso(db.session, novo, exceto_id=id_usuario)
+    except SQLAlchemyError as erro:
+        _falha_banco_senha(erro)
+        return "Não foi possível alterar o e-mail. Tente novamente."
+    return _EMAIL_INDISPONIVEL if em_uso else None
+
+
+def _gravar_novo_email(estado: _CredencialEsperada, email_anterior: str, novo: str, *, renovar_sessao: bool,
+                       novo_hash: str | None = None) -> str | None:
+    """CAS da troca de e-mail. Devolve a mensagem de erro ou None.
+
+    O e-mail é por onde a senha se recupera, então a troca vale como troca de
+    credencial: a geração de autorização sobe na mesma transação. Com isso as sessões
+    abertas e os links de senha já enviados ao endereço antigo deixam de valer.
+    """
+    proxima_geracao = estado.geracao_autorizacao + 1
+    hash_final = novo_hash or estado.senha_hash
+    comando = update(Usuario).where(
+        Usuario.id_usuario == estado.id_usuario,
+        Usuario.email == email_anterior,
+        Usuario.senha_hash == estado.senha_hash,
+        Usuario.geracao_autorizacao == estado.geracao_autorizacao,
+        Usuario.ativo.is_(True),
+        _conta_segue_acessivel(),
+    ).values(
+        email=novo, senha_hash=hash_final, geracao_autorizacao=proxima_geracao,
+        data_atualizacao=datetime.now(timezone.utc),
+    ).execution_options(synchronize_session=False)
+    token_renovado = None
+    try:
+        with db.session.no_autoflush:
+            resultado = db.session.execute(comando)
+        if resultado.rowcount != 1:
+            db.session.rollback()
+            return "Não foi possível alterar o e-mail. Atualize a página e tente novamente."
+        revogar_sessoes_usuario(db.session, estado.id_usuario, "revogacao_global")
+        if renovar_sessao:
+            token_renovado = registrar_sessao(db.session, estado.id_usuario)[0]
+        db.session.commit()
+    except IntegrityError:
+        # Outra conta tomou o endereço entre a conferência e o UPDATE.
+        db.session.rollback()
+        return _EMAIL_INDISPONIVEL
+    except SQLAlchemyError as erro:
+        _falha_banco_senha(erro)
+        return "Não foi possível alterar o e-mail. Tente novamente."
+
+    impressao_atual = impressao_credencial_sessao(estado.id_usuario, hash_final, proxima_geracao)
+    if token_renovado is not None:
+        carimbar_sessao(token_renovado, impressao_atual)
+    try:
+        from realtime import revogar_conexoes_usuario
+        revogar_conexoes_usuario(estado.id_usuario, impressao_atual,
+                                 impressao_revogada=impressao_sessao(estado))
+    except Exception as erro:  # noqa: BLE001
+        # E-mail já confirmado: as salas por geração negam dados aos sockets antigos.
+        logger.warning("Revogação Socket.IO indisponível (%s).", type(erro).__name__)
+    return None
+
+
+def trocar_email_autenticado(usuario: Usuario, senha_atual, novo_email, confirmacao) -> str | None:
+    """Troca do e-mail de acesso pelo próprio dono. Devolve a mensagem de erro ou None.
+
+    Esta sessão continua, renovada, entrando pelo novo endereço. O aviso vai para o
+    endereço antigo, o único que pode denunciar uma troca que o dono não fez.
+    """
+    estado = _estado_credencial(usuario)
+    if not _senha_atual_confere(estado, senha_atual):
+        return "A senha atual está incorreta."
+    email_anterior = usuario.email
+    # Lidos antes do commit: o aviso não pode depender do banco, que pode cair logo depois da gravação.
+    dono = SimpleNamespace(id_usuario=estado.id_usuario, nome=usuario.nome)
+    novo = normalizar_email(novo_email)
+    # Sem confirmação por link, um erro de digitação entregaria a recuperação da conta a outra pessoa.
+    if novo != normalizar_email(confirmacao):
+        return "A confirmação não é igual ao novo e-mail."
+    erro = _recusa_novo_email(novo, email_anterior, estado.id_usuario) or _gravar_novo_email(
+        estado, email_anterior, novo, renovar_sessao=True,
+    )
+    if erro:
+        return erro
+    logger.info("E-mail de acesso alterado nas Configurações | usuario=%s", estado.id_usuario)
+    try:
+        email_email_alterado(dono, email_anterior, novo)
+    except Exception as erro_aviso:  # noqa: BLE001
+        logger.warning("Aviso de e-mail alterado não preparado (%s).", type(erro_aviso).__name__)
+    return None
+
+
+def corrigir_email_pelo_admin(usuario: Usuario, novo_email, confirmacao) -> tuple:
+    """Suporte: devolve a conta ao dono depois de um e-mail errado ou de uma conta tomada.
+
+    Além do e-mail, invalida a senha atual: quem a conhece não entra mais, e o dono
+    define outra pelo link enviado ao endereço corrigido. O endereço anterior recebe um
+    aviso sem link: se o suporte tiver sido enganado, é ele quem pode denunciar. Devolve
+    (erro, envio); o envio é None se o link não pôde ser preparado depois de a correção
+    já estar gravada.
+    """
+    estado = _estado_credencial(usuario)
+    email_anterior = usuario.email
+    # Lidos antes do commit: o aviso não pode depender do banco, que pode cair logo depois da gravação.
+    dono = SimpleNamespace(id_usuario=estado.id_usuario, nome=usuario.nome)
+    novo = normalizar_email(novo_email)
+    # O link sai na hora para o endereço digitado: um erro de digitação entregaria a conta a outra pessoa.
+    if novo != normalizar_email(confirmacao):
+        return "A confirmação não é igual ao novo e-mail.", None
+    erro = _recusa_novo_email(novo, email_anterior, estado.id_usuario) or _gravar_novo_email(
+        estado, email_anterior, novo, renovar_sessao=False,
+        # Hash de um segredo descartado: nenhuma senha confere até o dono definir outra.
+        novo_hash=generate_password_hash(secrets.token_urlsafe(32)),
+    )
+    if erro:
+        return erro, None
+    envio = None
+    try:
+        conta = db.session.get(Usuario, estado.id_usuario, populate_existing=True)
+        if _permite_finalidade(conta, _ATIVACAO):
+            link = url_publica("auth.ativar_acesso", token=gerar_token_definir_senha(conta))
+            envio = email_boas_vindas(conta, link, sincrono=True)
+        else:
+            link = url_publica("auth.resetar_senha", token=gerar_token_recuperacao_senha(conta))
+            envio = email_recuperacao_senha(conta, link, pela_equipe=True)
+    except Exception as erro_link:  # noqa: BLE001
+        db.session.rollback()
+        logger.warning("Link de senha não preparado depois da correção de e-mail (%s).", type(erro_link).__name__)
+    try:
+        email_email_alterado(dono, email_anterior, novo, pela_equipe=True, convite=estado.primeiro_acesso)
+    except Exception as erro_aviso:  # noqa: BLE001
+        db.session.rollback()
+        logger.warning("Aviso de e-mail alterado não preparado (%s).", type(erro_aviso).__name__)
+    return None, envio
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
@@ -362,7 +559,7 @@ def login():
             # Trata o redirecionamento caso o utilizador tenha tentado aceder a uma
             # página protegida antes. Só aceitamos destinos LOCAIS (anti open redirect).
             next_page = request.args.get("next")
-            if _destino_seguro(next_page):
+            if _destino_seguro(next_page) and _destino_abre_por_get(next_page):
                 return redirect(next_page)
 
             # Redirecionamento padrão com base no perfil (Role)
@@ -432,8 +629,9 @@ def primeiro_acesso():
     O guard em app.py manda o cliente para cá enquanto primeiro_acesso=True.
     Ao salvar, baixa a flag e libera o portal.
     """
-    # Já trocou (ou é admin): não há o que fazer aqui.
-    if not getattr(current_user, "primeiro_acesso", False):
+    # Só CLIENTE com senha provisória. Aqui a senha atual não é pedida: um ADMIN com a
+    # flag antiga trocaria a credencial só com o cookie, sem aviso nenhum.
+    if not (current_user.is_cliente and getattr(current_user, "primeiro_acesso", False)):
         destino = "admin.dashboard" if current_user.is_admin else "cliente.dashboard"
         return redirect(url_for(destino))
 

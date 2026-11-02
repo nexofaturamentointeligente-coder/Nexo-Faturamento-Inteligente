@@ -34,6 +34,14 @@
     </div>
 </div>
 {% endfor %}
+{% elif conexao_smtp and not conexao_smtp.ok and d.transporte != 'brevo' %}
+<div class="aviso-contrato is-perigo" role="status">
+    <i class="bi bi-x-octagon" aria-hidden="true"></i>
+    <div>
+        <strong>A última conexão com o servidor SMTP falhou.</strong>
+        <p>{{ conexao_smtp.descricao or 'Erro inesperado na conexão' }}. O detalhe está em "Conexão com o servidor SMTP", abaixo.</p>
+    </div>
+</div>
 {% else %}
 <div class="aviso-contrato" role="status">
     <i class="bi bi-check-circle" aria-hidden="true"></i>
@@ -47,28 +55,71 @@
 <div class="nexo-card mb-4">
     <div class="nexo-card-head">
         <div>
-            <h2><i class="bi bi-envelope-gear text-purple"></i> Configuração atual</h2>
-            <p class="sub">Lida do ambiente do servidor no momento desta página</p>
+            <h2><i class="bi bi-envelope text-purple"></i> Configuração atual</h2>
+            <p class="sub">{% if d.ambiente_local %}Lida do .env quando o servidor iniciou: depois de alterar o arquivo, reinicie o servidor{% else %}Lida das variáveis de ambiente quando o servidor iniciou{% endif %}</p>
         </div>
     </div>
     <div class="nexo-card-body">
         <dl class="dados-contrato">
-            <div><dt>Envio de e-mail</dt><dd>{% if d.ativo %}<span class="nexo-badge b-green">ATIVO</span>{% else %}<span class="nexo-badge b-red">DESATIVADO</span>{% endif %}</dd></div>
-            <div><dt>Transporte</dt><dd>{{ d.transporte_rotulo }}{% if d.smtp_servidor %} — {{ d.smtp_servidor }}{% endif %}</dd></div>
+            <div><dt>Envio de e-mail</dt><dd>{% if not d.ativo %}<span class="nexo-badge b-red">DESATIVADO</span>{% elif d.bloqueante %}<span class="nexo-badge b-red">BLOQUEADO</span> o envio não sai até resolver a pendência acima{% else %}<span class="nexo-badge b-green">ATIVO</span>{% endif %}</dd></div>
+            <div><dt>Transporte</dt><dd>{{ d.transporte_rotulo }}</dd></div>
+            {% if d.ambiente_local %}
+            <div class="dado-largo"><dt>Arquivo .env lido por este servidor</dt><dd class="text-break">{{ d.arquivo_env }}{% if d.arquivo_env_existe %} <span class="nexo-badge b-green">encontrado</span>{% else %} <span class="nexo-badge b-amber">não encontrado</span>{% endif %}<br><span class="t-mut">Uma variável já definida no terminal tem prioridade sobre o arquivo.</span></dd></div>
+            {% endif %}
+            {% if d.transporte != 'brevo' %}
+            <div><dt>Servidor SMTP (MAIL_SERVER:MAIL_PORT)</dt><dd class="text-break">{{ d.smtp_endereco }}</dd></div>
+            <div><dt>Segurança da conexão</dt><dd>{{ d.smtp_seguranca }}</dd></div>
+            <div><dt>Usuário (MAIL_USERNAME)</dt><dd>{% if d.smtp_usuario %}{{ m.email(d.smtp_usuario) }}{% else %}<span class="nexo-badge b-red">NÃO DEFINIDO</span>{% endif %}</dd></div>
+            <div><dt>Senha ou token (MAIL_PASSWORD)</dt><dd>{% if d.smtp_senha_definida %}Definida (nunca é exibida){% else %}<span class="nexo-badge b-red">NÃO DEFINIDA</span>{% endif %}</dd></div>
+            {% endif %}
             <div><dt>Remetente (MAIL_DEFAULT_SENDER)</dt><dd>{% if d.remetente_email %}{{ d.remetente_nome or '' }} {{ m.email(d.remetente_email) }}{% else %}—{% endif %}</dd></div>
+            {% if d.chave_presente %}
             <div><dt>Chave do Brevo</dt><dd>
-                {% if not d.chave_presente %}Não definida
-                {% elif d.chave_formato == 'api' %}Definida — formato de chave de API (xkeysib-)
+                {% if d.chave_formato == 'api' %}Definida — formato de chave de API (xkeysib-)
                 {% elif d.chave_formato == 'smtp' %}<span class="nexo-badge b-red">CHAVE SMTP</span> use uma chave de API
                 {% else %}Definida — formato não reconhecido{% endif %}
             </dd></div>
             <div><dt>Endpoint da API</dt><dd>{% if d.api_host %}{{ d.api_host }} {{ '(https)' if d.api_https else '(sem https)' }}{% else %}—{% endif %}</dd></div>
-            <div><dt>Origem dos links nos e-mails</dt><dd>{{ d.origem_publica or '—' }}</dd></div>
+            {% else %}
+            <div><dt>API do Brevo (BREVO_API_KEY, opcional)</dt><dd>Não definida</dd></div>
+            {% endif %}
+            <div><dt>Origem dos links nos e-mails</dt><dd class="text-break">{{ d.origem_publica or '—' }}{% if d.origem_local %}<br><span class="t-mut">Endereço local: os links dos e-mails só abrem neste computador.</span>{% endif %}</dd></div>
             <div><dt>Prazo por tentativa</dt><dd>{{ d.prazo_segundos|round(1) }} s</dd></div>
             <div><dt>Aviso de falha no sininho</dt><dd>{{ 'Ligado' if d.alerta_admin else 'Desligado' }}</dd></div>
         </dl>
     </div>
 </div>
+
+{% if d.transporte != 'brevo' %}
+<div class="nexo-card mb-4">
+    <div class="nexo-card-head">
+        <div>
+            <h2><i class="bi bi-plug text-purple"></i> Conexão com o servidor SMTP</h2>
+            <p class="sub">{% if d.smtp_seguranca == 'Sem criptografia' %}O teste abre a conexão e faz o login sem criptografia, sem enviar nenhuma mensagem{% else %}O teste abre a conexão, negocia a criptografia e faz o login, sem enviar nenhuma mensagem{% endif %}</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <dl class="dados-contrato">
+            <div><dt>Status</dt><dd>
+                {% if not conexao_smtp %}<span class="nexo-badge b-muted">NÃO VERIFICADA</span> desde o último início do servidor
+                {% elif conexao_smtp.ok %}<span class="nexo-badge b-green">CONECTADO</span> o servidor aceitou a conexão e o login
+                {% else %}<span class="nexo-badge b-red">FALHA</span> {{ conexao_smtp.descricao or 'erro inesperado na conexão' }}{% if conexao_smtp.codigo %} <span class="t-mono">(SMTP {{ conexao_smtp.codigo }})</span>{% endif %}{% endif %}
+            </dd></div>
+            {% if conexao_smtp %}
+            <div><dt>Última tentativa</dt><dd>{{ conexao_smtp.instante|horario_brasilia }} — {{ 'teste de conexão' if conexao_smtp.origem == 'verificacao' else 'envio de e-mail' }}</dd></div>
+            {% endif %}
+        </dl>
+        {% if d.ativo %}
+        <form method="post" action="{{ url_for('admin.diagnostico_email_conexao') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-ghost"><i class="bi bi-plug" aria-hidden="true"></i> Testar conexão SMTP</button>
+        </form>
+        {% else %}
+        <p class="t-mut mb-0">Preencha {{ d.smtp_faltando|join(' e ') or 'as credenciais' }} {{ 'no .env' if d.ambiente_local else 'nas variáveis de ambiente do servidor' }} e reinicie o servidor para testar a conexão.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 
 <div class="nexo-card mb-4">
     <div class="nexo-card-head">
@@ -81,8 +132,12 @@
         <p class="t-mut mb-2">Cada etapa tem a sua evidência; uma não comprova a seguinte:</p>
         <ol class="t-mut">
             <li><strong>O NEXO iniciou o envio</strong> — a linha aparece em “Envios recentes”, com a referência.</li>
-            <li><strong>O provedor aceitou</strong> — estado “Aceito pelo provedor” e, no Brevo, o ID da mensagem.</li>
+            {% if d.transporte == 'brevo' %}
+            <li><strong>O provedor aceitou</strong> — estado “Aceito pelo provedor” e o ID da mensagem no Brevo.</li>
             <li><strong>O provedor registrou a entrega</strong> — “Consultar entrega” mostra os eventos do Brevo (ou Brevo → Transacional → Logs, etiqueta <span class="t-mono">nexo-teste</span>).</li>
+            {% else %}
+            <li><strong>O servidor SMTP aceitou</strong> — estado “Aceito pelo provedor”. O SMTP não informa a entrega depois disso.</li>
+            {% endif %}
             <li><strong>A mensagem chegou</strong> — só você confirma, abrindo a sua caixa de entrada (confira também o spam).</li>
         </ol>
         <form method="post" action="{{ url_for('admin.diagnostico_email_teste') }}">
@@ -96,7 +151,7 @@
     <div class="nexo-card-head">
         <div>
             <h2><i class="bi bi-clock-history text-purple"></i> Envios recentes</h2>
-            <p class="sub">Desde o último início do servidor (memória do processo; reinícios e a hibernação do plano gratuito zeram a lista — os logs permanecem)</p>
+            <p class="sub">Desde o último início do servidor (memória do processo; cada reinício zera a lista, e os logs permanecem)</p>
         </div>
     </div>
     {% if envios %}

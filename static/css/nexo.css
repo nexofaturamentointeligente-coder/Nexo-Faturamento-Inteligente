@@ -97,6 +97,9 @@
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
+/* A topbar é fixa: foco e âncoras do conteúdo não podem parar atrás dela. Em scroll-padding, no
+   html, a regra valeria também para a própria topbar (sticky), e focar um botão dela rolaria a página. */
+.page, .page * { scroll-margin-top: calc(var(--topbar-h) + var(--shell-gap) + 12px); }
 
 body {
   margin: 0;
@@ -520,7 +523,7 @@ button.nav-logout { width: 100%; background: transparent; font: inherit; text-al
   color: #fff; font-weight: 700; font-size: 0.92rem;
   box-shadow: 0 4px 14px -4px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
-.user-chip .user-avatar { order: 2; }
+.user-chip .user-avatar { order: 2; flex: 0 0 auto; }
 .user-meta { display: flex; flex-direction: column; line-height: 1.2; text-align: right; }
 .user-meta strong { font-size: 0.84rem; font-weight: 600; }
 .user-meta small { font-size: 0.7rem; color: #a49cc4; }
@@ -541,6 +544,9 @@ button.nav-logout { width: 100%; background: transparent; font: inherit; text-al
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .page-head .sub { color: #b7b2d3; font-size: 0.92rem; margin: 0; }
+.page-head > div { min-width: 0; }
+/* O cliente digita o próprio nome, que aparece aqui e nas telas do admin. */
+.page-head h1, .chat-author, .chat-text { overflow-wrap: anywhere; }
 .page-head-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* ===================== CARDS ===================================== */
@@ -891,6 +897,7 @@ a.empresa-card:hover .ec-seta, a.empresa-card:focus-visible .ec-seta { color: #e
 }
 .app-shell .form-check-input:checked { background-color: var(--primary-3); border-color: var(--primary); }
 .app-shell .form-check-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.25); }
+.app-shell .form-check-input:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
 .app-shell .form-check-label { color: var(--text); }
 .form-text, .field-hint { color: var(--text-dim); font-size: 0.8rem; }
 .input-group-text { background: var(--surface-3); border-color: var(--border); color: var(--text-muted); }
@@ -961,7 +968,7 @@ a.empresa-card:hover .ec-seta, a.empresa-card:focus-visible .ec-seta { color: #e
 .flash-stack .alert { box-shadow: var(--shadow); margin-bottom: 0; }
 /* Ícone contextual + texto alinhados dentro do flash (success/info/warning/danger). */
 .flash-icon { font-size: 1.05rem; line-height: 1.5; flex-shrink: 0; opacity: 0.95; }
-.flash-text { flex: 1 1 auto; min-width: 0; }
+.flash-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 
 /* Aviso do Indicador de Pressão de Estoque (regra de negócio) */
 .nota-pressao {
@@ -1633,7 +1640,7 @@ input, textarea, select, option,
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
   margin-bottom: 5px;
 }
-.chat-author { font-size: 0.78rem; font-weight: 700; color: var(--text); display: inline-flex; align-items: center; gap: 5px; }
+.chat-author { font-size: 0.78rem; font-weight: 700; color: var(--text); display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .chat-bubble.b-admin .chat-author { color: #c4a0fb; }
 .chat-time { font-size: 0.7rem; color: var(--text-dim); font-family: var(--font-mono); }
 .chat-text { font-size: 0.9rem; line-height: 1.55; color: #d6d8e3; white-space: pre-line; }
@@ -1911,6 +1918,7 @@ input, textarea, select, option,
 
 /* ---- Conversa ---- */
 .nexobot-msgs {
+  position: relative; /* offsetTop das mensagens (revelar, em nexobot.js) mede a partir daqui */
   flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 10px;
   scroll-behavior: smooth; overscroll-behavior: contain;
@@ -2090,6 +2098,7 @@ input, textarea, select, option,
   text-transform: uppercase;
 }
 .dados-contrato dd { margin: 0; color: var(--text); font-size: 0.92rem; overflow-wrap: anywhere; }
+.dados-contrato > .dado-largo { grid-column: 1 / -1; }
 .acoes-contrato { display: flex; flex-wrap: wrap; gap: 8px; }
 .aviso-contrato {
   display: flex;
@@ -2105,7 +2114,8 @@ input, textarea, select, option,
   backdrop-filter: var(--glass-blur);
 }
 .aviso-contrato i { margin-top: 2px; color: var(--primary); font-size: 1.2rem; }
-.aviso-contrato p { margin: 0; color: var(--text-muted); font-size: 0.88rem; }
+.aviso-contrato > div { min-width: 0; }
+.aviso-contrato p { margin: 0; color: var(--text-muted); font-size: 0.88rem; overflow-wrap: anywhere; }
 .aviso-contrato strong { color: var(--text); }
 .aviso-contrato.is-alerta { border-color: rgba(245, 158, 11, 0.3); background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--glass-strong); }
 .aviso-contrato.is-alerta i { color: var(--warning); }
@@ -2129,3 +2139,59 @@ input, textarea, select, option,
   .nexo-table thead th:last-child, .nexo-table tbody td:last-child { padding-right: 16px; }
   .nexo-table .col-nome { min-width: 170px; }
 }
+
+/* ---- Conta encerrada: overlay com desfoque sobre a imagem de fundo pública ---- */
+.conta-encerrada-veu {
+  position: fixed; inset: -24px; z-index: 0; pointer-events: none;
+  background: linear-gradient(rgba(8, 8, 13, 0.62), rgba(8, 8, 13, 0.62)),
+              url("../img/painel/nexo-fundo-crepusculo.jpg") center / cover no-repeat;
+  filter: blur(14px);
+}
+.conta-encerrada-card { position: relative; z-index: 1; }
+
+/* ---- Central de suporte: cards de mesma altura; texto longo é cortado com "..." ---- */
+.ticket-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.ticket-card { display: flex; flex-direction: column; height: 280px; padding: 18px 20px; overflow: hidden; }
+.ticket-card-topo { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.ticket-card-assunto, .ticket-card-mensagem {
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere;
+}
+.ticket-card-assunto { -webkit-line-clamp: 2; line-clamp: 2; font-size: 1rem; font-weight: 700; margin: 0 0 4px; flex: none; }
+.ticket-card-empresa { font-size: 0.82rem; color: var(--text-muted); margin: 0 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.ticket-card-mensagem { -webkit-line-clamp: 3; line-clamp: 3; font-size: 0.9rem; line-height: 1.5; margin: 0; }
+.ticket-card-rodape { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 10px; }
+
+/* ---- Configurações da conta ---- */
+.config-atalhos { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 4px 22px; }
+.config-secao { margin-bottom: 30px; }
+.config-secao-titulo { font-size: 1.12rem; font-weight: 700; margin: 0 4px 14px; }
+.config-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; align-items: start; }
+.config-grade > .nexo-card { min-width: 0; }
+.config-largo { grid-column: 1 / -1; }
+.config-form { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+.config-form .btn-nexo, .config-form .btn-ghost { align-self: flex-start; }
+.config-form + .dados-contrato, .dados-contrato + .config-form { margin-top: 18px; }
+.config-documento { padding: 18px 0; border-top: 1px solid var(--glass-border); min-width: 0; }
+.config-documento:first-child { padding-top: 0; border-top: 0; }
+.config-documento:last-child { padding-bottom: 0; }
+.config-documento-topo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.config-documento-topo h4 { font-size: 0.96rem; font-weight: 700; margin: 0; }
+.config-documento summary { margin-top: 14px; cursor: pointer; color: var(--bs-link-color); font-size: 0.9rem; font-weight: 600; }
+.config-documento summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.config-documento-texto {
+  margin-top: 10px; padding: 12px 14px; max-height: 340px; overflow-y: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.88rem;
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+}
+.config-documento form { margin-top: 14px; }
+.config-documento textarea { min-height: 260px; font-size: 0.88rem; }
+.usuario-corrigir-email summary { width: fit-content; cursor: pointer; color: var(--bs-link-color); font-size: 0.82rem; font-weight: 600; }
+.usuario-corrigir-email summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.usuario-corrigir-email form { max-width: 420px; }
+.app-shell .form-switch { padding-left: 3em; }
+.app-shell .form-switch .form-check-input { width: 2.3em; height: 1.25em; margin-top: 0.15em; margin-left: -3em; border-radius: 2em; }
+/* Interruptor desligado no escuro: o botão cinza do Bootstrap fica abaixo de 3:1 sobre o trilho. */
+.app-shell .form-switch .form-check-input:not(:checked):not(:focus) {
+  --bs-form-switch-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%23a49cc4'/%3e%3c/svg%3e");
+}
+.form-switch .field-hint { display: block; margin-top: 2px; }

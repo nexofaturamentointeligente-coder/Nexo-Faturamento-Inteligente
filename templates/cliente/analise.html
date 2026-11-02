@@ -171,14 +171,14 @@
     type: 'bar',
     x: ['Compras', 'Vendas'],
     y: [{{ (analise.indicador.total_comprado or 0)|float }}, {{ (analise.indicador.faturamento_total or 0)|float }}],
-    marker: { color: ['rgba(245,158,11,0.9)', 'rgba(56,189,248,0.9)'], line: { color: 'rgba(255,255,255,0.22)', width: 1 } },
+    marker: { color: [NEXO.colors.barAmber, NEXO.colors.barInfo], line: { color: NEXO.colors.barEdge, width: 1 } },
     width: 0.5,
     texttemplate: 'R$ %{y:,.0f}', textposition: 'outside', cliponaxis: false,
-    textfont: { color: '#ece9f8', size: 12.5, family: 'JetBrains Mono, monospace' },
+    textfont: { color: NEXO.colors.textStrong, size: 12.5, family: 'JetBrains Mono, monospace' },
     hovertemplate: '<b>%{x}</b><br>R$ %{y:,.2f}<extra></extra>'
   }], {
     yaxis: { tickprefix: 'R$ ', tickformat: ',.0f', rangemode: 'tozero', fixedrange: true },
-    xaxis: { fixedrange: true, tickfont: { size: 13, color: '#ece9f8' } },
+    xaxis: { fixedrange: true, tickfont: { size: 13, color: NEXO.colors.textStrong } },
     margin: { l: 64, r: 18, t: 32, b: 42 }, bargap: 0.45, height: 300
   });
   NEXO.descrever('chartAnaliseCli', 'Compras x Vendas do período: compras R$ ' + NEXO.fmtBRL({{ (analise.indicador.total_comprado or 0)|float }}) +

@@ -32,13 +32,14 @@ TOPICOS = [
         "categoria": "Senhas",
         "pergunta": "Como altero minha senha de acesso?",
         "resposta": (
-            "No primeiro acesso o portal pede a troca; depois, use “Esqueci minha senha” "
-            "na tela de login.\n\n"
+            "No primeiro acesso o portal pede a troca; depois, use Configurações, no menu "
+            "lateral, ou “Esqueci minha senha” na tela de login.\n\n"
             "1. Primeiro acesso: ao entrar pela primeira vez, o portal obriga você a "
             "definir uma senha pessoal antes de liberar o painel.\n"
-            "2. Esqueceu a senha? Na tela de login, clique em “Esqueci minha senha”.\n"
-            "3. Informe seu e-mail cadastrado — enviamos um link seguro, válido por 15 minutos.\n"
-            "4. Abra o link e defina a nova senha. Depois é só fazer login com ela."
+            "2. Logado: abra Configurações e informe a senha atual e a nova.\n"
+            "3. Esqueceu a senha? Na tela de login, clique em “Esqueci minha senha”.\n"
+            "4. Informe seu e-mail cadastrado — enviamos um link seguro, válido por 15 minutos.\n"
+            "5. Abra o link e defina a nova senha. Depois é só fazer login com ela."
         ),
     },
     {

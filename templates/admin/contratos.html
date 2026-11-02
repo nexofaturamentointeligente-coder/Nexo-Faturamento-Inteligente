@@ -65,6 +65,19 @@
     </div>
 </div>
 
+{% set pessoas_a_avisar = lembretes.candidatos|sum(attribute='pendentes') %}
+<div class="nexo-card mb-4">
+    <div class="nexo-card-head"><div><h2><i class="bi bi-calendar-event text-purple" aria-hidden="true"></i> Lembretes de renovação</h2>
+        <p class="sub">{{ lembretes.candidatos|length }} contrato(s) terminam em até {{ lembretes.janela_dias }} dias, e {{ pessoas_a_avisar }} pessoa(s) ainda não receberam o lembrete.</p></div></div>
+    <div class="nexo-card-body">
+        <form method="POST" action="{{ url_for('contratos.lembretes_renovacao') }}" class="d-flex flex-wrap gap-2 align-items-center" data-envio-unico>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-nexo" {{ 'disabled' if not pessoas_a_avisar }}><i class="bi bi-send" aria-hidden="true"></i> Enviar lembretes</button>
+            <span class="field-hint">Sininho e e-mail, uma vez por pessoa e por data de término, respeitando quem desligou o aviso. Nada é enviado sem este botão ou o comando <code>flask contratos lembretes-renovacao</code>.</span>
+        </form>
+    </div>
+</div>
+
 {% call secao('Suspensões encerradas aguardando reconciliação', 'bi-x-octagon', painel.suspensoes_expiradas, 'Prazo atingido sem renovação, nova contratação ou prorrogação.', 'Nenhuma suspensão vencida.') %}
 {% for item in painel.suspensoes_expiradas %}{{ linha_empresa(item, 'limite ' ~ (item.contrato.suspensao_limite|instante_local) ~ ('' if item.contratual else ' · regime legado (não reconciliada)')) }}{% endfor %}
 {% endcall %}

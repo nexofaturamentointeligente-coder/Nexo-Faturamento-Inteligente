@@ -1,0 +1,21 @@
+{# Troca de senha nas Configurações (cliente e admin). Espera acao_senha, senha_minima e senha_maxima.
+   Os atributos ajudam o navegador e o gerenciador de senhas; quem decide é o servidor. #}
+<form method="POST" action="{{ acao_senha }}" class="config-form" data-envio-unico>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+        <label class="nexo-label" for="senha_atual">Senha atual <span class="req">*</span></label>
+        <input type="password" class="form-control" id="senha_atual" name="senha_atual" autocomplete="current-password" required>
+    </div>
+    <div>
+        <label class="nexo-label" for="nova_senha">Nova senha <span class="req">*</span></label>
+        <input type="password" class="form-control" id="nova_senha" name="nova_senha" autocomplete="new-password"
+               minlength="{{ senha_minima }}" maxlength="{{ senha_maxima }}" aria-describedby="nova_senha_dica" required>
+        <p class="field-hint mt-1 mb-0" id="nova_senha_dica">Mínimo de {{ senha_minima }} caracteres, com letras e números. Não pode conter seu nome ou seu e-mail.</p>
+    </div>
+    <div>
+        <label class="nexo-label" for="confirmacao_nova_senha">Confirme a nova senha <span class="req">*</span></label>
+        <input type="password" class="form-control" id="confirmacao_nova_senha" name="confirmacao_nova_senha" autocomplete="new-password"
+               minlength="{{ senha_minima }}" maxlength="{{ senha_maxima }}" required>
+    </div>
+    <button type="submit" class="btn-nexo"><i class="bi bi-shield-lock" aria-hidden="true"></i> Alterar senha</button>
+</form>

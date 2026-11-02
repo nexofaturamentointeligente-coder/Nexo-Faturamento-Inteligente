@@ -7,7 +7,9 @@
    vínculo contratual. Layout sem sessão, sem CSRF e sem current_user: nenhum
    cookie de autenticação é emitido e nada do portal (dashboard, indicadores,
    histórico, PDFs ou dados da empresa) é carregado. #}
-<div class="auth-card">
+{# Véu decorativo: desfoca só a imagem de fundo pública; atrás dele não há dado do portal. #}
+<div class="conta-encerrada-veu" aria-hidden="true"></div>
+<div class="auth-card conta-encerrada-card">
     <div class="auth-brand">
         <div class="auth-logo">
             <img src="{{ url_for('static', filename='img/nexo-cubo-brilho.png') }}" alt="" width="253" height="279" decoding="async">

@@ -18,6 +18,7 @@ from tests.deploy_support import DeployTestCase, ROOT
 ENDPOINTS = {
     "dashboard": "cliente.dashboard", "upload": "cliente.upload", "historico": "cliente.historico",
     "guia": "cliente.guia", "suporte": "cliente.tickets",
+    "configuracoes": "cliente.configuracoes",
 }
 CHAVES_CONTEXTO = {"ultimo_destino", "destino_anterior", "opcoes", "modo_opcoes", "oferta", "assunto", "nivel"}
 

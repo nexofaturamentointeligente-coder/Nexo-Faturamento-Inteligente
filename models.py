@@ -21,7 +21,7 @@ from typing import Optional
 
 from sqlalchemy import (
     String, Integer, Boolean, Date, DateTime, Numeric, Text, LargeBinary,
-    ForeignKey, ForeignKeyConstraint, CheckConstraint, UniqueConstraint, Index, text,
+    ForeignKey, ForeignKeyConstraint, CheckConstraint, UniqueConstraint, Index, text, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -1022,4 +1022,99 @@ class HistoricoPrecoPlano(db.Model):
     __table_args__ = (
         CheckConstraint("valor_novo >= 0", name="ck_historico_preco_valor"),
         Index("ix_historico_preco_plano", "id_plano", "alterado_em"),
+    )
+
+
+# =====================================================================
+# 20. PreferenciaUsuario  (avisos que o próprio usuário escolhe receber)
+# =====================================================================
+class PreferenciaUsuario(db.Model):
+    """
+    Escolhas de aviso de um usuário. Tabela própria, e não coluna em Usuario,
+    pelo mesmo motivo de RegimeContratual: o código chega à produção antes da
+    migração sem quebrar nenhuma consulta de Usuario. Sem a linha valem os
+    padrões (tudo ligado). Avisos de segurança não têm escolha: saem sempre.
+    """
+    __tablename__ = "preferencia_usuario"
+
+    id_usuario: Mapped[int] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="CASCADE"), primary_key=True, autoincrement=False
+    )
+    lembrete_renovacao: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    alerta_chamado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    data_atualizacao: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+
+
+# =====================================================================
+# 21. DocumentoLegal  (Termos de Uso e Política de Privacidade, por versão)
+# =====================================================================
+TIPOS_DOCUMENTO_LEGAL = ("TERMOS_USO", "POLITICA_PRIVACIDADE")
+
+
+class DocumentoLegal(db.Model):
+    """
+    Uma versão publicada de um documento. O texto é escrito pelo ADMIN e
+    exibido como texto puro, nunca como HTML. Registro imutável: salvar cria a
+    versão seguinte e a de maior número é a vigente, para que todo aceite
+    continue apontando para o texto que a pessoa de fato leu.
+    """
+    __tablename__ = "documento_legal"
+
+    id_documento: Mapped[int] = mapped_column(primary_key=True)
+    tipo: Mapped[str] = mapped_column(String(30), nullable=False)
+    versao: Mapped[int] = mapped_column(Integer, nullable=False)
+    conteudo: Mapped[str] = mapped_column(Text, nullable=False)
+    publicado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    id_usuario_admin: Mapped[int] = mapped_column(ForeignKey("usuario.id_usuario"), nullable=False)
+
+    publicado_por = relationship("Usuario")
+
+    __table_args__ = (
+        CheckConstraint("tipo IN ('TERMOS_USO', 'POLITICA_PRIVACIDADE')", name="ck_documento_tipo"),
+        CheckConstraint("versao >= 1", name="ck_documento_versao"),
+        CheckConstraint("length(trim(conteudo)) > 0", name="ck_documento_conteudo"),
+        UniqueConstraint("tipo", "versao", name="uq_documento_tipo_versao"),
+    )
+
+
+# =====================================================================
+# 22. AceiteDocumento  (quem aceitou qual versão, e quando)
+# =====================================================================
+class AceiteDocumento(db.Model):
+    """Aceite explícito de uma versão de DocumentoLegal, feito pelo próprio usuário.
+    Nunca é presumido: sem a linha, a tela diz que não há aceite registrado."""
+    __tablename__ = "aceite_documento"
+
+    id_aceite: Mapped[int] = mapped_column(primary_key=True)
+    id_usuario: Mapped[int] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="CASCADE"), nullable=False,
+    )
+    id_documento: Mapped[int] = mapped_column(ForeignKey("documento_legal.id_documento"), nullable=False)
+    aceito_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+
+    documento = relationship("DocumentoLegal")
+
+    __table_args__ = (
+        UniqueConstraint("id_usuario", "id_documento", name="uq_aceite_usuario_documento"),
+        Index("ix_aceite_documento", "id_documento"),
+    )
+
+
+# =====================================================================
+# 23. ConfiguracaoSistema  (ajustes feitos pelo ADMIN em Configurações)
+# =====================================================================
+CHAVES_CONFIGURACAO_SISTEMA = ("suporte_bcc_email",)
+
+
+class ConfiguracaoSistema(db.Model):
+    """Ajuste do sistema por chave. Valor NULL = desligado; a linha guarda quem mexeu por último."""
+    __tablename__ = "configuracao_sistema"
+
+    chave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[Optional[str]] = mapped_column(Text)
+    atualizado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    id_usuario_admin: Mapped[int] = mapped_column(ForeignKey("usuario.id_usuario"), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("chave IN ('suporte_bcc_email')", name="ck_configuracao_chave"),
     )

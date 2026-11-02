@@ -49,11 +49,11 @@ REGISTROS = (
         categoria="Empresa e cadastro",
         resumo=(
             "Na Visão Geral aparecem a razão social, o CNPJ, o plano atual e o status da conta. Os demais "
-            "dados cadastrais (segmento, contatos, data de contratação) ficam com a equipe NEXO."
+            "dados cadastrais (segmento, e-mail de contato, data de contratação) ficam com a equipe NEXO."
         ),
         explicacao=(
-            "O portal do cliente não tem página de perfil ou de cadastro. Se algum dado estiver errado, abra um "
-            "chamado em Suporte informando a correção."
+            "Em Configurações você altera o nome do responsável, o telefone de contato e o e-mail de acesso. Se "
+            "outro dado estiver errado, abra um chamado em Suporte informando a correção."
         ),
         perguntas=(
             "Onde vejo os dados da minha empresa?", "Onde aparece meu CNPJ?", "Como vejo meu cadastro?",
@@ -70,8 +70,9 @@ REGISTROS = (
         categoria="Empresa e cadastro",
         tipo="procedimento",
         resumo=(
-            "Alterações de cadastro são feitas pela equipe NEXO: abra um chamado em Suporte descrevendo o que "
-            "precisa mudar. O CNPJ não pode ser alterado depois do cadastro."
+            "O nome do responsável, o telefone de contato e o e-mail de acesso você altera em Configurações. Os "
+            "demais dados são alterados pela equipe NEXO: abra um chamado em Suporte descrevendo o que precisa "
+            "mudar. O CNPJ não pode ser alterado depois do cadastro."
         ),
         passos=(
             "Abra Suporte no menu lateral e clique em Novo chamado.",
@@ -79,8 +80,8 @@ REGISTROS = (
             "Descreva a alteração desejada e envie. A equipe responde no próprio chamado.",
         ),
         perguntas=(
-            "Como mudo o e-mail da empresa?", "Como altero o nome fantasia?", "Como atualizo meu cadastro?",
-            "Como mudo o telefone de contato?", "Posso alterar o CNPJ?", "Como corrijo dados cadastrais?",
+            "Como mudo o e-mail da empresa?", "Como altero o e-mail de contato?", "Como altero o nome fantasia?", "Como atualizo meu cadastro?",
+            "Posso alterar o CNPJ?", "Como corrijo dados cadastrais?",
         ),
         termos="alterar atualizar corrigir cadastro email telefone nome fantasia cnpj mudar",
         relacionados=("nexo.suporte.abrir_chamado",),

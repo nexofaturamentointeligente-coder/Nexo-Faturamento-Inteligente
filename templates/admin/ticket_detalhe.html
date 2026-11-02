@@ -9,7 +9,7 @@
 <div class="page-head">
     <div>
         <h1>{{ chamado.assunto }}</h1>
-        <p class="sub">{{ chamado.empresa.nome_fantasia or chamado.empresa.razao_social }} · {{ m.badge_categoria(chamado.categoria, categorias) }} · aberto em {{ m.horario(chamado.data_abertura) }}</p>
+        <p class="sub">{{ chamado.empresa.nome_fantasia or chamado.empresa.razao_social }} · {{ m.badge_categoria(chamado.categoria, categorias) }}{% if chamado.prioridade == 'ALTA' %} <span class="nexo-badge b-red">Prioridade alta</span>{% endif %} · aberto em {{ m.horario(chamado.data_abertura) }}</p>
     </div>
     <div class="page-head-actions">
         {{ m.badge_chamado(chamado.status_chamado) }}
@@ -55,7 +55,7 @@
                 </form>
                 <hr class="my-3" style="border-color:var(--border);">
                 <div class="kpi-label">Cliente</div>
-                <div class="fw-bold">{{ chamado.usuario_cliente.nome if chamado.usuario_cliente else '—' }}</div>
+                <div class="fw-bold text-break">{{ chamado.usuario_cliente.nome if chamado.usuario_cliente else '—' }}</div>
                 <div class="t-mut" style="font-size:0.85rem;">{{ chamado.empresa.razao_social }}</div>
                 <hr class="my-3" style="border-color:var(--border);">
                 {# Cada evento com o próprio instante, no horário de Brasília. #}

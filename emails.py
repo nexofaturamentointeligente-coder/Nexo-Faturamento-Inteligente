@@ -2,12 +2,14 @@
 NEXO - Faturamento Inteligente | E-mails transacionais (Brevo API / SMTP)
 =========================================================================
 Envio de e-mails HTML disparados por eventos de negócio: ativação de conta
-(boas-vindas), recuperação de senha, aviso de senha alterada, análise
-publicada e chamado resolvido. Princípios:
+(boas-vindas), recuperação de senha, aviso de senha e de e-mail alterados,
+análise publicada, chamado resolvido, cópia de novo chamado e lembrete de
+renovação. Princípios:
 
-  - DOIS TRANSPORTES: com BREVO_API_KEY definida, o envio sai pela API HTTPS
-    do Brevo (porta 443 — funciona no Render Free, que bloqueia as portas SMTP
-    25/465/587); sem ela, sai pelo SMTP do Flask-Mail (ex.: Gmail em dev).
+  - DOIS TRANSPORTES: sem BREVO_API_KEY, o envio sai pelo SMTP do Flask-Mail
+    (MAIL_SERVER, MAIL_PORT, MAIL_USERNAME, MAIL_PASSWORD: Gmail, Zoho, cPanel
+    ou servidor próprio); com ela, opcional, sai pela API HTTPS do Brevo (porta
+    443, para redes e hospedagens que bloqueiam as portas SMTP 25/465/587).
   - ESTADOS DISTINTOS: cada solicitação devolve um EnvioEmail cujo `estado` é
     DESATIVADO (sem transporte configurado), SEM_DESTINATARIO, AGENDADO (thread
     iniciada, resultado ainda desconhecido), ACEITO_PELO_PROVEDOR (a API/SMTP
@@ -33,7 +35,7 @@ Modos de envio:
     empresa, reenvio de ativação, teste), que precisam mostrar na hora se o
     provedor aceitou a mensagem. Cada tentativa tem prazo (NEXO_EMAIL_TIMEOUT).
 
-Threads em andamento quando o processo encerra (deploy/reinício no Render) são
+Threads em andamento quando o processo encerra (deploy ou reinício) são
 aguardadas por um prazo limitado; as que não terminarem são registradas em log
 como interrompidas (resultado desconhecido). Uma linha estado=AGENDADO sem a
 linha final da mesma correlação também indica envio interrompido.
@@ -45,6 +47,7 @@ import atexit
 import http.client
 import json
 import logging
+import os
 import re
 import secrets
 import smtplib
@@ -61,10 +64,10 @@ from enum import StrEnum
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from flask import current_app, render_template
+from flask import current_app, has_app_context, render_template
 from flask_mail import Message
 
-from extensions import mail
+from extensions import ValorSMTPInvalido, mail
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,9 @@ TIPOS = {
     "boas_vindas": "ativação de conta (boas-vindas)",
     "recuperacao_senha": "recuperação de senha",
     "senha_alterada": "aviso de senha alterada",
+    "email_alterado": "aviso de e-mail de acesso alterado",
+    "novo_chamado": "cópia de novo chamado",
+    "lembrete_renovacao": "lembrete de renovação do contrato",
     "analise_publicada": "análise publicada",
     "ticket_resolvido": "chamado resolvido",
     "teste": "teste de configuração",
@@ -100,7 +106,10 @@ TRANSPORTES = {
 
 # Categoria -> explicação segura (sem valores de configuração) para o admin.
 CATEGORIAS = {
-    "transporte_desativado": "o serviço de e-mail não está configurado (defina BREVO_API_KEY no ambiente do servidor)",
+    "transporte_desativado": ("o serviço de e-mail não está configurado (defina MAIL_USERNAME e MAIL_PASSWORD, ou "
+                              "BREVO_API_KEY, no .env ou nas variáveis de ambiente do servidor)"),
+    "smtp_nao_usado": "o envio está usando a API do Brevo, então a conexão SMTP não é usada",
+    "smtp_suprimido": "o envio está suprimido neste ambiente (MAIL_SUPPRESS_SEND)",
     "envio_bloqueado": ("a configuração atual impede qualquer envio (veja as pendências que impedem o envio no "
                         "Diagnóstico de e-mail)"),
     "sem_destinatario": "não há destinatário elegível para esta mensagem",
@@ -138,11 +147,16 @@ CATEGORIAS = {
     "smtp_autenticacao": "o servidor SMTP recusou as credenciais (MAIL_USERNAME/MAIL_PASSWORD)",
     "smtp_senha_de_app": ("o Gmail exige uma senha de app: ative a verificação em duas etapas na conta Google "
                           "e use em MAIL_PASSWORD a senha de app de 16 caracteres, não a senha da conta"),
-    "smtp_remetente_recusado": "o servidor SMTP recusou o remetente",
+    "smtp_login_temporario": ("o servidor SMTP recusou o login temporariamente (muitas tentativas ou falha no servidor), sem dizer que a senha esteja errada; tente novamente mais tarde"),
+    "smtp_remetente_recusado": ("o servidor SMTP recusou o remetente (MAIL_DEFAULT_SENDER precisa ser a conta de "
+                                "MAIL_USERNAME ou um alias autorizado por ela)"),
     "smtp_destinatario_recusado": "o servidor SMTP recusou o destinatário",
-    "smtp_conexao": ("não foi possível conectar ao servidor SMTP (o Render Free bloqueia as portas SMTP: "
-                     "use a API do Brevo)"),
+    "smtp_conexao": ("não foi possível conectar ao servidor SMTP (confira MAIL_SERVER e MAIL_PORT; a rede ou a "
+                     "hospedagem também pode bloquear as portas SMTP)"),
+    "smtp_nao_suportado": ("o servidor SMTP não oferece STARTTLS ou login nesta porta (confira MAIL_PORT, "
+                           "MAIL_USE_TLS e MAIL_USE_SSL)"),
     "smtp_erro": "o servidor SMTP devolveu um erro",
+    "smtp_valor_invalido": ("MAIL_SERVER, MAIL_USERNAME ou MAIL_PASSWORD contém um caractere que o SMTP não aceita (letra acentuada, espaço especial colado junto da senha ou ponto duplicado no servidor): redigite o valor e reinicie o servidor"),
     "interrompido": "o processo do servidor encerrou antes do fim do envio (resultado desconhecido)",
     "desconhecida": "erro inesperado no envio",
 }
@@ -189,8 +203,11 @@ _DOMINIOS_GRATUITOS = frozenset({
 
 
 def email_valido(valor) -> bool:
-    """Validação estrutural mínima (o provedor faz a definitiva)."""
-    return isinstance(valor, str) and 3 <= len(valor) <= 254 and bool(_EMAIL.fullmatch(valor))
+    """Validação estrutural mínima (o provedor faz a definitiva). Só ASCII imprimível: caractere
+    invisível imita outro endereço, e acento na parte local impede o envio por SMTP. O navegador
+    já envia domínio com acento convertido para xn--."""
+    return (isinstance(valor, str) and 3 <= len(valor) <= 254 and valor.isascii() and valor.isprintable()
+            and bool(_EMAIL.fullmatch(valor)))
 
 
 # ---------------------------------------------------------------------
@@ -201,6 +218,12 @@ _HISTORICO = deque(maxlen=50)
 _EM_ANDAMENTO = {}            # correlação -> (thread, envio, prazo em s)
 _ULTIMO_ALERTA = {}           # categoria -> time.monotonic() do último aviso ao admin
 _INTERVALO_ALERTA = 30 * 60   # no máximo um aviso por categoria a cada 30 min
+_CONEXAO_SMTP = None          # último desfecho da conexão SMTP (Diagnóstico de e-mail)
+# Falhas que dizem algo sobre a conexão ou as credenciais; recusar um destinatário,
+# por exemplo, acontece com a conexão funcionando e não muda esse status.
+_CATEGORIAS_CONEXAO_SMTP = frozenset({"smtp_conexao", "smtp_autenticacao", "smtp_senha_de_app",
+                                      "smtp_login_temporario", "smtp_nao_suportado", "tls",
+                                      "smtp_valor_invalido"})
 
 
 class EnvioEmail:
@@ -300,7 +323,7 @@ def _escrever_log(envio: EnvioEmail, estado: EstadoEnvio, nivel: int = logging.I
 def historico_envios(limite: int = 50) -> list[EnvioEmail]:
     """Solicitações recentes deste processo, da mais nova para a mais antiga.
 
-    Memória do processo: reinício (deploy, hibernação do Render Free) zera a
+    Memória do processo: reinício (deploy ou hibernação do servidor) zera a
     lista. Os logs e os avisos no sininho dos administradores permanecem.
     """
     with _TRAVA:
@@ -368,6 +391,19 @@ def formato_chave_brevo(chave) -> str | None:
     return "desconhecido"
 
 
+def _seguranca_smtp(config) -> str:
+    """Modo real da conexão: com os dois ligados, vale o SSL (extensions.py)."""
+    if config.get("MAIL_USE_SSL"):
+        return "SSL direto (MAIL_USE_SSL)"
+    if config.get("MAIL_USE_TLS"):
+        return "STARTTLS (MAIL_USE_TLS)"
+    return "Sem criptografia"
+
+
+def _origem_local(origem: str) -> bool:
+    return (urlsplit(origem).hostname or "") in ("127.0.0.1", "localhost")
+
+
 def diagnostico_configuracao(config=None) -> dict:
     """Situação da configuração de e-mail para o admin e o log de inicialização.
 
@@ -382,22 +418,31 @@ def diagnostico_configuracao(config=None) -> dict:
     url_api = config.get("BREVO_API_URL") or ""
     partes_url = urlsplit(url_api) if url_api else None
     origem = config.get("PUBLIC_URL") or ""
-    render = bool(config.get("NEXO_RENDER"))
+    hospedagem_bloqueia = bool(config.get("HOSPEDAGEM_BLOQUEIA_SMTP"))
+    faltando_smtp = [nome for nome in ("MAIL_USERNAME", "MAIL_PASSWORD") if not config.get(nome)]
+    arquivo_env = config.get("ARQUIVO_ENV")
     pendencias = []
 
     def pendencia(texto, bloqueante):
         pendencias.append({"texto": texto, "bloqueante": bloqueante})
 
     if transporte is None:
-        pendencia("Envio de e-mail DESATIVADO: nenhuma credencial configurada. No Render, defina "
-                  "BREVO_API_KEY (chave de API do Brevo).", True)
-    elif transporte == "smtp" and render and not config.get("SMTP_PERMITIDO"):
-        pendencia("O transporte ativo é SMTP, mas o Render Free bloqueia as portas SMTP 25/465/587: "
-                  "defina BREVO_API_KEY para usar a API HTTPS do Brevo. Em instância paga do Render "
-                  "(que libera 465/587), defina NEXO_SMTP_PERMITIDO=1.", True)
-    elif transporte == "smtp" and render:
-        pendencia("SMTP liberado no Render por NEXO_SMTP_PERMITIDO=1: confirme que a instância é paga "
-                  "(o plano Free bloqueia as portas SMTP).", False)
+        sem_valor = f" ({' e '.join(faltando_smtp)} sem valor)" if faltando_smtp else ""
+        if hospedagem_bloqueia and not config.get("SMTP_PERMITIDO"):
+            pendencia("Envio de e-mail DESATIVADO: credenciais de e-mail não configuradas. Defina BREVO_API_KEY "
+                      "(API do Brevo) nas variáveis de ambiente do servidor: a hospedagem atual bloqueia as "
+                      "portas SMTP.", True)
+        else:
+            pendencia(f"Envio de e-mail DESATIVADO: credenciais de e-mail não configuradas{sem_valor}. Defina "
+                      "MAIL_USERNAME e MAIL_PASSWORD (SMTP) ou BREVO_API_KEY (API do Brevo) no .env ou nas "
+                      "variáveis de ambiente do servidor.", True)
+    elif transporte == "smtp" and hospedagem_bloqueia and not config.get("SMTP_PERMITIDO"):
+        pendencia("O transporte ativo é SMTP, mas a hospedagem atual bloqueia as portas SMTP 25/465/587: "
+                  "defina BREVO_API_KEY para usar a API HTTPS do Brevo. Se a hospedagem liberar as portas "
+                  "465/587, defina NEXO_SMTP_PERMITIDO=1.", True)
+    elif transporte == "smtp" and hospedagem_bloqueia:
+        pendencia("SMTP liberado por NEXO_SMTP_PERMITIDO=1: confirme que a hospedagem permite as portas SMTP.",
+                  False)
     if transporte == "brevo":
         if chave == "smtp":
             pendencia("BREVO_API_KEY parece ser uma chave SMTP (prefixo xsmtpsib-). Gere uma chave de "
@@ -409,7 +454,8 @@ def diagnostico_configuracao(config=None) -> dict:
             pendencia("BREVO_API_URL precisa ser uma URL https (padrão: "
                       "https://api.brevo.com/v3/smtp/email).", True)
     if transporte == "brevo" and config.get("MAIL_USERNAME") and config.get("MAIL_PASSWORD"):
-        if remetente.lower() == str(config.get("MAIL_USERNAME")).strip().lower():
+        if (not config.get("MAIL_DEFAULT_SENDER_EXPLICITO")
+                and remetente.lower() == str(config.get("MAIL_USERNAME")).strip().lower()):
             pendencia("Com BREVO_API_KEY, o envio sai pela API HTTPS do Brevo e MAIL_PASSWORD fica sem uso; "
                       "MAIL_USERNAME continua sendo o remetente. Antes de remover MAIL_USERNAME, defina "
                       "MAIL_DEFAULT_SENDER com o remetente verificado no Brevo.", False)
@@ -420,13 +466,16 @@ def diagnostico_configuracao(config=None) -> dict:
         porta = config.get("MAIL_PORT")
         if config.get("MAIL_USE_SSL") and config.get("MAIL_USE_TLS"):
             pendencia("MAIL_USE_SSL e MAIL_USE_TLS estão ligados ao mesmo tempo: vale o SSL direto e o "
-                      "STARTTLS é ignorado. Para o Gmail, use SSL na porta 465 ou STARTTLS na 587.", False)
+                      "STARTTLS é ignorado. Use SSL na porta 465 ou STARTTLS na 587.", False)
+        if not config.get("MAIL_USE_SSL") and not config.get("MAIL_USE_TLS"):
+            pendencia("MAIL_USE_TLS e MAIL_USE_SSL estão desligados: a senha e as mensagens trafegam sem "
+                      "criptografia. Ligue MAIL_USE_TLS na 587 ou MAIL_USE_SSL na 465.", False)
         if config.get("MAIL_USE_SSL") and porta == 587:
-            pendencia("MAIL_USE_SSL está ligado com a porta 587, que usa STARTTLS: para o Gmail, use "
-                      "MAIL_USE_TLS=true e MAIL_USE_SSL=false na 587, ou MAIL_USE_SSL=true na 465.", False)
+            pendencia("MAIL_USE_SSL está ligado com a porta 587, que usa STARTTLS: use MAIL_USE_TLS=true e "
+                      "MAIL_USE_SSL=false na 587, ou MAIL_USE_SSL=true na 465.", False)
         elif config.get("MAIL_USE_TLS") and not config.get("MAIL_USE_SSL") and porta == 465:
-            pendencia("A porta 465 usa SSL direto: para o Gmail, defina MAIL_USE_SSL=true na 465, ou use a "
-                      "porta 587 com STARTTLS (MAIL_USE_TLS=true).", False)
+            pendencia("A porta 465 usa SSL direto: defina MAIL_USE_SSL=true na 465, ou use a porta 587 com "
+                      "STARTTLS (MAIL_USE_TLS=true).", False)
     if transporte is not None and not email_valido(remetente):
         pendencia("MAIL_DEFAULT_SENDER não contém um endereço de e-mail válido.", True)
     elif transporte is not None and dominio in _DOMINIOS_GRATUITOS:
@@ -435,16 +484,25 @@ def diagnostico_configuracao(config=None) -> dict:
                       "gratuitos e troca o endereço do remetente por um endereço de domínio do próprio "
                       "Brevo, o que favorece a caixa de spam. Recomenda-se um domínio próprio autenticado "
                       "(SPF/DKIM/DMARC). Confira também se o remetente está verificado no Brevo.", False)
-        else:
+        elif remetente.lower() != str(config.get("MAIL_USERNAME") or "").strip().lower():
             pendencia(f"O remetente usa um domínio gratuito ({dominio}): pelo SMTP ele precisa ser a própria "
                       "conta autenticada em MAIL_USERNAME (ou um alias verificado dela).", False)
-    if origem and not origem.startswith("https://") and render:
-        pendencia("A origem pública dos links (NEXO_PUBLIC_URL/RENDER_EXTERNAL_URL) não usa https.", False)
+    if origem and not origem.startswith("https://") and not _origem_local(origem):
+        pendencia("A origem pública dos links (NEXO_PUBLIC_URL) não usa https.", False)
     return {
         "ativo": transporte is not None,
         "transporte": transporte,
         "transporte_rotulo": TRANSPORTES.get(transporte, "Nenhum (envio desativado)"),
         "smtp_servidor": (f"{config.get('MAIL_SERVER')}:{config.get('MAIL_PORT')}" if transporte == "smtp" else None),
+        # O que o .env define para o SMTP, mesmo sem envio ativo: é o que falta preencher.
+        "smtp_endereco": f"{config.get('MAIL_SERVER')}:{config.get('MAIL_PORT')}",
+        "smtp_seguranca": _seguranca_smtp(config),
+        "smtp_usuario": config.get("MAIL_USERNAME") or None,
+        "smtp_senha_definida": bool(config.get("MAIL_PASSWORD")),
+        "smtp_faltando": faltando_smtp,
+        "ambiente_local": not config.get("PRODUCAO_HTTP"),
+        "arquivo_env": arquivo_env,
+        "arquivo_env_existe": bool(arquivo_env and os.path.isfile(arquivo_env)),
         "remetente_nome": nome or None,
         "remetente_email": remetente or None,
         "remetente_valido": email_valido(remetente),
@@ -455,7 +513,8 @@ def diagnostico_configuracao(config=None) -> dict:
         "api_https": bool(partes_url and partes_url.scheme == "https"),
         "origem_publica": origem or None,
         "origem_https": origem.startswith("https://"),
-        "render": render,
+        "origem_local": bool(origem) and _origem_local(origem),
+        "hospedagem_bloqueia_smtp": hospedagem_bloqueia,
         "prazo_segundos": config.get("EMAIL_TIMEOUT_SEGUNDOS", 15.0),
         "alerta_admin": bool(config.get("EMAIL_ALERTA_ADMIN")),
         "pendencias": pendencias,
@@ -465,27 +524,28 @@ def diagnostico_configuracao(config=None) -> dict:
 
 
 def registrar_diagnostico_inicial(app) -> None:
-    """Uma linha de resumo na inicialização; pendências viram WARNING em produção."""
+    """Na inicialização: uma linha neutra em ambiente local; em produção, o resumo
+    da configuração e as pendências como WARNING."""
     try:
         diag = diagnostico_configuracao(app.config)
     except Exception as erro:  # noqa: BLE001 — diagnóstico nunca impede a subida
         logger.warning("Diagnóstico da configuração de e-mail indisponível (%s).", type(erro).__name__)
         return
+    if not app.config.get("PRODUCAO_HTTP"):
+        # O detalhe (pendências, servidor, remetente) fica no Diagnóstico de e-mail.
+        logger.debug("Transporte local ativo" if diag["ativo"] else "Credenciais de e-mail não configuradas no .env")
+        return
     remetente = diag["remetente_email"] or ""
-    producao = bool(app.config.get("PRODUCAO_HTTP"))
-    # Fora de produção só em DEBUG: em testes e no servidor local não polui o log.
-    logger.log(
-        logging.INFO if producao else logging.DEBUG,
+    logger.info(
         "Configuração de e-mail | transporte=%s remetente_dominio=%s chave_formato=%s origem_https=%s "
         "prazo_s=%s pendencias=%s",
         diag["transporte"] or "desativado", remetente.rsplit("@", 1)[-1] if "@" in remetente else "-",
         diag["chave_formato"] or "-", "sim" if diag["origem_https"] else "nao", diag["prazo_segundos"],
         len(diag["pendencias"]),
     )
-    nivel = logging.WARNING if producao else logging.DEBUG
     for pendencia in diag["pendencias"]:
-        logger.log(nivel, "Configuração de e-mail com pendência%s: %s",
-                   " (bloqueia o envio)" if pendencia["bloqueante"] else "", pendencia["texto"])
+        logger.warning("Configuração de e-mail com pendência%s: %s",
+                       " (bloqueia o envio)" if pendencia["bloqueante"] else "", pendencia["texto"])
 
 
 # ---------------------------------------------------------------------
@@ -684,6 +744,9 @@ def _enviar_brevo(app, msg) -> str | None:
         "subject": msg.subject,
         "htmlContent": msg.html,
     }
+    copia_oculta = getattr(msg, "bcc", None)
+    if copia_oculta:
+        payload["bcc"] = [{"email": d} for d in copia_oculta]
     texto = getattr(msg, "body", None)
     if isinstance(texto, str) and texto:
         payload["textContent"] = texto
@@ -870,6 +933,11 @@ def _codigo_smtp(erro) -> str | None:
     return f"{codigo}/{estendido}" if estendido else str(codigo)
 
 
+def _servidor_gmail() -> bool:
+    servidor = str(current_app.config.get("MAIL_SERVER") or "").lower() if has_app_context() else ""
+    return servidor.endswith(("gmail.com", "googlemail.com"))
+
+
 def _categoria_excecao(erro: BaseException, transporte: str) -> tuple[str, bool]:
     """(categoria, falhou antes de enviar a requisição) para erros não HTTP."""
     if isinstance(erro, urllib.error.URLError) and not isinstance(erro, urllib.error.HTTPError):
@@ -881,20 +949,27 @@ def _categoria_excecao(erro: BaseException, transporte: str) -> tuple[str, bool]
             # "tempo_esgotado" fica para o prazo na leitura da resposta.
             return "conexao_sem_resposta", True
         return "rede", True
+    if isinstance(erro, ValorSMTPInvalido):
+        return "smtp_valor_invalido", False
     if isinstance(erro, smtplib.SMTPException):
         codigo_smtp, estendido = _resposta_smtp(erro)
         if estendido == "5.4.5":
             # Gmail: cota diária de envio da conta excedida.
             return "limite_excedido", False
-        if isinstance(erro, smtplib.SMTPAuthenticationError) and (codigo_smtp, estendido) == (534, "5.7.9"):
-            # Gmail: a conta exige senha de app (verificação em duas etapas).
-            return "smtp_senha_de_app", False
+        if isinstance(erro, smtplib.SMTPAuthenticationError):
+            if (codigo_smtp, estendido) == (534, "5.7.9") and _servidor_gmail():
+                # Gmail: a conta exige senha de app (verificação em duas etapas).
+                return "smtp_senha_de_app", False
+            if isinstance(codigo_smtp, int) and 400 <= codigo_smtp <= 499:
+                return "smtp_login_temporario", False
     if isinstance(erro, smtplib.SMTPAuthenticationError):
         return "smtp_autenticacao", False
     if isinstance(erro, smtplib.SMTPSenderRefused):
         return "smtp_remetente_recusado", False
     if isinstance(erro, smtplib.SMTPRecipientsRefused):
         return "smtp_destinatario_recusado", False
+    if isinstance(erro, smtplib.SMTPNotSupportedError):
+        return "smtp_nao_suportado", False
     if isinstance(erro, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected)):
         return "smtp_conexao", False
     if isinstance(erro, smtplib.SMTPException):
@@ -917,6 +992,16 @@ def _categoria_excecao(erro: BaseException, transporte: str) -> tuple[str, bool]
     return "desconhecida", False
 
 
+def _conferir_copia_oculta(msg) -> None:
+    """Caixa da cópia oculta recusada pelo servidor: o destinatário visível foi aceito e o
+    smtplib não levanta exceção, mas a mensagem não chegou a quem deveria."""
+    ocultos = {d.lower() for d in getattr(msg, "bcc", None) or ()}
+    recusados = {endereco: resposta for endereco, resposta in (getattr(msg, "nexo_recusados", None) or {}).items()
+                 if endereco.lower() in ocultos}
+    if recusados:
+        raise smtplib.SMTPRecipientsRefused(recusados)
+
+
 def _executar_envio(app, msg, envio: EnvioEmail) -> EnvioEmail:
     """Entrega a mensagem ao transporte e registra o desfecho (uma linha de log)."""
     transporte = envio.transporte or ("brevo" if app.config.get("BREVO_API_KEY") else "smtp")
@@ -929,6 +1014,7 @@ def _executar_envio(app, msg, envio: EnvioEmail) -> EnvioEmail:
             else:
                 mail.send(msg)
                 id_mensagem = None
+                _conferir_copia_oculta(msg)
         except Exception as e:  # noqa: BLE001 — nenhuma falha de e-mail sobe para o fluxo
             categoria = getattr(e, "nexo_categoria", None)
             if categoria is not None:
@@ -958,12 +1044,79 @@ def _executar_envio(app, msg, envio: EnvioEmail) -> EnvioEmail:
                     _codigo_smtp(e) if transporte == "smtp" else None),
                 erro=type(e).__name__,
             )
+            # Falhou antes da transação de envio: foi a conexão ou o login que não
+            # se completou, seja qual for a categoria (STARTTLS 454, sem mecanismo...).
+            if transporte == "smtp" and (categoria in _CATEGORIAS_CONEXAO_SMTP
+                                         or getattr(msg, "nexo_fase_smtp", None) != "envio"):
+                _anotar_conexao_smtp(False, "envio", categoria=categoria, codigo=_codigo_smtp(e),
+                                     erro=type(e).__name__)
             _alertar_administradores(app, envio)
             return envio
         # Aceitação do SMTP/API não confirma a entrega ao destinatário.
         _registrar(envio, EstadoEnvio.ACEITO_PELO_PROVEDOR, categoria=None,
                    id_mensagem=id_mensagem if isinstance(id_mensagem, str) else None)
+        if transporte == "smtp":
+            _anotar_conexao_smtp(True, "envio")
         return envio
+
+
+def _anotar_conexao_smtp(ok: bool, origem: str, *, categoria=None, codigo=None, erro=None) -> dict:
+    """Guarda o último desfecho: nunca usuário, senha ou o texto da resposta do servidor."""
+    global _CONEXAO_SMTP
+    resultado = {
+        "ok": ok, "origem": origem, "categoria": categoria,
+        "descricao": CATEGORIAS.get(categoria) if categoria else None,
+        "codigo": codigo, "erro": erro, "instante": datetime.now(timezone.utc),
+    }
+    with _TRAVA:
+        _CONEXAO_SMTP = resultado
+    return resultado
+
+
+def ultima_conexao_smtp() -> dict | None:
+    """Último desfecho conhecido neste processo; None enquanto não houver tentativa.
+
+    Memória do processo, como o histórico: o .env só é lido na inicialização, então
+    reiniciar para aplicar uma credencial nova também descarta o status antigo.
+    """
+    with _TRAVA:
+        return _CONEXAO_SMTP
+
+
+def verificar_conexao_smtp() -> dict:
+    """Abre a conexão SMTP configurada (conexão, TLS e login) sem enviar mensagem.
+
+    Sob demanda do admin (Diagnóstico de e-mail): confirma as credenciais do .env
+    antes de qualquer envio real. Devolve {"ok", "origem", "categoria", "descricao",
+    "codigo", "erro", "instante"} e nunca levanta. Fora do SMTP (Brevo em uso, envio
+    desativado ou suprimido) não há conexão a testar nem status a guardar.
+    """
+    app = current_app._get_current_object()
+    transporte = transporte_configurado(app.config)
+    nao_testada = None
+    if transporte is None:
+        nao_testada = "transporte_desativado"
+    elif transporte != "smtp":
+        nao_testada = "smtp_nao_usado"
+    elif app.extensions["mail"].suppress:
+        nao_testada = "smtp_suprimido"
+    if nao_testada:
+        return {"ok": False, "origem": "verificacao", "categoria": nao_testada,
+                "descricao": CATEGORIAS[nao_testada], "codigo": None, "erro": None,
+                "instante": datetime.now(timezone.utc)}
+    try:
+        # A saída do bloco faz o QUIT; nada entra na transação de envio (MAIL/RCPT/DATA).
+        with mail.connect():
+            pass
+    except Exception as e:  # noqa: BLE001 — a verificação nunca derruba a página do admin
+        categoria = _categoria_excecao(e, "smtp")[0]
+        resultado = _anotar_conexao_smtp(False, "verificacao", categoria=categoria, codigo=_codigo_smtp(e),
+                                         erro=type(e).__name__)
+        logger.warning("Verificação da conexão SMTP com falha | categoria=%s codigo=%s erro=%s",
+                       categoria, resultado["codigo"] or "-", resultado["erro"])
+        return resultado
+    logger.info("Verificação da conexão SMTP concluída | ok=True")
+    return _anotar_conexao_smtp(True, "verificacao")
 
 
 def _enviar_async(app, msg, envio: EnvioEmail | None = None) -> None:
@@ -1016,7 +1169,8 @@ def _alertar_administradores(app, envio: EnvioEmail) -> None:
     try:
         # Gravado em thread própria: nunca dentro da requisição (sem segunda
         # sessão de banco presa à transação dela nem tempo extra na resposta).
-        threading.Thread(target=_gravar_aviso_admins, args=(app, texto, chave), daemon=True).start()
+        # Sem daemon: num comando de terminal, o processo espera o aviso ser gravado antes de sair.
+        threading.Thread(target=_gravar_aviso_admins, args=(app, texto, chave), daemon=False).start()
     except Exception as erro:  # noqa: BLE001
         _liberar_janela_alerta(chave)
         logger.warning("Aviso de falha de e-mail aos administradores indisponível (%s).", type(erro).__name__)
@@ -1044,11 +1198,13 @@ def _gravar_aviso_admins(app, texto: str, chave) -> None:
 # API principal
 # ---------------------------------------------------------------------
 def enviar_email(destinatarios, assunto: str, template: str, *, tipo: str = "generico",
-                 referencia: str | None = None, sincrono: bool = False, **ctx) -> EnvioEmail:
+                 referencia: str | None = None, sincrono: bool = False, copia_oculta=None,
+                 **ctx) -> EnvioEmail:
     """Renderiza templates/emails/<template> e entrega ao transporte.
 
     Assíncrono por padrão (thread); `sincrono=True` espera o desfecho (ações do
-    admin). Devolve o EnvioEmail com o estado operacional — nunca levanta.
+    admin). `copia_oculta` entra só no envelope, nunca nos cabeçalhos da mensagem.
+    Devolve o EnvioEmail com o estado operacional — nunca levanta.
     """
     envio = EnvioEmail(tipo, referencia=referencia)
     try:
@@ -1075,8 +1231,11 @@ def enviar_email(destinatarios, assunto: str, template: str, *, tipo: str = "gen
         html = render_template(f"emails/{template}", **ctx)
         # Assunto em uma linha: nada de CR/LF (injeção de cabeçalho) nem texto sem fim.
         assunto = " ".join(str(assunto).split())[:200]
-        msg = Message(subject=assunto, recipients=validos, html=html, body=_texto_simples(html),
-                      extra_headers={"X-Nexo-Correlacao": envio.correlacao})
+        # Repetir um destinatário visível na cópia oculta só duplicaria a mensagem.
+        visiveis = {d.lower() for d in validos}
+        ocultos = [d for d in _destinatarios_validos(copia_oculta) if d.lower() not in visiveis]
+        msg = Message(subject=assunto, recipients=validos, bcc=ocultos or None, html=html,
+                      body=_texto_simples(html), extra_headers={"X-Nexo-Correlacao": envio.correlacao})
         msg.nexo_envio = envio
         if not email_valido(_remetente(msg.sender)[1]):
             # Pendência de configuração (bloqueante no Diagnóstico de e-mail).
@@ -1116,8 +1275,9 @@ def enviar_email(destinatarios, assunto: str, template: str, *, tipo: str = "gen
 
 def envio_disponivel(config) -> bool:
     """Há transporte e nenhuma pendência que impeça qualquer envio (chave SMTP
-    no lugar da de API, URL sem https, remetente inválido, SMTP no Render sem
-    NEXO_SMTP_PERMITIDO...). Só lê a configuração: nunca depende de conta."""
+    no lugar da de API, URL sem https, remetente inválido, SMTP em hospedagem que
+    bloqueia as portas, sem NEXO_SMTP_PERMITIDO...). Só lê a configuração: nunca
+    depende de conta."""
     return transporte_configurado(config) is not None and not diagnostico_configuracao(config)["bloqueante"]
 
 
@@ -1168,6 +1328,20 @@ def _emails_da_empresa(empresa) -> list[str]:
     return emails
 
 
+def _sem_aviso_desligado(enderecos: list[str], empresa, aviso: str) -> list[str]:
+    """Tira os endereços de quem desligou este aviso em Configurações. O contato da
+    empresa sai só se for o e-mail de uma dessas pessoas: ele não pertence a um usuário.
+    """
+    from preferencias_usuario import ids_com_aviso_desligado
+    usuarios = list(getattr(empresa, "usuarios", []) or [])
+    desligados = ids_com_aviso_desligado(aviso, [getattr(u, "id_usuario", None) for u in usuarios])
+    if not desligados:
+        return enderecos
+    fora = {u.email.strip().lower() for u in usuarios
+            if u.id_usuario in desligados and isinstance(u.email, str)}
+    return [e for e in enderecos if e.strip().lower() not in fora]
+
+
 def _empresa_com_acesso(id_empresa) -> bool:
     """Mesmo critério do sininho (notificar_clientes_empresa): fora da lixeira,
     não cancelada e, no regime contratual, com contrato vigente."""
@@ -1215,7 +1389,8 @@ def email_ticket_resolvido(chamado, link_url: str) -> EnvioEmail:
     try:
         # Conta encerrada no regime contratual não recebe o aviso (o link do
         # e-mail levaria a um portal que ela não pode mais abrir).
-        destinatarios = (_emails_da_empresa(chamado.empresa)
+        destinatarios = (_sem_aviso_desligado(_emails_da_empresa(chamado.empresa), chamado.empresa,
+                                              "alerta_chamado")
                          if _empresa_com_acesso(chamado.id_empresa) else [])
         assunto = f"✅ Chamado resolvido: “{chamado.assunto}”"
     except Exception as erro:  # noqa: BLE001
@@ -1231,8 +1406,9 @@ def _referencia_usuario(usuario) -> str:
     return f"usuario:{getattr(usuario, 'id_usuario', '-')}"
 
 
-def email_recuperacao_senha(usuario, link_url: str) -> EnvioEmail:
-    """E-mail com o link seguro (15 min) para redefinição de senha."""
+def email_recuperacao_senha(usuario, link_url: str, *, pela_equipe: bool = False) -> EnvioEmail:
+    """E-mail com o link seguro (15 min) para redefinição de senha. `pela_equipe`: a correção
+    do e-mail pelo admin já invalidou a senha, e o texto comum seria falso."""
     try:
         destinatario = usuario.email
     except Exception as erro:  # noqa: BLE001
@@ -1242,13 +1418,13 @@ def email_recuperacao_senha(usuario, link_url: str) -> EnvioEmail:
         "🔐 Redefinição de senha — NEXO",
         "recuperacao_senha.html",
         tipo="recuperacao_senha", referencia=_referencia_usuario(usuario),
-        usuario=usuario, link_url=link_url,
+        usuario=usuario, link_url=link_url, pela_equipe=pela_equipe,
     )
 
 
-def email_senha_alterada(usuario, link_recuperacao: str) -> EnvioEmail:
-    """Aviso ao dono da conta após uma redefinição de senha por token: quem não
-    a fez descobre o comprometimento e tem o caminho para retomar o acesso.
+def email_senha_alterada(usuario, link_recuperacao: str, *, nas_configuracoes: bool = False) -> EnvioEmail:
+    """Aviso ao dono da conta após uma troca de senha, por token ou nas Configurações:
+    quem não a fez descobre o comprometimento e tem o caminho para retomar o acesso.
     Não carrega token nem senha."""
     try:
         destinatario = usuario.email
@@ -1259,7 +1435,79 @@ def email_senha_alterada(usuario, link_recuperacao: str) -> EnvioEmail:
         "🔐 A senha da sua conta NEXO foi alterada",
         "senha_alterada.html",
         tipo="senha_alterada", referencia=_referencia_usuario(usuario),
-        usuario=usuario, link_recuperacao=link_recuperacao,
+        usuario=usuario, link_recuperacao=link_recuperacao, nas_configuracoes=nas_configuracoes,
+    )
+
+
+def _mascarar_email(endereco: str) -> str:
+    local, _, dominio = endereco.partition("@")
+    return f"{local[:2]}***@{dominio}"
+
+
+def email_email_alterado(usuario, email_anterior: str, email_novo: str, *, pela_equipe: bool = False,
+                         convite: bool = False) -> EnvioEmail:
+    """Aviso ao endereço ANTIGO depois da troca do e-mail de acesso: é ele que descobre
+    uma troca que o dono não fez. Mostra o novo endereço mascarado, sem token nem link
+    de senha (a recuperação já passou a ir para o novo endereço). `convite`: a conta nunca
+    foi ativada, e quem lê pode ser um estranho (cadastro digitado errado): sem o endereço
+    novo e sem oferecer o acesso."""
+    return enviar_email(
+        email_anterior,
+        "🔐 O convite de acesso ao NEXO foi cancelado" if convite else "🔐 O e-mail de acesso da sua conta NEXO foi alterado",
+        "email_alterado.html",
+        tipo="email_alterado", referencia=_referencia_usuario(usuario),
+        usuario=usuario, email_novo_mascarado=None if convite else _mascarar_email(email_novo),
+        pela_equipe=pela_equipe, convite=convite,
+    )
+
+
+def email_novo_chamado(chamado, copia_oculta: str, rotulo_categoria: str, link_url: str) -> EnvioEmail:
+    """Cópia de um novo chamado para a caixa escolhida pelo admin em Configurações.
+
+    Só existe quando há caixa configurada. Vai em cópia oculta, com o remetente do
+    NEXO como destinatário visível: o provedor exige um e o endereço da caixa não
+    aparece nos cabeçalhos."""
+    referencia = f"empresa:{getattr(chamado, 'id_empresa', '-')}"
+    try:
+        remetente = _remetente(current_app.extensions["mail"].default_sender)[1]
+        empresa = chamado.empresa
+        nome_empresa = empresa.nome_fantasia or empresa.razao_social
+        mensagem = chamado.mensagens[0].mensagem if chamado.mensagens else ""
+    except Exception as erro:  # noqa: BLE001
+        return _preparo_falhou("novo_chamado", referencia, erro)
+    if transporte_configurado(current_app.config) is not None and not email_valido(remetente):
+        # O remetente aqui também é o destinatário visível: registrar o problema verdadeiro.
+        envio = EnvioEmail("novo_chamado", referencia=referencia)
+        _registrar(envio, EstadoEnvio.FALHA_NO_ENVIO, nivel=logging.WARNING, categoria="remetente_invalido")
+        return envio
+    if not email_valido(copia_oculta):
+        # Sem a caixa, a mensagem iria só para o próprio remetente.
+        envio = EnvioEmail("novo_chamado", referencia=referencia)
+        _registrar(envio, EstadoEnvio.FALHA_NO_ENVIO, nivel=logging.WARNING, categoria="destinatario_invalido")
+        return envio
+    return enviar_email(
+        remetente,
+        f"🎫 Novo chamado #{chamado.id_chamado} — {nome_empresa}",
+        "novo_chamado.html",
+        tipo="novo_chamado", referencia=referencia, copia_oculta=copia_oculta,
+        chamado=chamado, nome_empresa=nome_empresa, rotulo_categoria=rotulo_categoria,
+        mensagem=mensagem, link_url=link_url,
+    )
+
+
+def email_lembrete_renovacao(usuario, data_fim, link_url: str) -> EnvioEmail:
+    """Lembrete de que a vigência do contrato está terminando. Síncrono: sai de um
+    comando de terminal, cujo processo terminaria antes de uma thread de envio."""
+    try:
+        destinatario = usuario.email
+    except Exception as erro:  # noqa: BLE001
+        return _preparo_falhou("lembrete_renovacao", None, erro)
+    return enviar_email(
+        destinatario,
+        f"📅 Seu contrato NEXO vence em {data_fim:%d/%m/%Y}",
+        "lembrete_renovacao.html",
+        tipo="lembrete_renovacao", referencia=_referencia_usuario(usuario), sincrono=True,
+        usuario=usuario, data_fim=data_fim, link_url=link_url,
     )
 
 

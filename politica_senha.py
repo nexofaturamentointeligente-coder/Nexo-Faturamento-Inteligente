@@ -17,6 +17,9 @@ Regras (mensagens em pt-BR, prontas para o flash):
      consultados por k-anonimato (só 5 caracteres hex do SHA-1 saem do
      servidor; a senha nunca). Indisponibilidade do serviço NÃO bloqueia a
      troca: a verificação é registrada como não realizada.
+
+A troca feita nas Configurações da conta soma uma regra de composição (letras
+e números), a pedido do dono do produto; ela não reduz o comprimento mínimo.
 """
 
 import hashlib
@@ -63,7 +66,7 @@ def _sequencial(senha: str) -> bool:
     texto = senha.casefold()
     if len(set(texto)) <= 2:
         return True
-    if texto.isdigit():  # 1234567890 12… / 0987654321 09… (sequências cíclicas)
+    if texto.isdecimal():  # 1234567890 12… / 0987654321 09… (sequências cíclicas)
         passos = {(int(b) - int(a)) % 10 for a, b in zip(texto, texto[1:])}
         return passos in ({1}, {9})
     passos = {ord(b) - ord(a) for a, b in zip(texto, texto[1:])}
@@ -105,7 +108,8 @@ def senha_vazada(senha: str, *, timeout: float = 3.0):
     return False
 
 
-def validar_nova_senha(nova: str, confirma: str, *, email=None, nome=None, hash_atual=None):
+def validar_nova_senha(nova: str, confirma: str, *, email=None, nome=None, hash_atual=None,
+                       exigir_letras_e_numeros: bool = False):
     """Mensagem de erro (pt-BR) ou None quando a senha é aceitável."""
     if not isinstance(nova, str) or len(nova) < TAMANHO_MINIMO:
         return f"A senha deve ter ao menos {TAMANHO_MINIMO} caracteres (uma frase curta é uma boa escolha)."
@@ -113,6 +117,8 @@ def validar_nova_senha(nova: str, confirma: str, *, email=None, nome=None, hash_
         return f"A senha deve ter no máximo {TAMANHO_MAXIMO} caracteres."
     if nova != confirma:
         return "As senhas não coincidem."
+    if exigir_letras_e_numeros and not (any(c.isalpha() for c in nova) and any(c.isdigit() for c in nova)):
+        return "A senha deve ter letras e números."
     if _raiz(nova) in SENHAS_COMUNS or nova.casefold() in SENHAS_COMUNS or _sequencial(nova):
         return "Essa senha é muito comum ou previsível. Escolha outra, de preferência uma frase."
     baixo = nova.casefold()

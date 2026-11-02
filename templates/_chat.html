@@ -16,7 +16,7 @@
         <div class="chat-bubble {{ 'b-admin' if is_admin else 'b-cliente' }}">
             <div class="chat-meta">
                 <span class="chat-author">
-                    {% if is_admin %}<i class="bi bi-headset"></i> Consultor NEXO{% else %}<i class="bi bi-person"></i> {{ msg.remetente.nome if msg.remetente else 'Cliente' }}{% endif %}
+                    {% if is_admin %}<i class="bi bi-headset"></i> Consultor NEXO{% else %}<i class="bi bi-person"></i> {% if msg.remetente %}{{ msg.remetente.nome }} · Cliente{% else %}Cliente{% endif %}{% endif %}
                 </span>
                 <span class="chat-time">{{ m.horario(msg.data_envio) }}</span>
             </div>

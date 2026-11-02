@@ -98,7 +98,8 @@ TABELAS_CONTRATUAIS = (
 )
 # Tabelas NÃO contratuais que a cadeia de migrações cria depois de 81287c74387a
 # (a migração até "head" também as traz; nascem vazias como as contratuais).
-TABELAS_POSTERIORES = ("sessao_autenticada",)
+TABELAS_POSTERIORES = ("sessao_autenticada", "preferencia_usuario", "documento_legal", "aceite_documento",
+                       "configuracao_sistema")
 TABELAS_POR_EMPRESA = ("regime_contratual", "contrato", "cobertura_paga", "evento_contratual")
 UTC = timezone.utc
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")

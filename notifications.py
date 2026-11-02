@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from extensions import db, socketio
 from horario import horario_brasilia, iso_utc
 from models import Empresa, Notificacao, Usuario
+from preferencias_usuario import ids_com_aviso_desligado
 from session_security import (
     condicoes_empresa_acessivel, hashes_sessoes_ativas, impressao_sessao, usuario_pode_acessar,
 )
@@ -45,6 +46,11 @@ def classificar_notificacao(texto: str) -> dict:
     # motivo em "indisponível".
     if t.startswith("falha no envio de e-mail"):
         return {"tipo": "aberto", "rotulo": "Aberto"}
+    # Avisos que não são de chamado: "Aberto" se leria como dívida ou como chamado em aberto.
+    if t.startswith("seu contrato com a nexo vence"):
+        return {"tipo": "aberto", "rotulo": "Contrato"}
+    if t.startswith("a caixa que recebe a cópia"):
+        return {"tipo": "aberto", "rotulo": "Aviso"}
     if "resolvid" in t:
         return {"tipo": "resolvido", "rotulo": "Resolvido"}
     if ("dispon" in t) or ("relatório estrat" in t) or ("relatorio estrat" in t) or ("processamos" in t):
@@ -183,8 +189,12 @@ def notificar_admins(texto: str, link_destino: str | None = None) -> int:
     return len(admins)
 
 
-def notificar_clientes_empresa(id_empresa: int, texto: str, link_destino: str | None = None) -> int:
-    """Notifica os CLIENTE ativos de empresa fora da lixeira e não cancelada."""
+def notificar_clientes_empresa(id_empresa: int, texto: str, link_destino: str | None = None, *,
+                               aviso: str | None = None) -> int:
+    """Notifica os CLIENTE ativos de empresa fora da lixeira e não cancelada.
+
+    `aviso` nomeia a preferência que governa esta notificação (ex.: "alerta_chamado"):
+    quem a desligou em Configurações fica de fora."""
     clientes = db.session.execute(
         select(Usuario.id_usuario).where(
             Usuario.role == "CLIENTE",
@@ -196,6 +206,9 @@ def notificar_clientes_empresa(id_empresa: int, texto: str, link_destino: str | 
             ).exists(),
         )
     ).scalars().all()
+    if aviso is not None:
+        desligados = ids_com_aviso_desligado(aviso, clientes)
+        clientes = [uid for uid in clientes if uid not in desligados]
     for uid in clientes:
         criar_notificacao(uid, texto, link_destino)
     return len(clientes)

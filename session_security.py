@@ -225,11 +225,13 @@ def _revogar(sessao_db, condicoes, motivo: str) -> int:
     """
     if motivo not in MOTIVOS_REVOGACAO_SESSAO:
         raise ValueError("Motivo de revogação inválido.")
-    with sessao_db.no_autoflush:
-        linhas = sessao_db.scalars(select(SessaoAutenticada).where(
-            SessaoAutenticada.revogada_em.is_(None), *condicoes,
-        ).execution_options(populate_existing=True)).all()
     agora = agora_utc()
+    with sessao_db.no_autoflush:
+        # Linha vencida já não autoriza nada e sai pela limpeza de registrar_sessao. Marcá-la
+        # aqui faria o flush atualizar uma linha que essa limpeza acabou de apagar.
+        linhas = sessao_db.scalars(select(SessaoAutenticada).where(
+            SessaoAutenticada.revogada_em.is_(None), SessaoAutenticada.expira_em > agora, *condicoes,
+        ).execution_options(populate_existing=True)).all()
     for linha in linhas:
         linha.revogada_em = agora
         linha.motivo_revogacao = motivo

@@ -33,25 +33,25 @@
     <div><h2><i class="bi {{ s.icone }} text-purple"></i> {{ s.titulo }} <span class="count-pill">{{ lista|length }}</span></h2></div>
 </div>
 {% if lista %}
-<div class="table-wrap mb-4">
-    <div class="table-responsive-x">
-        <table class="nexo-table">
-            <thead><tr><th>#</th><th>Empresa</th><th>Assunto</th><th>Categoria</th><th>Última atividade</th><th class="text-end">Ação</th></tr></thead>
-            <tbody>
-                {% for c in lista %}
-                <tr>
-                    <td class="t-mono t-mut">{{ c.id_chamado }}</td>
-                    <td class="t-strong">{{ c.empresa.nome_fantasia or c.empresa.razao_social }}</td>
-                    <td>{{ c.assunto }}</td>
-                    <td>{{ m.badge_categoria(c.categoria, categorias) }}</td>
-                    {# Última atividade: a última mensagem ou mudança de status; sem nenhuma, a abertura. #}
-                    <td class="t-mut t-mono">{{ m.horario(c.data_atualizacao or c.data_abertura) }}</td>
-                    <td class="text-end"><a href="{{ url_for('admin.ticket_detalhe', id_chamado=c.id_chamado) }}" class="btn-ghost btn-sm-x"><i class="bi bi-chat-dots"></i> Responder</a></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<div class="ticket-cards mb-4">
+    {% for c in lista %}
+    <article class="nexo-card ticket-card">
+        <div class="ticket-card-topo">
+            <span class="t-mono t-mut">#{{ c.id_chamado }}</span>
+            {% if c.prioridade == 'ALTA' %}<span class="nexo-badge b-red">Prioridade alta</span>{% endif %}
+            {{ m.badge_categoria(c.categoria, categorias) }}
+        </div>
+        <h3 class="ticket-card-assunto">{{ c.assunto }}</h3>
+        <p class="ticket-card-empresa">{{ c.empresa.nome_fantasia or c.empresa.razao_social }}</p>
+        {# A primeira mensagem descreve o pedido; o histórico inteiro fica na tela do chamado. #}
+        <p class="ticket-card-mensagem">{{ c.mensagens[0].mensagem if c.mensagens else 'Sem mensagens.' }}</p>
+        <div class="ticket-card-rodape">
+            {# Última atividade: a última mensagem ou mudança de status; sem nenhuma, a abertura. #}
+            <small class="t-mut">{{ m.horario(c.data_atualizacao or c.data_abertura) }}</small>
+            <a href="{{ url_for('admin.ticket_detalhe', id_chamado=c.id_chamado) }}" class="btn-ghost btn-sm-x" aria-label="Ver chamado {{ c.id_chamado }}"><i class="bi bi-chat-dots" aria-hidden="true"></i> Ver chamado</a>
+        </div>
+    </article>
+    {% endfor %}
 </div>
 {% else %}
 <p class="texto-solto mb-4" style="font-size:0.9rem;">Nenhum chamado neste status.</p>

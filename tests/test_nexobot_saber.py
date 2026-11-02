@@ -109,6 +109,12 @@ OBRIGATORIAS = [
     ("Quem cadastra minha empresa?", {"nexo.primeiros_passos.como_recebo_acesso", "nexo.empresas.cadastro"}, "equipe NEXO"),
     ("Como faço o primeiro login?", {"nexo.primeiros_passos.primeiro_login"}, "senha"),
     ("Como recupero a senha?", {"nexo.acesso.recuperar_senha"}, "Esqueci minha senha"),
+    ("Como troco minha senha?", {"nexo.acesso.recuperar_senha"}, "Configurações"),
+    ("O que posso fazer em Configurações?", {"nexo.acesso.configuracoes"}, "exporta os dados"),
+    ("Como exporto meus dados?", {"nexo.acesso.configuracoes"}, "Configurações"),
+    ("Como peço a exclusão dos meus dados?", {"nexo.acesso.configuracoes"}, "Configurações"),
+    ("Onde vejo a política de privacidade?", {"nexo.acesso.configuracoes"}, "Configurações"),
+    ("Como mudo o telefone de contato?", {"nexo.acesso.configuracoes"}, "Configurações"),
     ("Por que minha sessão expirou?", {"nexo.acesso.sessao_expirada"}, "navegador"),
     # Compras e vendas
     ("Como envio meus arquivos?", {"nexo.uploads.como_enviar"}, "Enviar Relatórios"),
@@ -361,6 +367,14 @@ class ConversaTests(ConhecimentoBase):
             self.assertEqual(set(chip), {"rotulo", "mensagem"})
             self.assertLessEqual(len(chip["rotulo"]), 60)
         self.assertLessEqual(len(d["sugestoes"]), 4)
+
+    def test_dados_da_propria_conta_apontam_para_configuracoes(self):
+        for pedido in ("trocar meu telefone", "alterar meu email", "mudar meu nome"):
+            with self.subTest(pedido=pedido):
+                d = self.responder(pedido)
+                self.assertEqual(d["destino"], "configuracoes", d)
+                self.assertIn("Configurações", d["resposta"])
+        self.assertEqual(self.responder("Altere meu cadastro.")["destino"], "suporte")
 
     def test_conhecer_nao_e_poder_executar(self):
         explica = self.responder("Como o administrador cria uma análise?")

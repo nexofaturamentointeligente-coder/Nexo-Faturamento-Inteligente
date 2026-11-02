@@ -72,17 +72,19 @@ REGISTROS = (
         categoria="Acesso e senha",
         tipo="procedimento",
         resumo=(
-            "Na tela de login, clique em “Esqueci minha senha” e informe o seu e-mail: você recebe um link de "
-            "redefinição válido por 15 minutos. Esse é também o caminho para trocar a senha, pois o portal do "
-            "cliente não tem página de perfil."
+            "Logado, você troca a senha em Configurações, informando a senha atual. Se esqueceu a senha, clique "
+            "em “Esqueci minha senha” na tela de login e informe o seu e-mail: você recebe um link de "
+            "redefinição válido por 15 minutos."
         ),
         explicacao=(
             "Por segurança a resposta é sempre a mesma, exista ou não o e-mail no cadastro. O link só pode ser "
-            "usado uma vez e dentro do prazo. A nova senha precisa ter ao menos 12 caracteres. Depois de "
-            "redefinir, as sessões antigas deixam de valer e é preciso entrar de novo."
+            "usado uma vez e dentro do prazo. A nova senha precisa ter ao menos 12 caracteres; em Configurações, "
+            "também letras e números. Depois de redefinir pelo link, as sessões antigas deixam de valer e é "
+            "preciso entrar de novo; em Configurações, só as outras sessões são encerradas."
         ),
         passos=(
-            "Na tela de login, clique em “Esqueci minha senha”.",
+            "Logado: abra Configurações, informe a senha atual e a nova em Alterar senha.",
+            "Esqueceu a senha: saia do portal e, na tela de login, clique em “Esqueci minha senha”.",
             "Informe o e-mail cadastrado e envie.",
             "Abra o e-mail recebido e clique no link (válido por 15 minutos).",
             "Digite a nova senha (mínimo de 12 caracteres), confirme e salve.",
@@ -92,10 +94,49 @@ REGISTROS = (
             "Como recupero minha senha?", "Esqueci minha senha.", "Como troco minha senha?",
             "Como altero a senha de acesso?", "Quero mudar minha senha.", "Como redefinir a senha?",
             "Perdi minha senha, e agora?", "Não lembro a senha.", "Onde troco a senha?",
+            "Qual a política de senha?", "Como funciona a política de senha?",
         ),
         termos="senha recuperar esqueci trocar alterar mudar redefinir resetar link email 15 minutos",
         relacionados=("nexo.acesso.redefinir_link", "nexo.acesso.sessao_expirada"),
+        destino="configuracoes",
         fontes=("blueprints/auth.py", "templates/auth/recuperar_senha.html", "emails.py"),
+    ),
+    registro(
+        id="nexo.acesso.configuracoes",
+        titulo="O que posso fazer em Configurações?",
+        categoria="Acesso e senha",
+        tipo="procedimento",
+        resumo=(
+            "Em Configurações, no menu lateral, você altera o nome do responsável, o telefone de contato, a senha "
+            "e o e-mail de acesso, exporta os dados da empresa, lê e aceita os Termos de Uso e a Política de "
+            "Privacidade, pede a exclusão dos dados e escolhe os avisos que quer receber."
+        ),
+        explicacao=(
+            "Trocar a senha ou o e-mail exige a senha atual e encerra as outras sessões abertas. A exportação gera "
+            "um arquivo .json com os dados da conta e da empresa, os contratos, os chamados que você abriu e as "
+            "análises concluídas do seu Histórico, enquanto o prazo de exportação estiver aberto. Solicitar a exclusão abre um chamado para a equipe NEXO: nada é apagado "
+            "automaticamente.\n\n"
+            "Os lembretes de renovação e os alertas de chamados podem ser desligados; os avisos de segurança, não. "
+            "O tema claro ou escuro é escolhido no botão do topo da tela e fica guardado no navegador."
+        ),
+        perguntas=(
+            "Onde ficam as configurações?", "Como altero meu nome?", "Como troco meu e-mail de acesso?",
+            "Como mudo o telefone de contato?", "Como mudo meu telefone?",
+            "Como exporto meus dados?", "Como baixo os dados da minha empresa?", "Como peço a exclusão dos meus dados?",
+            "Como funciona a LGPD no portal?", "Onde vejo os termos de uso?", "Onde vejo a política de privacidade?",
+            "Como desligo os lembretes de renovação?", "Como mudo para o tema claro?", "Tem modo escuro?",
+            "Como desligo os alertas de chamados?", "Como desligo os avisos de chamados?", "Como desligo as notificações?",
+            "O que eu posso alterar sozinho?", "Como mudo meu celular?",
+            "O que vem na exportação de dados?",
+            "Como pego uma cópia dos meus dados?", "Onde vejo os termos e a política?", "Como aceito a política?",
+            "Preciso aceitar a política?", "Qual a versão da política que eu aceitei?",
+            "Como desativo os lembretes?", "Como paro de receber os lembretes?",
+        ),
+        termos="configuracoes perfil conta nome telefone celular email exportar exportacao baixar copia dados lgpd exclusao termos "
+               "privacidade politica aceite aceitar tema claro escuro avisos preferencias lembretes renovacao",
+        relacionados=("nexo.acesso.recuperar_senha", "nexo.empresas.alterar_cadastro"),
+        destino="configuracoes",
+        fontes=("blueprints/cliente.py", "configuracoes_conta.py", "templates/cliente/configuracoes.html"),
     ),
     registro(
         id="nexo.acesso.redefinir_link",
@@ -129,8 +170,9 @@ REGISTROS = (
         explicacao=(
             "O portal não mantém login automático: a sessão vive só enquanto o navegador está aberto e é "
             "vinculada à inicialização atual do servidor, por isso um reinício (inclusive quando o serviço "
-            "hiberna por inatividade) exige novo login. Trocar a senha ou ter a conta desativada também encerra "
-            "as sessões abertas. Se o NexoBot avisar que a sessão expirou, atualize a página e entre novamente."
+            "hiberna por inatividade) exige novo login. Trocar a senha em Configurações encerra as outras sessões "
+            "abertas; redefinir pelo link ou ter a conta desativada encerra todas. Se o NexoBot avisar que a sessão "
+            "expirou, atualize a página e entre novamente."
         ),
         perguntas=(
             "Por que fui deslogado?", "Minha sessão caiu.", "O portal pediu login de novo.",

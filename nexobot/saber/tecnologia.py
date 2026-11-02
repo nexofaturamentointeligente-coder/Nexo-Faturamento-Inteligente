@@ -213,8 +213,8 @@ REGISTROS = (
             "contra envio de formulários forjados e limite de tentativas de login."
         ),
         explicacao=(
-            "Links de senha valem por 15 minutos e são de uso único. Trocar a senha ou ter a conta desativada "
-            "encerra as sessões abertas. O NexoBot não armazena a conversa no servidor, não tem acesso aos "
+            "Links de senha valem por 15 minutos e são de uso único. Trocar a senha em Configurações encerra as "
+            "outras sessões abertas; redefinir pelo link ou ter a conta desativada encerra todas. O NexoBot não armazena a conversa no servidor, não tem acesso aos "
             "seus números e só abre páginas de uma lista fixa do portal."
         ),
         perguntas=(
