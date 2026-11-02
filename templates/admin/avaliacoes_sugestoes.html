@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "admin/_avaliacoes_abas.html" as painel %}
+
+{% block title %}Sugestões de Melhoria — Avaliações dos Clientes — NEXO Admin{% endblock %}
+{% block page_title %}Avaliações dos Clientes{% endblock %}
+{% block extra_css %}<link href="{{ url_for('static', filename='css/avaliacoes-admin.css') }}" rel="stylesheet">{% endblock %}
+
+{% block content %}
+{% set total_geral = contagens.values()|sum %}
+<div class="page-head">
+    <div>
+        <h1>Avaliações dos Clientes</h1>
+        <p class="sub">O que os clientes pediram para melhorar e o acompanhamento da equipe.</p>
+    </div>
+</div>
+
+{{ painel.abas('sugestoes', total_avaliacoes, total_geral) }}
+
+<div class="aviso-contrato is-alerta" role="note">
+    <i class="bi bi-lock-fill" aria-hidden="true"></i>
+    <div>
+        <strong>Conteúdo privado.</strong>
+        <p>As sugestões são lidas só pela equipe NEXO e nunca são publicadas, mesmo quando a avaliação de origem está aprovada.</p>
+    </div>
+</div>
+
+{{ painel.atalhos('avaliacoes.admin_sugestoes', contagens, rotulos_status, filtros.status, 'Atalhos por status do acompanhamento') }}
+
+{% if total_geral %}
+{# ---------------- Filtros (GET: não grava nada; "Filtrar" volta à primeira página) ---------------- #}
+<div class="nexo-card mb-3">
+    <div class="nexo-card-body">
+        <form method="GET" action="{{ url_for('avaliacoes.admin_sugestoes') }}" class="aval-filtros" aria-label="Filtrar sugestões">
+            <div class="aval-campo">
+                <label class="nexo-label" for="filtroStatus">Status</label>
+                <select class="form-select" id="filtroStatus" name="status">
+                    <option value="">Todos</option>
+                    {% for valor in status_opcoes %}
+                    <option value="{{ valor }}"{% if valor == filtros.status %} selected{% endif %}>{{ rotulos_status[valor] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {{ painel.campo_empresa(empresas, filtros.id_empresa) }}
+            {{ painel.campos_periodo(filtros.inicio, filtros.fim, 'Atualizada') }}
+            <div class="aval-filtros-acoes">
+                <a href="{{ url_for('avaliacoes.admin_sugestoes') }}" class="btn-ghost"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Limpar</a>
+                <button type="submit" class="btn-nexo"><i class="bi bi-funnel" aria-hidden="true"></i> Filtrar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if pagina.itens %}
+{# Depois de salvar, o administrador volta para esta mesma lista filtrada (full_path termina em "?" sem filtros). #}
+{% set voltar_para = request.full_path.rstrip('?') %}
+<div class="table-wrap">
+    <div class="nexo-card-head">
+        <div>
+            <h2>Sugestões recebidas</h2>
+            <p class="sub">{{ pagina.total }}{% if pagina.total != total_geral %} de {{ total_geral }}{% endif %} sugest{{ 'ão' if total_geral == 1 else 'ões' }} · Página {{ pagina.pagina }} de {{ pagina.paginas }}</p>
+        </div>
+    </div>
+    <div class="table-responsive-x">
+        <table class="nexo-table aval-tabela">
+            <thead>
+                <tr>
+                    <th>Cliente</th>
+                    <th>Empresa</th>
+                    <th>Sugestão</th>
+                    <th>Data</th>
+                    <th class="aval-th-quebra">Avaliação de origem</th>
+                    <th>Status</th>
+                    <th class="text-end col-acao">Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in pagina.itens %}
+                {% set a = s.avaliacao %}
+                <tr>
+                    <td class="aval-col-cliente">
+                        <span class="t-strong">{{ a.usuario.nome }}</span>
+                        <span class="aval-email selectable">{{ m.email(a.usuario.email) }}</span>
+                    </td>
+                    <td class="aval-col-empresa">{{ a.empresa.nome_fantasia or a.empresa.razao_social }}</td>
+                    <td class="aval-col-texto aval-col-sugestao"><span class="aval-texto selectable">{{ s.texto }}</span></td>
+                    <td class="aval-col-data">{{ m.horario(s.data_atualizacao) }}</td>
+                    <td>
+                        <a href="{{ url_for('avaliacoes.admin_detalhe', id_avaliacao=a.id_avaliacao) }}" class="aval-origem">
+                            {{ m.estrelas(a.nota) }}
+                            <span>Avaliação nº {{ a.id_avaliacao }}</span>
+                        </a>
+                    </td>
+                    <td>{{ m.badge_sugestao(s.status_acompanhamento) }}</td>
+                    <td class="col-acao">
+                        <form method="POST" action="{{ url_for('avaliacoes.admin_sugestao_status', id_sugestao=s.id_sugestao) }}" class="aval-status-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="voltar_para" value="{{ voltar_para }}">
+                            <label class="visually-hidden" for="statusSugestao{{ s.id_sugestao }}">Status da sugestão de {{ a.usuario.nome }}</label>
+                            <select class="form-select" id="statusSugestao{{ s.id_sugestao }}" name="status">
+                                {% for valor in status_opcoes %}
+                                <option value="{{ valor }}"{% if valor == s.status_acompanhamento %} selected{% endif %}>{{ rotulos_status[valor] }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn-ghost btn-sm-x" aria-label="Salvar status da sugestão de {{ a.usuario.nome }}"><i class="bi bi-check2" aria-hidden="true"></i> Salvar</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ painel.paginacao(pagina, 'avaliacoes.admin_sugestoes', filtros.como_parametros(), 'Paginação das sugestões') }}
+</div>
+{% elif total_geral %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-funnel" aria-hidden="true"></i></div>
+        <h3>Nenhuma sugestão com estes filtros.</h3>
+        <p>Há {{ total_geral }} sugest{{ 'ão' if total_geral == 1 else 'ões' }} na base, fora do que está filtrado agora.</p>
+        <a href="{{ url_for('avaliacoes.admin_sugestoes') }}" class="btn-ghost mt-3"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Limpar filtros</a>
+    </div>
+</div>
+{% else %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-lightbulb" aria-hidden="true"></i></div>
+        <h3>Nenhuma sugestão ainda.</h3>
+        <p>O campo de sugestão é opcional na avaliação. Quando um cliente preencher, ela aparece aqui.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

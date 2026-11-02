@@ -1,0 +1,103 @@
+/* ===================================================================
+   NEXO — Painel administrativo de avaliações (COM-002)
+   -------------------------------------------------------------------
+   Só o que os componentes de nexo.css não cobrem: abas, paginação, grade
+   de filtros, colunas das tabelas, texto do cliente e bloco privado.
+   Carregado apenas por templates/admin/avaliac*.html.
+   =================================================================== */
+
+/* ---- Abas: links comuns; o fundo de vidro garante o contraste sobre a paisagem ---- */
+.aval-abas {
+  display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 100%;
+  margin-bottom: 14px; padding: 4px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  backdrop-filter: var(--glass-blur-sm);
+  border: 1px solid var(--glass-border); border-radius: 16px;
+}
+.aval-aba {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px;
+  border: 1px solid transparent; border-radius: 12px;
+  color: #c9c5e2; font-size: 0.9rem; font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.aval-aba:hover { background: rgba(168, 85, 247, 0.14); color: #fff; }
+.aval-aba[aria-current="page"] { background: var(--primary-soft); border-color: rgba(168, 85, 247, 0.4); color: #fff; }
+.aval-aba:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
+
+/* ---- Atalhos por status: as pílulas da Curva ABC, como links e com alvo de 44 px ---- */
+.aval-atalho { min-height: 44px; }
+.aval-atalho:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
+
+/* ---- Filtros: cada campo com ao menos 150 px e dividindo a sobra; no celular estreito, um por linha ---- */
+.aval-filtros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; }
+.aval-campo { flex: 1 1 150px; min-width: 0; }
+.aval-filtros-acoes { flex: 1 1 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+/* ---- Tabelas: larguras mínimas das colunas de texto; a palavra sem espaço quebra na célula ---- */
+.nexo-table.aval-tabela tbody td { vertical-align: top; }
+.nexo-table .aval-th-quebra { white-space: normal; }
+.nexo-table .aval-col-cliente { min-width: 150px; overflow-wrap: anywhere; }
+.nexo-table .aval-col-empresa { min-width: 100px; overflow-wrap: anywhere; }
+.nexo-table .aval-col-texto { min-width: 170px; overflow-wrap: anywhere; }
+.nexo-table .aval-col-sugestao { min-width: 220px; }
+.nexo-table .aval-col-justificativa { min-width: 200px; overflow-wrap: anywhere; }
+.nexo-table .aval-col-data { color: var(--text-muted); font-size: 0.84rem; }
+.aval-email { display: block; color: var(--text-muted); font-size: 0.8rem; }
+.aval-data-extra { display: block; margin-top: 3px; color: var(--text-dim); font-size: 0.76rem; font-weight: 400; }
+.aval-origem { display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; min-height: 44px; font-size: 0.8rem; color: #c4a0fb; white-space: nowrap; }
+.aval-origem:hover { color: #d8c2fd; text-decoration: underline; }
+.aval-origem:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; border-radius: 6px; }
+
+/* Status da sugestão: campo e botão empilhados na coluna; lado a lado no cartão. */
+.aval-status-form { display: flex; flex-direction: column; gap: 6px; width: 150px; margin-left: auto; }
+.aval-status-form .form-select { min-height: 44px; padding-top: 8px; padding-bottom: 8px; font-size: 0.86rem; }
+.aval-status-form .btn-ghost { justify-content: center; min-height: 44px; }
+.table-responsive-x.em-cartoes .aval-status-form { flex-direction: row; width: auto; margin-left: 0; }
+.table-responsive-x.em-cartoes .aval-status-form .form-select { flex: 1 1 auto; width: auto; min-width: 0; }
+.table-responsive-x.em-cartoes .aval-status-form .btn-ghost { flex: 0 0 auto; }
+.table-responsive-x.em-cartoes .aval-tabela .btn-sm-x { min-height: 44px; }
+
+/* ---- Paginação: rodapé da tabela; quebra em linhas, nunca rola a página ---- */
+.aval-paginacao { padding: 12px 16px; border-top: 1px solid var(--glass-border); }
+.aval-paginas { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.aval-pagina { justify-content: center; min-width: 44px; min-height: 44px; font-family: var(--font-mono); font-size: 0.86rem; }
+.app-shell .aval-pagina[aria-current="page"] { background: var(--primary-soft); border-color: rgba(168, 85, 247, 0.5); color: #fff; font-weight: 700; }
+.aval-reticencias { padding: 0 4px; color: var(--text-muted); }
+
+/* ---- Detalhe: nota, texto do cliente (com as quebras de linha dele) e ações ---- */
+.aval-head { flex-wrap: wrap; }
+.aval-selos { display: flex; flex-wrap: wrap; gap: 6px; }
+.aval-nota { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; }
+.aval-nota .nota-estrelas { font-size: 1.15rem; }
+.aval-texto { white-space: pre-line; overflow-wrap: anywhere; }
+.aval-comentario {
+  margin: 0; padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.04); border-left: 3px solid var(--primary); border-radius: 0 12px 12px 0;
+  font-size: 1rem; line-height: 1.65;
+  white-space: pre-line; overflow-wrap: anywhere;
+}
+.aval-subtitulo { margin: 20px 0 10px; color: #c4a0fb; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.aval-acao-texto { margin: 0 0 10px; color: var(--text-muted); font-size: 0.86rem; }
+.aval-acao + .aval-acao { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--glass-border); }
+.aviso-contrato.aval-aviso { margin-bottom: 12px; padding: 12px 14px; border-radius: 14px; }
+
+/* ---- Sugestão privada: moldura tracejada âmbar, distinta do conteúdo público ---- */
+.nexo-card.aval-privado { background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--glass-strong); border: 1px dashed rgba(245, 158, 11, 0.5); }
+.aval-privado-icone { color: var(--warning); }
+.aval-privado-rodape { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.aval-privado-status { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 0.86rem; }
+
+/* ---- Toque (gaveta do menu em diante): os botões compactos também têm 44 px ---- */
+@media (max-width: 991.98px) {
+  .aval-privado-rodape .btn-sm-x, .aval-tabela .btn-sm-x { min-height: 44px; }
+}
+@media (max-width: 575.98px) {
+  .aval-abas { display: flex; }
+  .aval-aba { flex: 1 1 auto; justify-content: center; }
+  .aval-filtros-acoes > * { flex: 1 1 auto; justify-content: center; }
+  .aval-paginacao { padding: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aval-aba { transition: none; }
+}

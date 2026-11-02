@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "admin/_avaliacoes_abas.html" as painel %}
+
+{% block title %}Avaliações dos Clientes — NEXO Admin{% endblock %}
+{% block page_title %}Avaliações dos Clientes{% endblock %}
+{% block extra_css %}<link href="{{ url_for('static', filename='css/avaliacoes-admin.css') }}" rel="stylesheet">{% endblock %}
+
+{% block content %}
+{% set total_geral = contagens.values()|sum %}
+<div class="page-head">
+    <div>
+        <h1>Avaliações dos Clientes</h1>
+        <p class="sub">Só vai para a landing o que tem aprovação da equipe e autorização do cliente.</p>
+    </div>
+</div>
+
+{{ painel.abas('avaliacoes', total_geral, total_sugestoes) }}
+{{ painel.atalhos('avaliacoes.admin_lista', contagens, rotulos_status, filtros.status, 'Atalhos por status da moderação') }}
+
+{% if total_geral %}
+{# ---------------- Filtros (GET: não grava nada; "Filtrar" volta à primeira página) ---------------- #}
+<div class="nexo-card mb-3">
+    <div class="nexo-card-body">
+        <form method="GET" action="{{ url_for('avaliacoes.admin_lista') }}" class="aval-filtros" aria-label="Filtrar avaliações">
+            <div class="aval-campo">
+                <label class="nexo-label" for="filtroStatus">Status</label>
+                <select class="form-select" id="filtroStatus" name="status">
+                    <option value="">Todos</option>
+                    {% for valor, rotulo in rotulos_status.items() %}
+                    <option value="{{ valor }}"{% if valor == filtros.status %} selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="aval-campo">
+                <label class="nexo-label" for="filtroEstrelas">Estrelas</label>
+                <select class="form-select" id="filtroEstrelas" name="estrelas">
+                    <option value="">Todas</option>
+                    {% for nota in range(5, 0, -1) %}
+                    <option value="{{ nota }}"{% if nota == filtros.estrelas %} selected{% endif %}>{{ nota }} estrela{{ 's' if nota > 1 }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {{ painel.campo_empresa(empresas, filtros.id_empresa) }}
+            {{ painel.campos_periodo(filtros.inicio, filtros.fim, 'Enviada') }}
+            <div class="aval-campo">
+                <label class="nexo-label" for="filtroOrdem">Ordenar por</label>
+                <select class="form-select" id="filtroOrdem" name="ordem">
+                    {% for valor, rotulo in ordens.items() %}
+                    <option value="{{ valor }}"{% if valor == filtros.ordem %} selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="aval-filtros-acoes">
+                <a href="{{ url_for('avaliacoes.admin_lista') }}" class="btn-ghost"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Limpar</a>
+                <button type="submit" class="btn-nexo"><i class="bi bi-funnel" aria-hidden="true"></i> Filtrar</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if pagina.itens %}
+<div class="table-wrap">
+    <div class="nexo-card-head">
+        <div>
+            <h2>Avaliações recebidas</h2>
+            <p class="sub">{{ pagina.total }}{% if pagina.total != total_geral %} de {{ total_geral }}{% endif %} avaliaç{{ 'ão' if total_geral == 1 else 'ões' }} · Página {{ pagina.pagina }} de {{ pagina.paginas }}</p>
+        </div>
+    </div>
+    <div class="table-responsive-x">
+        <table class="nexo-table aval-tabela">
+            <thead>
+                <tr>
+                    <th>Cliente</th>
+                    <th>Empresa</th>
+                    <th>Estrelas</th>
+                    <th>Comentário</th>
+                    <th>Envio</th>
+                    <th>Status</th>
+                    <th>Autorização</th>
+                    <th class="text-end col-acao">Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in pagina.itens %}
+                <tr>
+                    <td class="aval-col-cliente">
+                        <span class="t-strong">{{ a.usuario.nome }}</span>
+                        <span class="aval-email selectable">{{ m.email(a.usuario.email) }}</span>
+                    </td>
+                    <td class="aval-col-empresa">{{ a.empresa.nome_fantasia or a.empresa.razao_social }}</td>
+                    <td class="t-nowrap">{{ m.estrelas(a.nota) }}</td>
+                    {# Só um trecho: o comentário inteiro é lido na tela de moderação. #}
+                    <td class="aval-col-texto"><span class="selectable">{{ a.comentario_publico|truncate(140, False, '…', 0) }}</span></td>
+                    <td class="aval-col-data">
+                        {{ m.horario(a.data_criacao) }}
+                        {% if a.data_atualizacao != a.data_criacao %}<small class="aval-data-extra">Atualizada em {{ m.horario(a.data_atualizacao) }}</small>{% endif %}
+                    </td>
+                    <td>{{ m.badge_moderacao(a.status_moderacao) }}</td>
+                    <td>{{ m.badge_publicacao(a) }}</td>
+                    <td class="text-end col-acao">
+                        <div class="acoes">
+                            <a href="{{ url_for('avaliacoes.admin_detalhe', id_avaliacao=a.id_avaliacao) }}" class="btn-ghost btn-sm-x" aria-label="Moderar avaliação de {{ a.usuario.nome }}"><i class="bi bi-shield-check" aria-hidden="true"></i> Moderar</a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ painel.paginacao(pagina, 'avaliacoes.admin_lista', filtros.como_parametros(), 'Paginação das avaliações') }}
+</div>
+{% elif total_geral %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-funnel" aria-hidden="true"></i></div>
+        <h3>Nenhuma avaliação com estes filtros.</h3>
+        <p>Há {{ total_geral }} avaliaç{{ 'ão' if total_geral == 1 else 'ões' }} na base, fora do que está filtrado agora.</p>
+        <a href="{{ url_for('avaliacoes.admin_lista') }}" class="btn-ghost mt-3"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Limpar filtros</a>
+    </div>
+</div>
+{% else %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-star" aria-hidden="true"></i></div>
+        <h3>Nenhuma avaliação ainda.</h3>
+        <p>Quando um cliente enviar uma avaliação, ela aparece aqui aguardando moderação.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

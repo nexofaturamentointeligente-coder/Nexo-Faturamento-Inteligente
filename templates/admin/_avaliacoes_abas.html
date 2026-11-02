@@ -1,0 +1,77 @@
+{# ===================================================================
+   NEXO — Peças comuns às duas abas de Avaliações dos Clientes (COM-002)
+   Importar com:  {% import "admin/_avaliacoes_abas.html" as painel %}
+   Como em _macros.html, nada aqui lê o contexto: tudo chega por argumento.
+   =================================================================== #}
+
+{# ---- Abas: cada uma é uma página própria (links comuns, com o total de cada) ---- #}
+{%- macro abas(ativa, total_avaliacoes, total_sugestoes) -%}
+<nav class="aval-abas" aria-label="Seções das avaliações dos clientes">
+    <a class="aval-aba" href="{{ url_for('avaliacoes.admin_lista') }}"{% if ativa == 'avaliacoes' %} aria-current="page"{% endif %}>Avaliações <span class="count-pill">{{ total_avaliacoes }}</span></a>
+    <a class="aval-aba" href="{{ url_for('avaliacoes.admin_sugestoes') }}"{% if ativa == 'sugestoes' %} aria-current="page"{% endif %}>Sugestões de Melhoria <span class="count-pill">{{ total_sugestoes }}</span></a>
+</nav>
+{%- endmacro -%}
+
+{# ---- Atalhos por status. As contagens são da base inteira, por isso cada atalho
+      abre o status sem os demais filtros: o número exibido é o que a lista mostra. ---- #}
+{%- macro atalhos(endpoint, contagens, rotulos, ativo, descricao) -%}
+<nav class="abc-filter aval-atalhos" aria-label="{{ descricao }}">
+    <a class="abc-pill aval-atalho{{ ' is-active' if not ativo }}" href="{{ url_for(endpoint) }}"{% if not ativo %} aria-current="true"{% endif %}>Todas <span class="abc-pill-count">{{ contagens.values()|sum }}</span></a>
+    {% for status, total in contagens.items() %}
+    <a class="abc-pill aval-atalho{{ ' is-active' if ativo == status }}" href="{{ url_for(endpoint, status=status) }}"{% if ativo == status %} aria-current="true"{% endif %}>{{ rotulos.get(status, status) }} <span class="abc-pill-count">{{ total }}</span></a>
+    {% endfor %}
+</nav>
+{%- endmacro -%}
+
+{# ---- Filtro de empresa. Uma empresa que veio pela URL e não está na lista (sem
+      avaliação) continua indicada: o campo nunca diz "Todas" com a lista filtrada. ---- #}
+{%- macro campo_empresa(empresas, selecionada) -%}
+<div class="aval-campo">
+    <label class="nexo-label" for="filtroEmpresa">Empresa</label>
+    <select class="form-select" id="filtroEmpresa" name="empresa">
+        <option value="">Todas</option>
+        {% for id_empresa, nome in empresas %}
+        <option value="{{ id_empresa }}"{% if id_empresa == selecionada %} selected{% endif %}>{{ nome }}</option>
+        {% endfor %}
+        {% if selecionada and selecionada not in empresas|map('first')|list %}
+        <option value="{{ selecionada }}" selected>Empresa nº {{ selecionada }} (sem avaliações)</option>
+        {% endif %}
+    </select>
+</div>
+{%- endmacro -%}
+
+{# ---- Período. O rótulo diz a qual data o filtro se aplica em cada aba. ---- #}
+{%- macro campos_periodo(inicio, fim, rotulo) -%}
+<div class="aval-campo">
+    <label class="nexo-label" for="filtroInicio">{{ rotulo }} de</label>
+    <input type="date" class="form-control" id="filtroInicio" name="inicio" value="{{ inicio.isoformat() if inicio }}">
+</div>
+<div class="aval-campo">
+    <label class="nexo-label" for="filtroFim">{{ rotulo }} até</label>
+    <input type="date" class="form-control" id="filtroFim" name="fim" value="{{ fim.isoformat() if fim }}">
+</div>
+{%- endmacro -%}
+
+{# ---- Paginação: primeira, última e vizinhas da atual; preserva os filtros ativos.
+      Só aparece com mais de uma página (o total já fica no cabeçalho da tabela). ---- #}
+{%- macro paginacao(pagina, endpoint, parametros, descricao) -%}
+{% if pagina.paginas > 1 %}
+<nav class="aval-paginacao" aria-label="{{ descricao }}">
+    <ul class="aval-paginas">
+        {% if pagina.pagina > 1 %}
+        <li><a class="btn-ghost" rel="prev" href="{{ url_for(endpoint, pagina=pagina.pagina - 1, **parametros) }}" aria-label="Página anterior"><i class="bi bi-chevron-left" aria-hidden="true"></i> Anterior</a></li>
+        {% endif %}
+        {% for numero in range(1, pagina.paginas + 1) %}
+        {% if numero == 1 or numero == pagina.paginas or (numero >= pagina.pagina - 1 and numero <= pagina.pagina + 1) %}
+        <li><a class="btn-ghost aval-pagina" href="{{ url_for(endpoint, pagina=numero, **parametros) }}" aria-label="Página {{ numero }}"{% if numero == pagina.pagina %} aria-current="page"{% endif %}>{{ numero }}</a></li>
+        {% elif numero == pagina.pagina - 2 or numero == pagina.pagina + 2 %}
+        <li class="aval-reticencias" aria-hidden="true">…</li>
+        {% endif %}
+        {% endfor %}
+        {% if pagina.pagina < pagina.paginas %}
+        <li><a class="btn-ghost" rel="next" href="{{ url_for(endpoint, pagina=pagina.pagina + 1, **parametros) }}" aria-label="Próxima página">Próxima <i class="bi bi-chevron-right" aria-hidden="true"></i></a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{%- endmacro -%}

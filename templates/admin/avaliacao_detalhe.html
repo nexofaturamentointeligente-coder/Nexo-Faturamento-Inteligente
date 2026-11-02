@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% set cliente = avaliacao.usuario %}
+{% set nome_empresa = avaliacao.empresa.nome_fantasia or avaliacao.empresa.razao_social %}
+{% set sugestao = avaliacao.sugestao %}
+{% block title %}Avaliação nº {{ avaliacao.id_avaliacao }} — Avaliações dos Clientes — NEXO Admin{% endblock %}
+{% block page_title %}Avaliações dos Clientes{% endblock %}
+{% block extra_css %}<link href="{{ url_for('static', filename='css/avaliacoes-admin.css') }}" rel="stylesheet">{% endblock %}
+
+{% block content %}
+{# Sem autorização vigente nada volta ao ar: aprovar de novo não é "Republicar". #}
+{% set republicar = avaliacao.retirada_em and avaliacao.status_moderacao == 'APROVADA' and avaliacao.autoriza_publicacao %}
+<div class="page-head">
+    <div>
+        <nav class="trilha" aria-label="Você está em">
+            <a href="{{ url_for('avaliacoes.admin_lista') }}">Avaliações dos Clientes</a>
+            <span class="trilha-sep" aria-hidden="true">›</span>
+            <span aria-current="page">Avaliação nº {{ avaliacao.id_avaliacao }}</span>
+        </nav>
+        <h1>Avaliações dos Clientes</h1>
+        <p class="sub">Avaliação nº {{ avaliacao.id_avaliacao }} · {{ cliente.nome }} · {{ nome_empresa }}</p>
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('avaliacoes.admin_lista') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar às avaliações</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    {# ---------------- O que o cliente enviou ---------------- #}
+    <div class="col-12 col-xl-8">
+        <section class="nexo-card h-100" aria-labelledby="tituloAvaliacao">
+            <div class="nexo-card-head aval-head">
+                <div>
+                    <h2 id="tituloAvaliacao"><i class="bi bi-chat-quote text-purple" aria-hidden="true"></i> Avaliação do cliente</h2>
+                    <p class="sub">Texto escrito pelo cliente: a moderação decide sobre ele, sem alterá-lo.</p>
+                </div>
+                <div class="aval-selos">
+                    {{ m.badge_moderacao(avaliacao.status_moderacao) }}
+                    {{ m.badge_publicacao(avaliacao) }}
+                </div>
+            </div>
+            <div class="nexo-card-body">
+                <dl class="dados-contrato mb-3">
+                    <div><dt>Cliente</dt><dd>{{ cliente.nome }}</dd></div>
+                    <div><dt>E-mail</dt><dd>{{ m.email(cliente.email) }}</dd></div>
+                    <div><dt>Empresa</dt><dd>{{ nome_empresa }}</dd></div>
+                    <div><dt>Enviada em</dt><dd>{{ m.horario(avaliacao.data_criacao) }}</dd></div>
+                    <div><dt>Última atualização</dt><dd>{{ m.horario(avaliacao.data_atualizacao) }}</dd></div>
+                </dl>
+                <p class="aval-nota">{{ m.estrelas(avaliacao.nota) }} <strong>{{ rotulos_nota.get(avaliacao.nota, avaliacao.nota) }}</strong></p>
+                <blockquote class="aval-comentario">{{ avaliacao.comentario_publico }}</blockquote>
+
+                <h3 class="aval-subtitulo">{{ 'Identificação pública em uso' if avaliacao.no_ar else 'Identificação pública que seria usada' }}</h3>
+                <dl class="dados-contrato">
+                    <div>
+                        <dt>Nome</dt>
+                        <dd>
+                            {{ avaliacao.nome_exibicao or identificacao_anonima }}
+                            {% if not avaliacao.nome_exibicao %}<span class="nexo-badge b-muted">anônima</span>{% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Empresa</dt>
+                        <dd>{% if avaliacao.autoriza_nome_empresa %}{{ nome_empresa }}{% else %}Não aparece: o cliente não autorizou{% endif %}</dd>
+                    </div>
+                </dl>
+            </div>
+        </section>
+    </div>
+
+    {# ---------------- Decisões: um formulário por ação; todas sobre a versão lida nesta tela ---------------- #}
+    <div class="col-12 col-xl-4">
+        <section class="nexo-card h-100" aria-labelledby="tituloDecisao">
+            <div class="nexo-card-head">
+                <div>
+                    <h2 id="tituloDecisao"><i class="bi bi-shield-check text-purple" aria-hidden="true"></i> Decisão da moderação</h2>
+                    <p class="sub">Toda decisão fica registrada no histórico.</p>
+                </div>
+            </div>
+            <div class="nexo-card-body">
+                {% if avaliacao.no_ar %}
+                <form method="POST" action="{{ url_for('avaliacoes.admin_retirar', id_avaliacao=avaliacao.id_avaliacao) }}" class="aval-acao"
+                      data-confirm="Retirar esta avaliação da publicação? Ela sai da landing e o registro é mantido.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="versao" value="{{ avaliacao.versao }}">
+                    <p class="aval-acao-texto">Esta avaliação está publicada na landing. Retirar mantém a aprovação e o registro.</p>
+                    <label class="nexo-label" for="motivoRetirada">Motivo da retirada (opcional)</label>
+                    <textarea class="form-control" id="motivoRetirada" name="motivo" rows="2" maxlength="{{ motivo_max }}"></textarea>
+                    <button type="submit" class="btn-ghost is-danger w-100 justify-content-center mt-2"><i class="bi bi-eye-slash" aria-hidden="true"></i> Retirar da publicação</button>
+                </form>
+                {% else %}
+                <form method="POST" action="{{ url_for('avaliacoes.admin_aprovar', id_avaliacao=avaliacao.id_avaliacao) }}" class="aval-acao">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="versao" value="{{ avaliacao.versao }}">
+                    {% if not avaliacao.autoriza_publicacao %}
+                    <div class="aviso-contrato is-alerta aval-aviso" role="note">
+                        <i class="bi bi-eye-slash" aria-hidden="true"></i>
+                        <div>
+                            <strong>Será uma aprovação interna, sem publicação.</strong>
+                            <p>O cliente não autorizou a publicação: a avaliação não vai para a landing.</p>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-nexo w-100 justify-content-center"><i class="bi bi-check2-circle" aria-hidden="true"></i> Aprovar internamente</button>
+                    {% elif republicar %}
+                    <p class="aval-acao-texto">Foi retirada da publicação. O cliente segue autorizando: republicar a devolve à landing.</p>
+                    <button type="submit" class="btn-nexo w-100 justify-content-center"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Republicar</button>
+                    {% else %}
+                    <p class="aval-acao-texto">O cliente autorizou a publicação: aprovar leva a avaliação para a landing.</p>
+                    <button type="submit" class="btn-nexo w-100 justify-content-center"><i class="bi bi-check2-circle" aria-hidden="true"></i> Aprovar</button>
+                    {% endif %}
+                </form>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('avaliacoes.admin_rejeitar', id_avaliacao=avaliacao.id_avaliacao) }}" class="aval-acao"
+                      data-confirm="Rejeitar esta avaliação?{{ ' Ela sai da landing.' if avaliacao.no_ar }} O motivo e o registro são mantidos.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="versao" value="{{ avaliacao.versao }}">
+                    <label class="nexo-label" for="motivoRejeicao">Motivo da rejeição <span class="req" aria-hidden="true">*</span></label>
+                    <textarea class="form-control" id="motivoRejeicao" name="motivo" rows="3" required minlength="{{ motivo_min }}" maxlength="{{ motivo_max }}" aria-describedby="motivoRejeicaoAjuda"></textarea>
+                    <p class="field-hint mt-1 mb-2" id="motivoRejeicaoAjuda">Obrigatório, de {{ motivo_min }} a {{ motivo_max }} caracteres.</p>
+                    <button type="submit" class="btn-ghost is-danger w-100 justify-content-center"><i class="bi bi-x-circle" aria-hidden="true"></i> Rejeitar</button>
+                </form>
+            </div>
+        </section>
+    </div>
+</div>
+
+{# ---------------- Estado atual: consentimento, moderação e publicação ---------------- #}
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-6 col-xl-4">
+        <section class="nexo-card h-100" aria-labelledby="tituloConsentimento">
+            <div class="nexo-card-head"><div><h2 id="tituloConsentimento"><i class="bi bi-patch-check text-purple" aria-hidden="true"></i> Consentimento</h2></div></div>
+            <div class="nexo-card-body">
+                <dl class="dados-contrato">
+                    <div>
+                        <dt>Situação</dt>
+                        <dd>
+                            {% if avaliacao.autoriza_publicacao %}<span class="nexo-badge b-green"><span class="dot"></span>Autorização vigente</span>
+                            {% elif avaliacao.consentimento_retirado_em %}<span class="nexo-badge b-amber"><span class="dot"></span>Autorização retirada</span>
+                            {% else %}<span class="nexo-badge b-muted"><span class="dot"></span>Sem autorização</span>{% endif %}
+                        </dd>
+                    </div>
+                    <div><dt>Versão do aviso</dt><dd>{{ avaliacao.consentimento_versao or '—' }}</dd></div>
+                    <div><dt>Autorizada em</dt><dd>{{ m.horario(avaliacao.consentimento_em) }}</dd></div>
+                    <div><dt>Retirada em</dt><dd>{{ m.horario(avaliacao.consentimento_retirado_em) }}</dd></div>
+                </dl>
+            </div>
+        </section>
+    </div>
+    <div class="col-12 col-md-6 col-xl-4">
+        <section class="nexo-card h-100" aria-labelledby="tituloModeracao">
+            <div class="nexo-card-head"><div><h2 id="tituloModeracao"><i class="bi bi-person-check text-purple" aria-hidden="true"></i> Moderação</h2></div></div>
+            <div class="nexo-card-body">
+                <dl class="dados-contrato">
+                    <div><dt>Situação</dt><dd>{{ m.badge_moderacao(avaliacao.status_moderacao) }}</dd></div>
+                    <div><dt>Moderador</dt><dd>{{ avaliacao.moderador.nome if avaliacao.moderador else '—' }}</dd></div>
+                    <div><dt>Decidida em</dt><dd>{{ m.horario(avaliacao.moderada_em) }}</dd></div>
+                    {% if avaliacao.motivo_rejeicao %}
+                    <div><dt>Motivo da rejeição</dt><dd class="aval-texto">{{ avaliacao.motivo_rejeicao }}</dd></div>
+                    {% endif %}
+                </dl>
+            </div>
+        </section>
+    </div>
+    <div class="col-12 col-xl-4">
+        <section class="nexo-card h-100" aria-labelledby="tituloPublicacao">
+            <div class="nexo-card-head"><div><h2 id="tituloPublicacao"><i class="bi bi-megaphone text-purple" aria-hidden="true"></i> Publicação</h2></div></div>
+            <div class="nexo-card-body">
+                <dl class="dados-contrato">
+                    <div><dt>Situação</dt><dd>{{ m.badge_publicacao(avaliacao) }}</dd></div>
+                    <div><dt>Publicada em</dt><dd>{{ m.horario(avaliacao.publicada_em) }}</dd></div>
+                    <div><dt>Retirada em</dt><dd>{{ m.horario(avaliacao.retirada_em) }}</dd></div>
+                    {% if avaliacao.retirada_motivo %}
+                    <div><dt>Motivo da retirada</dt><dd class="aval-texto">{{ avaliacao.retirada_motivo }}</dd></div>
+                    {% endif %}
+                </dl>
+                {% if avaliacao.no_ar %}
+                <p class="field-hint mt-3 mb-0">Na landing, a exibição também exige usuário ativo e empresa com acesso ao portal.</p>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+</div>
+
+{# ---------------- Sugestão: privada, fora do conteúdo público da avaliação ---------------- #}
+<section class="nexo-card aval-privado mb-3" aria-labelledby="tituloSugestao">
+    <div class="nexo-card-head aval-head">
+        <div>
+            <h2 id="tituloSugestao"><i class="bi bi-lock-fill aval-privado-icone" aria-hidden="true"></i> Sugestão privada</h2>
+            <p class="sub">Só a equipe NEXO lê este texto. Ele nunca é publicado, mesmo com a avaliação aprovada.</p>
+        </div>
+        <div class="aval-selos"><span class="nexo-badge b-amber"><i class="bi bi-eye-slash" aria-hidden="true"></i> Privada · nunca publicada</span></div>
+    </div>
+    <div class="nexo-card-body">
+        {% if sugestao %}
+        <p class="aval-texto mb-3">{{ sugestao.texto }}</p>
+        <div class="aval-privado-rodape">
+            <span class="aval-privado-status">Acompanhamento: {{ m.badge_sugestao(sugestao.status_acompanhamento) }}</span>
+            <a href="{{ url_for('avaliacoes.admin_sugestoes', empresa=avaliacao.id_empresa) }}" class="btn-ghost btn-sm-x"><i class="bi bi-lightbulb" aria-hidden="true"></i> Abrir em Sugestões de Melhoria</a>
+        </div>
+        {% else %}
+        <p class="mb-0">O cliente não enviou sugestão.</p>
+        {% endif %}
+    </div>
+</section>
+
+{# ---------------- Histórico: trilha de auditoria, somente inclusão ---------------- #}
+<div class="table-wrap">
+    <div class="nexo-card-head">
+        <div>
+            <h2><i class="bi bi-clock-history text-purple" aria-hidden="true"></i> Histórico</h2>
+            <p class="sub">Trilha de auditoria, do evento mais antigo ao mais recente.</p>
+        </div>
+    </div>
+    {% if avaliacao.eventos %}
+    <div class="table-responsive-x">
+        <table class="nexo-table aval-tabela">
+            <thead><tr><th>Data</th><th>Evento</th><th>Responsável</th><th>Justificativa</th></tr></thead>
+            <tbody>
+                {% for ev in avaliacao.eventos %}
+                <tr>
+                    <td class="aval-col-data t-nowrap">{{ m.horario(ev.ocorrido_em) }}</td>
+                    <td class="t-strong">
+                        {{ rotulos_evento.get(ev.tipo, ev.tipo) }}
+                        {% if ev.consentimento_versao %}<small class="aval-data-extra">Versão do aviso: {{ ev.consentimento_versao }}</small>{% endif %}
+                    </td>
+                    <td class="t-mut">{{ ev.responsavel.nome if ev.responsavel else '—' }}</td>
+                    <td class="aval-col-justificativa">{% if ev.justificativa %}<span class="aval-texto selectable">{{ ev.justificativa }}</span>{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state empty-state-sm"><h3>Nenhum evento registrado.</h3></div>
+    {% endif %}
+</div>
+{% endblock %}

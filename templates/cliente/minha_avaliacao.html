@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{# COM-002 — Consulta da própria avaliação. Mostra a situação em linguagem simples;
+   o motivo da rejeição e os demais dados da moderação ficam só com a equipe NEXO. #}
+
+{% block title %}Minha avaliação — NEXO{% endblock %}
+{% block page_title %}Minha avaliação{% endblock %}
+
+{% block extra_css %}
+<link href="{{ url_for('static', filename='css/avaliacoes.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Minha avaliação</h1>
+        <p class="sub">Confira o que você enviou e decida o que pode ser publicado.</p>
+    </div>
+</div>
+
+{% if not avaliacao %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-star" aria-hidden="true"></i></div>
+        <h3>Você ainda não enviou uma avaliação.</h3>
+        {% if pode_editar %}
+        <p>Conte como tem sido sua experiência com a NEXO. Você decide se ela pode ser publicada.</p>
+        <a href="{{ url_for('avaliacoes.formulario') }}" class="btn-nexo mt-3"><i class="bi bi-pencil-square" aria-hidden="true"></i> Avaliar a NEXO</a>
+        {% else %}
+        <p>O envio de avaliações fica disponível para empresas com conta ativa.</p>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+{% set a = avaliacao %}
+<div class="avaliacao-layout">
+    <div class="avaliacao-lateral">
+        <section class="nexo-card" aria-labelledby="situacaoTitulo">
+            <div class="nexo-card-head"><div><h2 id="situacaoTitulo"><i class="bi bi-flag text-purple" aria-hidden="true"></i> Situação</h2></div></div>
+            <div class="nexo-card-body avaliacao-situacao">
+                {% if a.status_moderacao == 'PENDENTE' %}
+                <span class="nexo-badge b-amber"><span class="dot"></span>Em revisão</span>
+                <p>A equipe NEXO está revisando sua avaliação. Nada é publicado antes dessa revisão.</p>
+                {% elif a.status_moderacao == 'REJEITADA' %}
+                <span class="nexo-badge b-red"><span class="dot"></span>Não aprovada</span>
+                <p>Sua avaliação foi revisada e não será publicada.{% if pode_editar %} Você pode editá-la e reenviá-la para uma nova revisão.{% endif %}</p>
+                {% elif a.no_ar %}
+                <span class="nexo-badge b-green"><span class="dot"></span>Publicada</span>
+                <p>Sua avaliação foi aprovada e publicada nos depoimentos da NEXO em {{ m.horario(a.publicada_em, 'data') }}.</p>
+                {% elif a.retirada_em %}
+                <span class="nexo-badge b-muted"><span class="dot"></span>Retirada</span>
+                <p>Sua avaliação saiu dos depoimentos da NEXO em {{ m.horario(a.retirada_em, 'data') }}{% if a.autoriza_publicacao %}, por decisão da equipe NEXO{% else %}, porque a autorização foi retirada{% endif %}.</p>
+                {% elif not a.autoriza_publicacao %}
+                <span class="nexo-badge b-muted"><span class="dot"></span>Aprovada, sem publicação</span>
+                <p>A equipe NEXO aprovou sua avaliação, mas ela não é publicada porque você não autorizou.{% if pode_editar %} Para publicar, edite a avaliação e marque a autorização.{% endif %}</p>
+                {% else %}
+                <span class="nexo-badge b-purple"><span class="dot"></span>Aprovada</span>
+                <p>A equipe NEXO aprovou sua avaliação.</p>
+                {% endif %}
+
+                {% if pode_editar %}
+                <a href="{{ url_for('avaliacoes.editar') }}" class="btn-nexo w-100 justify-content-center"><i class="bi bi-pencil" aria-hidden="true"></i> Editar avaliação</a>
+                <p class="campo-dica mt-2">Mudanças na nota, no comentário ou na identificação voltam para a revisão da equipe NEXO.</p>
+                {% else %}
+                <p class="campo-dica">A edição fica disponível para empresas com conta ativa. Você continua podendo consultar sua avaliação e retirar a autorização de publicação.</p>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="nexo-card" aria-labelledby="autorizacaoTitulo">
+            <div class="nexo-card-head"><div><h2 id="autorizacaoTitulo"><i class="bi bi-megaphone text-purple" aria-hidden="true"></i> Autorização de publicação</h2></div></div>
+            <div class="nexo-card-body avaliacao-situacao">
+                {% if a.autoriza_publicacao %}
+                <span class="nexo-badge b-green"><span class="dot"></span>Autorizada</span>
+                <p>Você autorizou a publicação em {{ m.horario(a.consentimento_em, 'data') }}.</p>
+                <dl class="avaliacao-identificacao-dados">
+                    <div><dt>Como aparece publicamente</dt><dd>{{ a.nome_exibicao or identificacao_anonima }}{% if a.autoriza_nome_empresa %} · {{ nome_empresa }}{% endif %}</dd></div>
+                </dl>
+                <form method="POST" action="{{ url_for('avaliacoes.retirar_consentimento') }}" data-confirm="Retirar a autorização de publicação? Sua avaliação deixa de aparecer nos canais públicos da NEXO.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn-ghost is-danger w-100 justify-content-center"><i class="bi bi-x-circle" aria-hidden="true"></i> Retirar autorização</button>
+                </form>
+                {% elif a.consentimento_retirado_em %}
+                <span class="nexo-badge b-muted"><span class="dot"></span>Retirada</span>
+                <p>Você retirou a autorização em {{ m.horario(a.consentimento_retirado_em, 'data') }}. Sua avaliação não aparece nos canais públicos da NEXO.</p>
+                {% else %}
+                <span class="nexo-badge b-muted"><span class="dot"></span>Sem autorização</span>
+                <p>Você não autorizou a publicação. Sua avaliação não aparece nos canais públicos da NEXO.</p>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <div class="avaliacao-principal">
+        <section class="nexo-card" aria-labelledby="enviadaTitulo">
+            <div class="nexo-card-head">
+                <div>
+                    <h2 id="enviadaTitulo"><i class="bi bi-star text-purple" aria-hidden="true"></i> Sua avaliação</h2>
+                    <p class="sub">Enviada em {{ m.horario(a.data_criacao, 'data') }}{% if a.data_atualizacao != a.data_criacao %} · atualizada em {{ m.horario(a.data_atualizacao, 'data') }}{% endif %}</p>
+                </div>
+            </div>
+            <div class="nexo-card-body">
+                <div class="avaliacao-nota">
+                    {{ m.estrelas(a.nota) }}
+                    <span class="avaliacao-nota-rotulo">{{ rotulos_nota[a.nota] }}</span>
+                </div>
+                <p class="avaliacao-texto">{{ a.comentario_publico }}</p>
+            </div>
+        </section>
+
+        <section class="nexo-card" aria-labelledby="sugestaoTitulo">
+            <div class="nexo-card-head">
+                <div>
+                    <h2 id="sugestaoTitulo"><i class="bi bi-lock text-purple" aria-hidden="true"></i> Sugestão privada</h2>
+                    <p class="sub">Só a equipe NEXO lê; nunca é publicada.</p>
+                </div>
+                {% if sugestao %}{{ m.badge_sugestao(sugestao.status_acompanhamento) }}{% endif %}
+            </div>
+            <div class="nexo-card-body">
+                {% if sugestao %}
+                <p class="avaliacao-texto">{{ sugestao.texto }}</p>
+                {% else %}
+                <p class="campo-dica mb-0">Você não enviou sugestão de melhoria.</p>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -53,6 +53,10 @@ def _destino_seguro(alvo: str) -> bool:
     """
     if not alvo:
         return False
+    # O navegador descarta tabulações e quebras de linha e trata "\" como "/":
+    # "/<TAB>/evil.com" viraria "//evil.com". Nenhum destino legítimo os contém.
+    if "\\" in alvo or any(ord(caractere) < 32 or ord(caractere) == 127 for caractere in alvo):
+        return False
     parsed = urlparse(alvo)
     # Sem esquema e sem netloc = caminho relativo ao próprio site.
     return (
