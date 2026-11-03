@@ -50,6 +50,18 @@
 </div>
 {% endif %}
 
+{# ---------------- Trava do total do PDV: calculado e divergência só em período coberto ---------------- #}
+{% for item in divergencias_pdv %}
+{% set v = item.validacao %}
+{% set titulo_pdv = 'Diferença no total de vendas de ' ~ item.referencia %}
+{% set texto_pdv = 'A equipe NEXO está revisando. A devolutiva só é liberada depois dessa conferência.' %}
+{% if item.mostrar_valores %}
+{{ m.aviso_divergencia_pdv(titulo_pdv, texto_pdv ~ ' Os valores abaixo são preliminares.', v.valor_pdv_informado, v.faturamento_bruto_calculado, v.diferenca, 'is-alerta', link_url=url_for('cliente.tickets'), link_texto='Falar com a equipe') }}
+{% else %}
+{{ m.aviso_divergencia_pdv(titulo_pdv, texto_pdv, v.valor_pdv_informado if item.mostrar_informado else none, classe='is-alerta', link_url=url_for('cliente.tickets'), link_texto='Falar com a equipe') }}
+{% endif %}
+{% endfor %}
+
 {% if empresa %}
 <div class="nexo-card mb-4">
     <div class="nexo-card-body">

@@ -69,6 +69,8 @@ GLOSSARIO = {
     "periodo de referencia": "nexo.analises.periodo_referencia",
     "mensal": "nexo.analises.mensal_quinzenal",
     "quinzenal": "nexo.analises.mensal_quinzenal",
+    "divergencia": "nexo.processamento.divergencia_pdv",
+    "divergente": "nexo.processamento.divergencia_pdv",
     "aguardando relatorio": "nexo.analises.status_aguardando",
     "relatorio recebido": "nexo.analises.status_recebido",
     "em analise": "nexo.analises.status_em_analise",

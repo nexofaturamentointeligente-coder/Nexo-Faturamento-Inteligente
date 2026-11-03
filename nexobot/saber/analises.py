@@ -177,7 +177,8 @@ REGISTROS = (
             "preparando a devolutiva estratégica. Nesse status a análise ainda não aparece no Histórico."
         ),
         explicacao=(
-            "Você recebe o aviso “Recebemos e processamos seus relatórios” quando a análise entra nessa fase. "
+            "Você recebe o aviso “Recebemos e processamos seus relatórios” quando a análise entra nessa fase, "
+            "ou o aviso de diferença, se o total calculado não bater com o que você informou. "
             "A análise deixa de aceitar novos envios; se for preciso trocar um arquivo, fale com a equipe pelo "
             "Suporte."
         ),
@@ -237,7 +238,8 @@ REGISTROS = (
             "fica Em análise e invisível no Histórico."
         ),
         explicacao=(
-            "A publicação exige que a análise tenha sido processada e que o resumo executivo e a conclusão "
+            "A publicação exige que a análise tenha sido processada, sem divergência no total de vendas, e que o "
+            "resumo executivo e a conclusão "
             "estratégica estejam preenchidos. A equipe pode usar a geração assistida por IA para um rascunho, "
             "mas a revisão e a decisão de publicar são humanas."
         ),
@@ -298,7 +300,7 @@ REGISTROS = (
             "Abra a Visão Geral e veja a tabela “Análises em andamento”: se a análise estiver lá, ela ainda "
             "não foi publicada.",
             "Em Enviar Relatórios, confira se os dois arquivos constam como enviados e qual é o status de cada um.",
-            "Se um arquivo estiver com o selo “ERRO”, reenvie o relatório correto do mesmo tipo (o botão passa a se chamar “Reenviar”).",
+            "Se um arquivo estiver com o selo “ERRO”, reenvie o relatório correto do mesmo tipo (o botão passa a se chamar “Reenviar”; em Vendas, informe o total do PDV).",
             "Se o status for Em análise, a devolutiva está em preparação pela equipe; aguarde o aviso de publicação.",
             "Se nada aparecer em lugar nenhum ou a situação estiver parada há muito tempo, abra um chamado em "
             "Suporte informando o período.",

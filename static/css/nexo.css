@@ -2116,7 +2116,7 @@ input, textarea, select, option,
 .aviso-contrato i { margin-top: 2px; color: var(--primary); font-size: 1.2rem; }
 .aviso-contrato > div { min-width: 0; }
 .aviso-contrato p { margin: 0; color: var(--text-muted); font-size: 0.88rem; overflow-wrap: anywhere; }
-.aviso-contrato strong { color: var(--text); }
+.aviso-contrato strong { color: var(--text); overflow-wrap: anywhere; }
 .aviso-contrato.is-alerta { border-color: rgba(245, 158, 11, 0.3); background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--glass-strong); }
 .aviso-contrato.is-alerta i { color: var(--warning); }
 .aviso-contrato.is-perigo { border-color: rgba(239, 68, 68, 0.3); background: linear-gradient(var(--danger-bg), var(--danger-bg)), var(--glass-strong); }

@@ -8,6 +8,8 @@
 {% set rel = analise.relatorio %}
 {% set emp = analise.empresa.nome_fantasia or analise.empresa.razao_social %}
 {% set publicado = rel.publicado if rel else false %}
+{% set divergente = validacao and validacao.status_validacao == 'DIVERGENTE_PDV' %}
+{% set ia_bloqueada = validacao and validacao.status_validacao in ('DIVERGENTE_PDV', 'PENDENTE') %}
 
 <div class="page-head">
     <div>
@@ -21,6 +23,16 @@
     </div>
 </div>
 
+{# ---------------- Trava do total do PDV ---------------- #}
+{% if divergente %}
+{{ m.card_pdv_consultor(validacao, 'Divergência no total do PDV', url_for('admin.analise_upload', id_analise=analise.id_analise), 'Abrir a análise') }}
+{% elif bloqueio_pdv %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+    <div><strong>{{ bloqueio_pdv }}</strong></div>
+</div>
+{% endif %}
+
 {# ---------------- Geração automatizada por IA ---------------- #}
 <div class="nexo-card mb-4" style="border-color:rgba(168,85,247,0.32);">
     <div class="nexo-card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
@@ -33,7 +45,7 @@
         <form method="POST" action="{{ url_for('admin.analise_relatorio', id_analise=analise.id_analise) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="versao_rascunho" value="{{ rel.versao_rascunho if rel else 0 }}">
-            <button type="submit" name="acao" value="gerar_ia" class="btn-nexo" {{ '' if analise.indicador else 'disabled' }}>
+            <button type="submit" name="acao" value="gerar_ia" class="btn-nexo" {{ '' if (analise.indicador and not ia_bloqueada) else 'disabled' }}>
                 <i class="bi bi-stars"></i> Gerar com IA
             </button>
         </form>
@@ -90,7 +102,7 @@
         {# SEC-003: o texto editado só chega ao cliente por uma nova publicação explícita. #}
         <button type="submit" name="acao" value="publicar" class="btn-nexo"><i class="bi bi-broadcast"></i> Publicar alterações</button>
         {% else %}
-        <button type="submit" name="acao" value="publicar" class="btn-nexo"><i class="bi bi-broadcast"></i> Publicar para cliente</button>
+        <button type="submit" name="acao" value="publicar" class="btn-nexo" {{ 'disabled' if bloqueio_pdv }}><i class="bi bi-broadcast"></i> Publicar para cliente</button>
         {% endif %}
     </div>
 </form>

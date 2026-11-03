@@ -10,7 +10,7 @@ A geração de devolutivas com IA (`ai_devolutiva.py`) é uma funcionalidade sep
 
 | Antes (1.x) | 2.0 |
 | --- | --- |
-| Conhecimento limitado ao Guia do CMS e a onze "fatos" fixos; "o que é o NEXO?" caía em desconhecida. | Base interna versionada (`nexobot/saber/`): 173 registros, 881 formulações, 18 assuntos, cada um com resumo, explicação, passo a passo e aprofundamento, com as fontes do código citadas. |
+| Conhecimento limitado ao Guia do CMS e a onze "fatos" fixos; "o que é o NEXO?" caía em desconhecida. | Base interna versionada (`nexobot/saber/`): 174 registros, 886 formulações, 18 assuntos, cada um com resumo, explicação, passo a passo e aprofundamento, com as fontes do código citadas. |
 | Uma resposta por pergunta, sempre no mesmo tamanho. | Quatro níveis de resposta escolhidos pela formulação; aprofundamento sem repetir o que já foi dito; roteiros guiados ("e depois?"). |
 | Saudação e "ajuda" concatenavam as categorias do banco, inclusive `ZZTEST-guia` e `ZZTEST-guia <i>XSS</i>`. | Saudação curta e curada, com sugestões clicáveis. Conteúdo com sinais de teste é detectado, rebaixado na busca, excluído das listas e sinalizado no CMS para revisão (nada é apagado). |
 | Texto corrido com `**negrito**`. | Blocos estruturados (`cabecalho`, `texto`, `passos`, `secao`, `exemplo`, `aviso`) e sugestões (`sugestoes`) renderizados pelo widget sem HTML. |
@@ -120,7 +120,7 @@ Todos os 172 registros passaram por uma verificação independente contra o cód
 | Planos | `empresas_planos.py` | 4 | 23 | 0 | 0 | 0 |
 | Análises | `analises.py` | 14 | 66 | 1 | 0 | 0 |
 | Envio de relatórios | `uploads.py` | 16 | 86 | 6 | 0 | 0 |
-| Processamento (ETL) | `processamento.py` | 9 | 43 | 0 | 0 | 0 |
+| Processamento (ETL) | `processamento.py` | 10 | 48 | 0 | 0 | 0 |
 | Indicadores | `indicadores.py` | 14 | 69 | 1 | 1 | 4 |
 | Curva ABC | `indicadores.py` | 8 | 34 | 0 | 2 | 0 |
 | Visão Geral do painel | `dashboard.py` | 10 | 43 | 0 | 0 | 0 |
@@ -131,9 +131,9 @@ Todos os 172 registros passaram por uma verificação independente contra o cód
 | Guia | `suporte_guia.py` | 7 | 26 | 0 | 0 | 0 |
 | Equipe NEXO (administração, explicada ao cliente) | `administracao.py` | 14 | 51 | 0 | 0 | 0 |
 | Tecnologia | `tecnologia.py` | 10 | 45 | 0 | 0 | 0 |
-| **Total** | 14 módulos | **173** | **881** | 20 | 3 | 4 |
+| **Total** | 14 módulos | **174** | **886** | 20 | 3 | 4 |
 
-Outros números: 61 arquivos do código citados como fonte; 119 termos no glossário; 14 encadeamentos `proximo`; 6 roteiros guiados (`nexo.primeiros_passos.roteiro`, `nexo.uploads.primeiro_envio`, `nexo.uploads.substituir`, `nexo.analises.nao_aparece`, `nexo.indicadores.interpretar`, `nexo.suporte.falar_com_equipe`). As perguntas obrigatórias e as variações linguísticas cobertas por teste estão em `tests/test_nexobot_saber.py` (`OBRIGATORIAS`, `VARIACOES`); todo título de registro é testado como pergunta.
+Outros números: 62 arquivos do código citados como fonte; 121 termos no glossário; 14 encadeamentos `proximo`; 6 roteiros guiados (`nexo.primeiros_passos.roteiro`, `nexo.uploads.primeiro_envio`, `nexo.uploads.substituir`, `nexo.analises.nao_aparece`, `nexo.indicadores.interpretar`, `nexo.suporte.falar_com_equipe`). As perguntas obrigatórias e as variações linguísticas cobertas por teste estão em `tests/test_nexobot_saber.py` (`OBRIGATORIAS`, `VARIACOES`); todo título de registro é testado como pergunta.
 
 ### Glossário
 

@@ -30,9 +30,16 @@
             <div class="col-6 col-md-3"><div class="kpi-label">Tipo</div><div>{{ 'Quinzenal' if analise.tipo_analise == 'QUINZENAL' else 'Mensal' }}</div></div>
             <div class="col-6 col-md-3"><div class="kpi-label">Referência</div><div class="t-mono">{{ '%02d'|format(analise.mes_referencia) }}/{{ analise.ano_referencia }}</div></div>
             <div class="col-6 col-md-3"><div class="kpi-label">Status</div><div>{{ m.badge_analise(analise.status_analise) }}</div></div>
+            {% if pdv_disponivel %}
+            <div class="col-12"><div class="kpi-label">Total do PDV</div><div>{{ m.badge_pdv(validacao.status_validacao if validacao else none) }}{% if validacao %} <span class="fw-num">R$ {{ m.brl(validacao.valor_pdv_informado) }}</span>{% endif %}</div></div>
+            {% endif %}
         </div>
     </div>
 </div>
+
+{% if validacao and validacao.status_validacao == 'DIVERGENTE_PDV' %}
+{{ m.card_pdv_consultor(validacao, 'Divergência no total do PDV') }}
+{% endif %}
 
 {# ---------------- Uploads VENDAS / COMPRAS (reais) ---------------- #}
 <div class="row g-3 mb-4">
@@ -56,6 +63,17 @@
             <form method="POST" action="{{ url_for('admin.analise_upload', id_analise=analise.id_analise) }}" enctype="multipart/form-data">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="tipo_relatorio" value="{{ slot.tipo }}">
+                {# Trava do total do PDV: reenviar Vendas com o total corrigido é a saída da divergência. #}
+                {% if slot.tipo == 'VENDAS' and pdv_disponivel %}
+                <div class="mb-3">
+                    <label class="nexo-label" for="valorPdvAdmin">Total de vendas no PDV, em reais <span class="req" aria-hidden="true">*</span></label>
+                    <div class="input-group">
+                        <span class="input-group-text">R$</span>
+                        <input type="text" inputmode="decimal" class="form-control" id="valorPdvAdmin" name="valor_pdv_informado" placeholder="Ex: 150.000,00" maxlength="32" autocomplete="off" aria-describedby="valorPdvAdminDica" required>
+                    </div>
+                    <p class="field-hint mt-1 mb-0" id="valorPdvAdminDica">O total de vendas que o PDV mostra neste relatório, de {{ analise.periodo_inicio.strftime('%d/%m/%Y') }} a {{ analise.periodo_fim.strftime('%d/%m/%Y') }}.{% if validacao %} Último informado: R$ {{ m.brl(validacao.valor_pdv_informado) }}.{% endif %}</p>
+                </div>
+                {% endif %}
                 <label class="dropzone {{ 'is-recebido' if slot.up }}" data-dz>
                     <div class="dz-icon"><i class="bi {{ 'bi-file-earmark-check' if slot.up else 'bi-cloud-arrow-up' }}" aria-hidden="true"></i></div>
                     <div class="dz-estado" id="dzEstadoAdmin{{ slot.tipo }}" data-dz-estado data-vazio="{{ 'Arquivo recebido' if slot.up else '' }}">{{ 'Arquivo recebido' if slot.up else '' }}</div>
@@ -72,6 +90,27 @@
     </div>
     {% endfor %}
 </div>
+
+{# ---------------- Trava do total do PDV: correção só do total, sem o arquivo ---------------- #}
+{% if pdv_disponivel and up_v %}
+<div class="nexo-card mb-4">
+    <div class="nexo-card-body">
+        <h2 style="font-size:1.02rem;margin:0 0 4px;">Corrigir só o total do PDV</h2>
+        <p class="sub" style="color:var(--text-muted);font-size:0.88rem;">Para erro de digitação: o arquivo de Vendas continua o mesmo. Fica registrado quem informou, e a análise precisa ser processada de novo.</p>
+        <form method="POST" action="{{ url_for('admin.corrigir_total_pdv', id_analise=analise.id_analise) }}" class="d-flex flex-wrap align-items-end gap-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div>
+                <label class="nexo-label" for="valorPdvCorrecao">Total de vendas no PDV, em reais</label>
+                <div class="input-group">
+                    <span class="input-group-text">R$</span>
+                    <input type="text" inputmode="decimal" class="form-control" id="valorPdvCorrecao" name="valor_pdv_informado" placeholder="Ex: 150.000,00" maxlength="32" autocomplete="off" required>
+                </div>
+            </div>
+            <button type="submit" class="btn-ghost"><i class="bi bi-pencil" aria-hidden="true"></i> Salvar total</button>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 {# ---------------- Processar ---------------- #}
 <div class="nexo-card mb-4">

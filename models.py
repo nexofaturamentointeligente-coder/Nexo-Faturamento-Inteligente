@@ -1118,3 +1118,55 @@ class ConfiguracaoSistema(db.Model):
     __table_args__ = (
         CheckConstraint("chave IN ('suporte_bcc_email')", name="ck_configuracao_chave"),
     )
+
+
+# =====================================================================
+# 24. ValidacaoPdv  (trava do total do PDV)
+# =====================================================================
+class ValidacaoPdv(db.Model):
+    """
+    Conferência do faturamento calculado pelo ETL com o total que o PDV mostra. Uma
+    linha por análise: nasce no envio do relatório de VENDAS (PENDENTE) e recebe o
+    resultado no processamento (CONCLUIDO ou DIVERGENTE_PDV).
+
+    O CONCLUIDO daqui só diz que os totais batem. Quem decide a publicação continua
+    sendo o ADMIN, em Analise.status_analise, e DIVERGENTE_PDV ou PENDENTE a impedem.
+
+    Tabela própria, e não coluna ou status em Analise, pelo mesmo motivo de
+    RegimeContratual: o código chega à produção antes da migração sem quebrar nenhuma
+    consulta. Sem relationship em Analise: a linha sai com a análise por ON DELETE
+    CASCADE, e excluir uma análise não consulta esta tabela. Ver validacao_pdv.py.
+    """
+    __tablename__ = "validacao_pdv"
+
+    id_analise: Mapped[int] = mapped_column(
+        ForeignKey("analise.id_analise", ondelete="CASCADE", name="fk_validacao_pdv_analise"),
+        primary_key=True, autoincrement=False,
+    )
+    valor_pdv_informado: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # Sem precisão, como os KPIs em IndicadorAnalise: o arquivo não tem teto, e justamente o
+    # valor absurdo precisa virar DIVERGENTE_PDV em vez de estourar a coluna no processamento.
+    faturamento_bruto_calculado: Mapped[Optional[Decimal]] = mapped_column(Numeric)
+    diferenca: Mapped[Optional[Decimal]] = mapped_column(Numeric)
+    # Parcelas do relatório que explicam o total ao consultor; nulas quando não houver coluna de situação.
+    valor_devolucoes: Mapped[Optional[Decimal]] = mapped_column(Numeric)
+    valor_cancelado: Mapped[Optional[Decimal]] = mapped_column(Numeric)
+    status_validacao: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDENTE")
+    id_usuario_informante: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="SET NULL", name="fk_validacao_pdv_informante")
+    )
+    informado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    validado_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+
+    __table_args__ = (
+        CheckConstraint("valor_pdv_informado >= 0", name="ck_validacao_pdv_valor"),
+        CheckConstraint("status_validacao IN ('PENDENTE', 'CONCLUIDO', 'DIVERGENTE_PDV')",
+                        name="ck_validacao_pdv_status"),
+        CheckConstraint(
+            "(status_validacao = 'PENDENTE' AND faturamento_bruto_calculado IS NULL "
+            "AND diferenca IS NULL AND validado_em IS NULL) OR "
+            "(status_validacao <> 'PENDENTE' AND faturamento_bruto_calculado IS NOT NULL "
+            "AND diferenca IS NOT NULL AND diferenca >= 0 AND validado_em IS NOT NULL)",
+            name="ck_validacao_pdv_resultado",
+        ),
+    )

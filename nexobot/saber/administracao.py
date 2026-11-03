@@ -104,7 +104,9 @@ REGISTROS = (
         resumo=(
             "Com os dois arquivos presentes, a equipe clica em Processar. O motor calcula os indicadores em um "
             "processo isolado; em sucesso, os arquivos ficam Processado e a análise vai para Em análise; em "
-            "falha, os arquivos ficam com Erro e a análise volta para Relatório recebido."
+            "falha, os arquivos ficam com Erro e a análise volta para Relatório recebido. Em sucesso, o total "
+            "calculado é conferido com o total informado no envio de Vendas; se divergir, a publicação fica "
+            "bloqueada até corrigir o total ou reenviar Vendas e processar de novo."
         ),
         perguntas=(
             "Como o admin processa?", "O que acontece quando a equipe clica em processar?",
@@ -121,7 +123,8 @@ REGISTROS = (
         resumo=(
             "No editor da devolutiva, a equipe preenche título, resumo executivo, pontos positivos, pontos de "
             "alerta, recomendações e conclusão estratégica, podendo salvar rascunhos e gerar um rascunho "
-            "assistido por IA a partir dos indicadores."
+            "assistido por IA a partir dos indicadores, salvo enquanto o total do PDV estiver divergente ou "
+            "sem conferência."
         ),
         perguntas=(
             "Como a equipe escreve a devolutiva?", "O que é o editor da devolutiva?", "Como o admin gera o texto por IA?",
@@ -135,9 +138,10 @@ REGISTROS = (
         titulo="Como a equipe publica (ou despublica) uma análise?",
         categoria="Equipe NEXO",
         resumo=(
-            "No editor da devolutiva, a ação Publicar exige análise processada (Em análise) e o resumo "
-            "executivo e a conclusão preenchidos; ela marca a análise como Concluído, avisa os clientes da "
-            "empresa pelo sininho e por e-mail. Despublicar devolve a análise para Em análise."
+            "No editor da devolutiva, a ação Publicar exige análise processada (Em análise) e o resumo executivo "
+            "e a conclusão preenchidos, e é recusada se o total do PDV estiver divergente ou sem conferência depois "
+            "de um novo envio; ela marca a análise como Concluído, avisa os clientes da empresa pelo sininho e por "
+            "e-mail. Despublicar devolve a análise para Em análise."
         ),
         perguntas=(
             "Como o ADMIN publica uma análise?", "Como a equipe despublica?", "O que é preciso para publicar?",

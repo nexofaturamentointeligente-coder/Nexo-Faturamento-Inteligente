@@ -17,10 +17,33 @@
     </div>
 </div>
 
+{% if validacao and validacao.status_validacao == 'DIVERGENTE_PDV' %}
+{{ m.card_pdv_consultor(validacao, 'Divergência no total do PDV: publicação bloqueada') }}
+{% else %}
 <div class="alert alert-success">
     <i class="bi bi-check2-circle"></i>
     Indicadores consolidados e persistidos. A análise permanece em <strong>{{ analise.status_analise }}</strong> — a conclusão ocorre apenas na publicação da devolutiva estratégica.
 </div>
+{% if validacao %}
+<p class="mb-3">{{ m.badge_pdv(validacao.status_validacao) }} <span class="fw-num">Informado: R$ {{ m.brl(validacao.valor_pdv_informado) }} · Calculado: R$ {{ m.brl(validacao.faturamento_bruto_calculado) }} · Diferença: R$ {{ m.brl(validacao.diferenca) }}</span></p>
+{% elif pdv_disponivel %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+    <div>
+        <strong>Sem conferência com o PDV.</strong>
+        <p>O relatório de Vendas desta análise foi enviado sem o total do PDV. Para conferir, informe o total na tela da análise e processe de novo.</p>
+    </div>
+</div>
+{% else %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+    <div>
+        <strong>Conferência do total do PDV não instalada neste banco.</strong>
+        <p>Até aplicar a migração e2f7a94c1d35, a publicação fica suspensa.</p>
+    </div>
+</div>
+{% endif %}
+{% endif %}
 
 {# ---------------- KPIs oficiais ---------------- #}
 <div class="row g-3 mb-3">

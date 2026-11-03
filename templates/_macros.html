@@ -72,6 +72,43 @@
 {%- endif -%}
 {%- endmacro -%}
 
+{# ---- Badge: conferência com o PDV (ValidacaoPdv.status_validacao); none = sem conferência ---- #}
+{%- macro badge_pdv(status) -%}
+{%- if status == 'CONCLUIDO' -%}<span class="nexo-badge b-green"><span class="dot"></span>Total confere com o PDV</span>
+{%- elif status == 'DIVERGENTE_PDV' -%}<span class="nexo-badge b-red"><span class="dot"></span>Divergente do PDV</span>
+{%- elif status == 'PENDENTE' -%}<span class="nexo-badge b-amber"><span class="dot"></span>Conferência pendente</span>
+{%- else -%}<span class="nexo-badge b-muted">Sem total informado</span>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Card da divergência com o PDV. Só recebe cada valor quem pode vê-lo: o cliente
+      de período não coberto vê apenas o total que ele mesmo digitou, ou nenhum ---- #}
+{%- macro aviso_divergencia_pdv(titulo, texto, informado=none, calculado=none, diferenca=none, classe='is-perigo', devolucoes=none, cancelado=none, link_url=none, link_texto=none) -%}
+<div class="aviso-contrato {{ classe }}" role="status">
+    <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+    <div class="flex-grow-1">
+        <strong>{{ titulo }}</strong>
+        <p>{{ texto }}{% if link_url %} <a href="{{ link_url }}">{{ link_texto }}</a>{% endif %}</p>
+        {% if informado is not none or calculado is not none %}
+        <dl class="dados-contrato mt-2">
+            {% if informado is not none %}<div><dt>Valor informado no PDV</dt><dd class="fw-num">R$ {{ brl(informado) }}</dd></div>{% endif %}
+            {% if calculado is not none %}<div><dt>Valor total calculado pelo ETL</dt><dd class="fw-num">R$ {{ brl(calculado) }}</dd></div>{% endif %}
+            {% if diferenca is not none %}<div><dt>Divergência apurada</dt><dd class="fw-num">R$ {{ brl(diferenca) }}</dd></div>{% endif %}
+            {% if devolucoes is not none %}<div><dt>Devoluções e trocas, fora do bruto</dt><dd class="fw-num">R$ {{ brl(devolucoes) }}</dd></div>{% endif %}
+            {% if cancelado is not none %}<div><dt>Vendas canceladas, fora do cálculo</dt><dd class="fw-num">R$ {{ brl(cancelado) }}</dd></div>{% endif %}
+        </dl>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro -%}
+
+{# ---- O mesmo card nas telas do consultor, com a saída da divergência ---- #}
+{%- macro card_pdv_consultor(v, titulo, link_url=none, link_texto=none) -%}
+{%- set saida = 'A emissão e o compartilhamento com o cliente estão bloqueados. Corrija o total ou reenvie o relatório de Vendas na tela da análise e processe de novo.' -%}
+{%- set nota = '' if v.valor_devolucoes is not none else ' Este relatório não traz coluna de status ou operação: o calculado é a soma direta das linhas, e linhas negativas já entram nela.' -%}
+{{ aviso_divergencia_pdv(titulo, saida ~ nota, v.valor_pdv_informado, v.faturamento_bruto_calculado, v.diferenca, 'is-perigo', v.valor_devolucoes, v.valor_cancelado, link_url, link_texto) }}
+{%- endmacro -%}
+
 {# ---- Badge: plano comercial (Plano.nome_plano) ---- #}
 {%- macro badge_plano(nome) -%}
 {%- if nome == 'OURO' -%}<span class="nexo-badge plan-badge plan-ouro">OURO</span>

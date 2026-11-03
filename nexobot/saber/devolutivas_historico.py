@@ -48,7 +48,8 @@ REGISTROS = (
             "sistema nunca publica sozinho."
         ),
         explicacao=(
-            "Para publicar, a análise precisa ter sido processada (status Em análise) e o resumo executivo e a "
+            "Para publicar, a análise precisa ter sido processada (status Em análise), sem divergência no total de "
+            "vendas, e o resumo executivo e a "
             "conclusão estratégica precisam estar preenchidos. A equipe pode usar a geração assistida por IA "
             "para produzir um rascunho a partir dos números, mas revisa antes de publicar. Também pode "
             "despublicar para corrigir e publicar de novo."

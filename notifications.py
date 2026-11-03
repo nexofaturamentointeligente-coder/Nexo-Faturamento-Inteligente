@@ -49,7 +49,7 @@ def classificar_notificacao(texto: str) -> dict:
     # Avisos que não são de chamado: "Aberto" se leria como dívida ou como chamado em aberto.
     if t.startswith("seu contrato com a nexo vence"):
         return {"tipo": "aberto", "rotulo": "Contrato"}
-    if t.startswith("a caixa que recebe a cópia"):
+    if t.startswith(("a caixa que recebe a cópia", "encontramos uma diferença")):
         return {"tipo": "aberto", "rotulo": "Aviso"}
     if "resolvid" in t:
         return {"tipo": "resolvido", "rotulo": "Resolvido"}

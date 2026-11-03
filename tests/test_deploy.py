@@ -147,7 +147,7 @@ class DeployTests(DeployTestCase):
         self.login()
         for tipo, source in (("VENDAS", VENDAS), ("COMPRAS", COMPRAS)):
             response = self.client.post("/cliente/upload", data={
-                "id_analise": str(self.analise_id), "tipo_relatorio": tipo,
+                "id_analise": str(self.analise_id), "tipo_relatorio": tipo, "valor_pdv_informado": "150.000,00",
                 "csrf_token": self.csrf_token("/cliente/upload"),
                 "arquivo": (io.BytesIO(source.encode()), f"{tipo.lower()}.csv"),
             })

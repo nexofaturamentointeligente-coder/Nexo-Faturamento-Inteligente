@@ -144,6 +144,8 @@ class NexoFormUploadCompatibilityTests(DeployTestCase):
     def _upload(self, contents=CSV, *, filename="synthetic.csv", kind="VENDAS",
                 extra=None, csrf=True, include_file=True):
         data = {"id_analise": str(self.analise_id), "tipo_relatorio": kind}
+        if kind == "VENDAS":
+            data["valor_pdv_informado"] = "150.000,00"
         if csrf:
             data["csrf_token"] = self.csrf_token("/cliente/upload")
         if include_file:
@@ -236,8 +238,8 @@ class NexoFormUploadCompatibilityTests(DeployTestCase):
         self._assert_safe_response(response, 413)
         self.assertEqual(self._uploads(), [])
 
-    def test_multipart_part_limit_accepts_four_and_rejects_five_parts(self):
-        self.app.config["MAX_FORM_PARTS"] = 4
+    def test_multipart_part_limit_accepts_five_and_rejects_six_parts(self):
+        self.app.config["MAX_FORM_PARTS"] = 5
         self._assert_safe_response(self._upload(), 302)
         self.assertEqual(len(self._uploads()), 1)
         response = self._upload(extra={"synthetic_extra": "small"})

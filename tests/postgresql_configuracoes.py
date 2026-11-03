@@ -163,10 +163,15 @@ class PostgreSQLConfiguracoesTests(unittest.TestCase):
 
     def test_migracao_liga_rls_e_bate_com_os_modelos(self):
         from alembic.autogenerate import compare_metadata
+        from alembic.config import Config
         from alembic.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+        configuracao = Config()
+        configuracao.set_main_option("script_location", str(ROOT / "migrations"))
         with self.app.app_context():
-            self.assertEqual(db.session.scalar(text("SELECT version_num FROM alembic_version")), "c7d41e9a2b60")
-            for tabela in TABELAS:
+            self.assertEqual(db.session.scalar(text("SELECT version_num FROM alembic_version")),
+                             ScriptDirectory.from_config(configuracao).get_current_head())
+            for tabela in (*TABELAS, "validacao_pdv"):
                 self.assertTrue(db.session.scalar(text(
                     "SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(:t)"), {"t": tabela}), tabela)
             db.session.rollback()
@@ -229,11 +234,13 @@ class PostgreSQLConfiguracoesTests(unittest.TestCase):
     def test_sem_as_tabelas_nenhuma_consulta_aborta_a_transacao(self):
         """No PostgreSQL, consultar uma tabela que não existe aborta a transação inteira."""
         import preferencias_usuario
+        import validacao_pdv
         from models import ChamadoSuporte
         with self.app.app_context():
             db.session.remove()
             self._migrar("downgrade", "b6935e8de9d4")
         preferencias_usuario._esquema_por_engine.clear()
+        validacao_pdv._esquema_por_engine.clear()
         cliente = self._entrar("um@example.invalid")
         admin = self._entrar("admin1@example.invalid")
         self.assertEqual(cliente.get(PAGINA_CLIENTE).status_code, 200)

@@ -99,7 +99,7 @@ TABELAS_CONTRATUAIS = (
 # Tabelas NÃO contratuais que a cadeia de migrações cria depois de 81287c74387a
 # (a migração até "head" também as traz; nascem vazias como as contratuais).
 TABELAS_POSTERIORES = ("sessao_autenticada", "preferencia_usuario", "documento_legal", "aceite_documento",
-                       "configuracao_sistema")
+                       "configuracao_sistema", "validacao_pdv")
 TABELAS_POR_EMPRESA = ("regime_contratual", "contrato", "cobertura_paga", "evento_contratual")
 UTC = timezone.utc
 SAO_PAULO = ZoneInfo("America/Sao_Paulo")
@@ -280,15 +280,18 @@ class _PrivateCluster:
                 url = db.engine.url
                 self.check("private_engine", url.get_backend_name() == "postgresql"
                            and (url.host, url.port) == ("127.0.0.1", port))
-            self._etapa_migracao_legada()
-            self._etapa_instante_utc()
-            self._etapa_acesso()
-            self._etapa_reconciliacao_concorrente()
-            self._etapa_contratacao_concorrente()
-            self._etapa_prorrogacao_concorrente()
-            self._etapa_exclusao_permanente()
-            self._etapa_downgrade()
+            self._etapas()
             return app
+
+    def _etapas(self):
+        self._etapa_migracao_legada()
+        self._etapa_instante_utc()
+        self._etapa_acesso()
+        self._etapa_reconciliacao_concorrente()
+        self._etapa_contratacao_concorrente()
+        self._etapa_prorrogacao_concorrente()
+        self._etapa_exclusao_permanente()
+        self._etapa_downgrade()
 
     # ------------------------------------------------------------------ apoio
     @contextlib.contextmanager
@@ -448,7 +451,9 @@ class _PrivateCluster:
     @staticmethod
     def _limpar_cache_esquema():
         import contract_policy
+        import validacao_pdv
         contract_policy._esquema_por_engine.clear()
+        validacao_pdv._esquema_por_engine.clear()
 
     def _nova_empresa(self, nome, *, status="ATIVA", deletado_em=None, senha=False):
         from models import Empresa, Usuario

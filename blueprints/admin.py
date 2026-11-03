@@ -22,7 +22,8 @@ from models import (
     ChamadoSuporte, MensagemSuporte, GuiaTopico, ProdutoCurvaABC, Notificacao,
     CoberturaPaga, Contrato, EventoContratual, RegimeContratual,
 )
-from etl_processor import processar_arquivos_analise, ResultadoETL
+from etl_processor import processar_arquivos_analise, ResultadoETL, STATUS_PDV_DIVERGENTE
+import validacao_pdv
 from etl_inputs import ETLInputError
 from etl_limits import get_limits
 from etl_uploads import ler_upload_validado, limitar_upload, limitar_processamento
@@ -208,6 +209,7 @@ def dashboard():
         dashboard_data=dashboard_data,
         homologacoes=homologacoes,
         alertas_contratuais=alertas_contratuais,
+        divergencias_pdv=validacao_pdv.divergentes(),
     )
 
 
@@ -973,7 +975,9 @@ def analise_upload(id_analise):
             flash("Análise não encontrada.", "danger")
             return redirect(url_for("admin.dashboard"))
         if request.method != "POST":
-            return render_template("admin/upload.html", analise=analise)
+            return render_template("admin/upload.html", analise=analise,
+                                   pdv_disponivel=validacao_pdv.esquema_validacao_pdv_disponivel(),
+                                   validacao=validacao_pdv.obter(id_analise))
 
         tipo = (request.form.get("tipo_relatorio") or "").strip().upper()
         if tipo not in ("VENDAS", "COMPRAS"):
@@ -996,6 +1000,10 @@ def analise_upload(id_analise):
                 "danger",
             )
             return redirect(url_for("admin.analise_upload", id_analise=id_analise))
+        # Trava do total do PDV: sem o valor, a troca de arquivo pelo consultor a contornaria.
+        valor_pdv = None
+        if tipo == "VENDAS" and validacao_pdv.esquema_validacao_pdv_disponivel():
+            valor_pdv = validacao_pdv.interpretar_valor_digitado(request.form.get("valor_pdv_informado"))
         # Nenhum efeito persistente antes da leitura limitada e do preflight.
         conteudo, sha = ler_upload_validado(arquivo, ext)
         analise = db.session.get(Analise, id_analise, with_for_update=True, populate_existing=True)
@@ -1003,6 +1011,11 @@ def analise_upload(id_analise):
             db.session.rollback()
             flash("Análise não encontrada.", "danger")
             return redirect(url_for("admin.dashboard"))
+        # Publicada durante a validação do arquivo: agora, com o lock, a publicação não corre mais.
+        if _publicado_no_banco(id_analise):
+            db.session.rollback()
+            flash("Esta análise tem devolutiva publicada. Despublique-a antes de substituir os relatórios.", "warning")
+            return redirect(url_for("admin.analise_relatorio", id_analise=id_analise))
         nome_final = f"analise_{id_analise}_{tipo}_{sha[:8]}.{ext}"
         existente = _buscar_upload(id_analise, tipo)
         caminho_final = storage.salvar(conteudo, nome_final)
@@ -1026,6 +1039,8 @@ def analise_upload(id_analise):
             tamanho_arquivo=len(conteudo), hash_arquivo=sha,
             status_processamento="PENDENTE",
         ))
+        if valor_pdv is not None:
+            validacao_pdv.registrar_valor_informado(id_analise, valor_pdv, current_user.id_usuario)
         outro = _buscar_upload(id_analise, "COMPRAS" if tipo == "VENDAS" else "VENDAS")
         if outro and analise.status_analise == "AGUARDANDO_RELATORIO":
             analise.status_analise = "RELATORIO_RECEBIDO"
@@ -1041,6 +1056,51 @@ def analise_upload(id_analise):
         current_app.logger.warning("Upload administrativo indisponível (%s).", type(erro).__name__)
         flash("Não foi possível salvar o relatório. Tente novamente.", "danger")
         return redirect(url_for("admin.analise_upload", id_analise=id_analise))
+
+
+def _publicado_no_banco(id_analise) -> bool:
+    """Leitura direta, sob o lock da análise: o relacionamento pode estar em cache na sessão."""
+    return bool(db.session.scalar(select(RelatorioAnalise.publicado).where(RelatorioAnalise.id_analise == id_analise)))
+
+
+@admin_bp.route("/analise/<int:id_analise>/total-pdv", methods=["POST"])
+@admin_required
+def corrigir_total_pdv(id_analise):
+    """Corrige só o total do PDV, para o erro de digitação: o portal não devolve o arquivo
+    enviado, e sem isto a divergência exigiria pedi-lo de novo. Fica registrado quem digitou."""
+    destino = url_for("admin.analise_upload", id_analise=id_analise)
+    try:
+        valor = validacao_pdv.interpretar_valor_digitado(request.form.get("valor_pdv_informado"))
+        analise = db.session.get(Analise, id_analise, with_for_update=True, populate_existing=True)
+        if analise is None:
+            db.session.rollback()
+            flash("Análise não encontrada.", "danger")
+            return redirect(url_for("admin.dashboard"))
+        if not validacao_pdv.esquema_validacao_pdv_disponivel():
+            db.session.rollback()
+            flash("A conferência do total do PDV ainda não foi instalada neste banco.", "danger")
+            return redirect(destino)
+        if _publicado_no_banco(id_analise):
+            db.session.rollback()
+            flash("Esta análise tem devolutiva publicada. Despublique-a antes de corrigir o total.", "warning")
+            return redirect(url_for("admin.analise_relatorio", id_analise=id_analise))
+        if _buscar_upload(id_analise, "VENDAS") is None:
+            db.session.rollback()
+            flash("Envie o relatório de Vendas com o total.", "warning")
+            return redirect(destino)
+        validacao_pdv.registrar_valor_informado(id_analise, valor, current_user.id_usuario)
+        db.session.commit()
+    except ETLInputError as erro:
+        db.session.rollback()
+        flash(erro.safe_message, "danger")
+        return redirect(destino)
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        current_app.logger.warning("Correção do total do PDV indisponível (%s).", type(erro).__name__)
+        flash("Não foi possível salvar o total. Tente novamente.", "danger")
+        return redirect(destino)
+    flash("Total do PDV atualizado. Processe a análise de novo para conferir.", "success")
+    return redirect(destino)
 
 
 def _versao_rascunho_confere(form, rel) -> bool:
@@ -1113,6 +1173,11 @@ def analise_relatorio(id_analise):
             if not analise.indicador:
                 flash("Gere os indicadores (Processar) antes de gerar a devolutiva por IA.", "warning")
                 return redirect(destino)
+            if validacao_pdv.conferencia_em_aberto(id_analise):
+                # Os números estão sob suspeita: nem saem para o provedor de IA, nem viram rascunho.
+                flash("Geração por IA bloqueada: o faturamento calculado ainda não confere com o total "
+                      "informado no PDV.", "warning")
+                return redirect(destino)
             from ai_devolutiva import gerar_devolutiva_ia
             ref = f"{analise.mes_referencia:02d}/{analise.ano_referencia}"
             rel = analise.relatorio
@@ -1156,6 +1221,34 @@ def analise_relatorio(id_analise):
         if not conclusao:
             flash("Conclusão estratégica é obrigatória (campo NOT NULL do relatório).", "danger")
             return redirect(url_for("admin.analise_relatorio", id_analise=id_analise))
+
+        # Trava do total do PDV. O mesmo lock do processamento: sem ele, uma publicação em
+        # andamento gravaria CONCLUIDO por cima de uma divergência recém-apurada. Corrigir
+        # o texto de uma devolutiva já publicada não muda números: reprocessar exige despublicar.
+        if acao == "publicar":
+            try:
+                analise = db.session.get(Analise, id_analise, with_for_update=True, populate_existing=True)
+                if analise is None:
+                    db.session.rollback()
+                    flash("Análise não encontrada.", "danger")
+                    return redirect(url_for("admin.analises"))
+                # O relatório pode ter nascido enquanto este pedido esperava o lock.
+                if analise.relatorio is not None and not _versao_rascunho_confere(form, analise.relatorio):
+                    db.session.rollback()
+                    flash("O relatório foi alterado em outra sessão depois que esta tela foi aberta. "
+                          "Recarregue a página, revise o texto atual e tente novamente.", "warning")
+                    return redirect(destino)
+                bloqueio = None if _relatorio_publicado(analise) else validacao_pdv.motivo_bloqueio_publicacao(id_analise)
+            except SQLAlchemyError as erro:
+                db.session.rollback()
+                current_app.logger.warning("Conferência do PDV indisponível ao publicar (%s).", type(erro).__name__)
+                flash("Não foi possível conferir o total do PDV. Tente novamente.", "danger")
+                return redirect(destino)
+            if bloqueio:
+                db.session.rollback()
+                current_app.logger.warning("Publicação da análise %s recusada pela trava do PDV.", id_analise)
+                flash(bloqueio, "danger")
+                return redirect(destino)
 
         rel = analise.relatorio  # uselist=False
         if rel is None:
@@ -1278,7 +1371,10 @@ def analise_relatorio(id_analise):
         flash(msg_acao, "success")
         return redirect(url_for("admin.analise_relatorio", id_analise=id_analise))
 
-    return render_template("admin/relatorio_editor.html", analise=analise)
+    return render_template(
+        "admin/relatorio_editor.html", analise=analise, validacao=validacao_pdv.obter(id_analise),
+        bloqueio_pdv=None if _relatorio_publicado(analise) else validacao_pdv.motivo_bloqueio_publicacao(id_analise),
+    )
 
 
 def _relatorio_publicado(analise) -> bool:
@@ -1340,6 +1436,8 @@ def processar_analise(id_analise):
                 upload.status_processamento = "PROCESSADO"
                 upload.data_processamento = agora
                 upload.mensagem_erro = None
+            # Na mesma transação dos KPIs: número novo nunca convive com conferência antiga.
+            resultado = validacao_pdv.conferir_e_registrar(id_analise, resultado)
         else:
             # O orquestrador reverte apenas seu SAVEPOINT; o lock externo segue
             # mantido e os indicadores/Curva ABC anteriores permanecem intactos.
@@ -1359,17 +1457,21 @@ def processar_analise(id_analise):
         return redirect(url_for("admin.dashboard"))
     # Apenas sucesso já confirmado pode gerar notificações de processamento.
     ref = f"{analise.mes_referencia:02d}/{analise.ano_referencia}"
+    conferencia = resultado.telemetria.get("conferencia_pdv")
+    # Sem valores: o sininho não passa pela cobertura contratual.
+    aviso = (f"Encontramos uma diferença no total de vendas informado para {validacao_pdv.referencia(analise)}. "
+             "A equipe NEXO está revisando."
+             if conferencia and conferencia["status"] == STATUS_PDV_DIVERGENTE else
+             f"Recebemos e processamos seus relatórios de {ref}. Sua devolutiva está em preparação.")
     try:
-        notificar_clientes_empresa(
-            analise.id_empresa,
-            f"Recebemos e processamos seus relatórios de {ref}. Sua devolutiva está em preparação.",
-            url_for("cliente.dashboard"),
-        )
+        notificar_clientes_empresa(analise.id_empresa, aviso, url_for("cliente.dashboard"))
         db.session.commit()
     except Exception as erro:
         db.session.rollback()
         current_app.logger.warning("Falha ao notificar processamento da análise %s: %s", id_analise, type(erro).__name__)
-    return render_template("admin/processar_resultado.html", analise=analise, resultado=resultado)
+    return render_template("admin/processar_resultado.html", analise=analise, resultado=resultado,
+                           pdv_disponivel=validacao_pdv.esquema_validacao_pdv_disponivel(),
+                           validacao=validacao_pdv.obter(id_analise))
 
 
 # =====================================================================

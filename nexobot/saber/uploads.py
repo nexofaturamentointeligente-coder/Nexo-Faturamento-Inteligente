@@ -16,7 +16,8 @@ REGISTROS = (
         tipo="procedimento",
         resumo=(
             "Em Enviar Relatórios, escolha a análise aberta do período, anexe o arquivo de Vendas em um campo "
-            "e o de Compras no outro (.csv ou .xlsx) e confirme cada envio. A equipe NEXO valida e processa."
+            "e o de Compras no outro (.csv ou .xlsx) e confirme cada envio. No envio de Vendas, informe também "
+            "o total de vendas que o PDV mostra para o período. A equipe NEXO valida e processa."
         ),
         explicacao=(
             "Cada análise tem dois espaços: Relatório de Vendas (giro de vendas por produto) e Relatório de "
@@ -27,8 +28,8 @@ REGISTROS = (
         passos=(
             "No menu lateral, abra Enviar Relatórios.",
             "Localize o cartão da análise do período correto (mês/ano de referência e datas).",
-            "No espaço Relatório de Vendas, clique ou arraste o arquivo .csv ou .xlsx exportado do PDV e "
-            "clique em Enviar Vendas.",
+            "No espaço Relatório de Vendas, informe o total de vendas que o PDV mostra para o período, clique "
+            "ou arraste o arquivo .csv ou .xlsx exportado do PDV e clique em Enviar Vendas.",
             "Repita no espaço Relatório de Compras e clique em Enviar Compras.",
             "Confira o status de cada arquivo (“AGUARDANDO VALIDAÇÃO”) e a mensagem de que os dois relatórios "
             "foram recebidos.",
@@ -60,13 +61,16 @@ REGISTROS = (
             "quantidade e valor) e exporte em .xlsx ou .csv.",
             "Gere também o relatório de Compras do mesmo período (fornecedor e valor da nota, ou produto, "
             "quantidade e valor) e exporte no mesmo formato.",
-            "Volte ao portal e anexe o arquivo de Vendas no espaço de Vendas; confirme com Enviar Vendas.",
+            "Anote também o total de vendas que o PDV mostra nesse relatório.",
+            "Volte ao portal, informe esse total e anexe o arquivo de Vendas no espaço de Vendas; confirme com "
+            "Enviar Vendas.",
             "Anexe o arquivo de Compras no espaço de Compras; confirme com Enviar Compras.",
             "Aguarde: os arquivos ficam “AGUARDANDO VALIDAÇÃO” até a equipe processar. Você será avisado no sininho.",
         ),
         detalhes=(
             "Arquivos .xls (Excel antigo) não são aceitos: salve como .xlsx ou .csv. O limite de tamanho é de "
-            "20 MB por arquivo. Se enviar o arquivo errado, basta enviar o correto no mesmo espaço: ele "
+            "20 MB por arquivo. Se enviar o arquivo errado, basta enviar o correto no mesmo espaço, informando "
+            "de novo o total no caso de Vendas: ele "
             "substitui o anterior enquanto a análise aceitar envios."
         ),
         perguntas=(
@@ -123,7 +127,7 @@ REGISTROS = (
             "Exporte em .xlsx ou .csv.",
             "Faça o mesmo com o relatório de Compras (entradas ou notas de compra) do mesmo período.",
             "Dê nomes claros aos arquivos, por exemplo “vendas março 2026” e “compras março 2026”.",
-            "Anexe os dois em Enviar Relatórios.",
+            "Anote o total de vendas que o PDV mostra nesse relatório e anexe os dois em Enviar Relatórios.",
         ),
         perguntas=(
             "Como exportar os relatórios do PDV?", "Como tiro o relatório do meu sistema?", "Como gero a planilha de vendas?",
@@ -248,7 +252,8 @@ REGISTROS = (
             "Quando os dois arquivos estão presentes, a análise passa a Relatório recebido e a equipe recebe "
             "uma notificação de homologação.",
             "A equipe confere os arquivos e executa o processamento: os arquivos ficam “PROCESSADO” (ou “ERRO”) "
-            "e você recebe o aviso “Recebemos e processamos seus relatórios”.",
+            "e você recebe o aviso “Recebemos e processamos seus relatórios”. Se o total calculado não bater com "
+            "o total que você informou, o aviso é outro e a devolutiva fica bloqueada até a conferência.",
             "A análise entra em Em análise enquanto a equipe prepara a devolutiva estratégica.",
             "Na publicação, você recebe o aviso no sininho (e e-mail, quando configurado) e a análise aparece "
             "na Visão Geral e no Histórico.",
@@ -276,7 +281,8 @@ REGISTROS = (
         passos=(
             "Abra Enviar Relatórios e veja se o cartão da análise ainda está lá (status Aguardando relatório "
             "ou Relatório recebido).",
-            "No espaço do tipo errado (Vendas ou Compras), anexe o arquivo correto e clique em Reenviar.",
+            "No espaço do tipo errado (Vendas ou Compras), anexe o arquivo correto e clique em Reenviar. Em "
+            "Vendas, informe de novo o total do PDV.",
             "Confira o nome do arquivo exibido no cartão: ele deve ser o do novo envio.",
             "Se o cartão não aparecer mais (análise Em análise ou Concluída), abra um chamado em Suporte "
             "explicando o período e o arquivo a substituir.",
@@ -323,7 +329,8 @@ REGISTROS = (
             "Quando a conta está suspensa, a equipe não abre novos períodos. Se a sua empresa já está sob as "
             "regras contratuais, o envio fica restrito às análises de períodos já pagos; caso contrário, o "
             "envio para a análise já aberta segue liberado. Com a conta cancelada, o acesso ao portal é "
-            "bloqueado. O portal "
+            "bloqueado. O envio de Vendas também é recusado sem o total de vendas em um formato válido, como "
+            "150.000,00. O portal "
             "aceita um envio por vez: se aparecer a "
             "mensagem de que há outro upload em andamento, aguarde alguns instantes e tente de novo."
         ),
@@ -363,7 +370,8 @@ REGISTROS = (
             "Se for formato ou tamanho, converta para .csv ou .xlsx e reduza o período ou as colunas.",
             "Se for coluna não reconhecida, confira se o relatório é tabular e tem produto, quantidade e valor "
             "(Vendas) ou fornecedor/produto e valor (Compras).",
-            "Reenvie o arquivo corrigido no mesmo espaço. Em dúvida, abra um chamado e descreva a mensagem.",
+            "Reenvie o arquivo corrigido no mesmo espaço (em Vendas, informando o total do PDV). Em dúvida, abra "
+            "um chamado e descreva a mensagem.",
         ),
         perguntas=(
             "O que acontece se houver erro?", "Deu erro no meu arquivo.", "O que significa status erro?",
@@ -381,7 +389,8 @@ REGISTROS = (
         resumo=(
             "Em Enviar Relatórios, o arquivo aparece como “AGUARDANDO VALIDAÇÃO” enquanto a equipe NEXO "
             "confere. Quando a equipe processa com sucesso, você recebe no sininho o aviso “Recebemos e "
-            "processamos seus relatórios”, a análise sai de Enviar Relatórios e passa a aparecer como Em "
+            "processamos seus relatórios” (ou o aviso de diferença, se o total calculado não bater com o que você "
+            "informou), a análise sai de Enviar Relatórios e passa a aparecer como Em "
             "análise na tabela Análises em andamento da Visão Geral. Se o processamento falhar, o cartão "
             "continua em Enviar Relatórios com o arquivo marcado “ERRO” e você pode reenviar. Quando a análise "
             "é publicada, você recebe um aviso no sininho e ela passa a aparecer na Visão Geral e no Histórico."

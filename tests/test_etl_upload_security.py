@@ -120,6 +120,8 @@ class ETLUploadSecurityTests(DeployTestCase):
         path = f"/admin/analise/{identifier}/upload" if admin else "/cliente/upload"
         data = {"id_analise": str(identifier), "tipo_relatorio": kind,
                 "arquivo": (io.BytesIO(content), filename)}
+        if kind == "VENDAS":
+            data["valor_pdv_informado"] = "150.000,00"
         if csrf:
             data["csrf_token"] = self._csrf(client, path)
         return client.post(path, data=data, content_type="multipart/form-data")

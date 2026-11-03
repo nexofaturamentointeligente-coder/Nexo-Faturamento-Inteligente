@@ -8,7 +8,7 @@
 <div class="page-head">
     <div>
         <h1>Enviar relatórios</h1>
-        <p class="sub">Anexe os relatórios do seu sistema ERP. A equipe NEXO valida e processa.</p>
+        <p class="sub">Anexe os relatórios do seu sistema ERP{% if pdv_disponivel %} e informe o total de vendas do período{% endif %}. A equipe NEXO valida e processa.</p>
     </div>
     <div class="page-head-actions">
         <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left"></i> Voltar ao painel</a>
@@ -68,6 +68,19 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="id_analise" value="{{ a.id_analise }}">
                         <input type="hidden" name="tipo_relatorio" value="{{ slot.tipo }}">
+                        {# Trava do total do PDV: só Vendas entra no faturamento. Fora do label da
+                           dropzone, que abre o seletor de arquivo ao receber um clique. #}
+                        {% if slot.tipo == 'VENDAS' and pdv_disponivel %}
+                        {% set ultimo_total = ultimos_totais_pdv.get(a.id_analise) %}
+                        <div class="mb-3">
+                            <label class="nexo-label" for="valorPdv{{ a.id_analise }}">Total de vendas no PDV, em reais <span class="req" aria-hidden="true">*</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text">R$</span>
+                                <input type="text" inputmode="decimal" class="form-control" id="valorPdv{{ a.id_analise }}" name="valor_pdv_informado" placeholder="Ex: 150.000,00" maxlength="32" autocomplete="off" aria-describedby="valorPdvDica{{ a.id_analise }}" required>
+                            </div>
+                            <p class="field-hint mt-1 mb-0" id="valorPdvDica{{ a.id_analise }}">O total de vendas que o PDV mostra neste relatório, de {{ a.periodo_inicio.strftime('%d/%m/%Y') }} a {{ a.periodo_fim.strftime('%d/%m/%Y') }}.{% if ultimo_total is not none %} Último informado: R$ {{ m.brl(ultimo_total) }}.{% endif %}</p>
+                        </div>
+                        {% endif %}
                         {# Arquivo já recebido: aparece como "recebido", não como se estivesse
                            selecionado agora. O estado muda ao escolher ou arrastar um arquivo novo. #}
                         <label class="dropzone {{ 'is-recebido' if slot.up }}" data-dz>

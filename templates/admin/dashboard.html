@@ -76,6 +76,11 @@
 </div>
 {% endif %}
 
+{# ---------------- Trava do total do PDV: sem limite, para nenhuma divergência sumir do painel ---------------- #}
+{% for item in divergencias_pdv %}
+{{ m.card_pdv_consultor(item.validacao, 'Divergência no total do PDV: ' ~ (item.analise.empresa.nome_fantasia or item.analise.empresa.razao_social) ~ ' · ref. ' ~ item.referencia, url_for('admin.analise_upload', id_analise=item.analise.id_analise), 'Abrir a análise') }}
+{% endfor %}
+
 {# ---------------- Gráficos ---------------- #}
 <div class="row g-3 mb-4">
     <div class="col-12 col-md-6 col-xl-4">

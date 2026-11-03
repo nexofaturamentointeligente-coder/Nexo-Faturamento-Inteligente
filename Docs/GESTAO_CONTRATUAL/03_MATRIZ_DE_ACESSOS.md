@@ -34,3 +34,4 @@ Legenda: ✅ permitido · ❌ negado · ⚠️ permitido com restrição.
   - Ela não grava sessão nem flash, não redireciona e envia `Cache-Control: no-store`.
   - Usa o layout de autenticação, sem `current_user` nem CSRF, e não carrega dados da empresa.
 - **Canais de contato:** não há e-mail, telefone ou WhatsApp oficialmente configurado. A página indica apenas "entre em contato com a equipe NEXO" e oferece um link para "Como contratar a NEXO" (`/como-aderir`).
+- **Aviso de divergência com o total do PDV no Dashboard:** é uma exceção à regra de só mostrar número depois da publicação. Em período liberado pelo contrato, o cliente vê o valor informado, o calculado e a diferença, como preliminares; em período não pago, só o total digitado por um usuário da própria empresa. Ver `Docs/TRAVA_TOTAL_PDV.md`.

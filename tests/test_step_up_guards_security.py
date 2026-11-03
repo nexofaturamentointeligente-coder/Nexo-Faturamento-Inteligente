@@ -93,7 +93,7 @@ class StepUpAndGuardsSecurityTests(DeployTestCase):
         upload = f"/admin/analise/{self.analise_id}/upload"
         # Antes de publicar, o envio de arquivo é aceito normalmente.
         response = self.client.post(upload, data={
-            "tipo_relatorio": "VENDAS", "arquivo": (io.BytesIO(CSV), "vendas.csv"),
+            "tipo_relatorio": "VENDAS", "valor_pdv_informado": "150.000,00", "arquivo": (io.BytesIO(CSV), "vendas.csv"),
             "csrf_token": self.csrf_token(upload),
         }, content_type="multipart/form-data")
         self.assertEqual(response.status_code, 302)

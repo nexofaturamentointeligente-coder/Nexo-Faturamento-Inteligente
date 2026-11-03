@@ -21,7 +21,7 @@ REGISTROS = (
         explicacao=(
             "Os avisos chegam em tempo real enquanto o portal está aberto (aparece também um alerta no canto "
             "da tela) e ficam guardados para quando você entrar de novo. “Marcar todas como lidas” zera a "
-            "contagem. Cada aviso traz um selo: Nova Análise, Resolvido, Aberto ou Contrato."
+            "contagem. Cada aviso traz um selo: Nova Análise, Resolvido, Aberto, Contrato ou Aviso."
         ),
         perguntas=(
             "Para que serve o sininho?", "Como recebo as notificações?", "Onde vejo meus avisos?",
@@ -36,7 +36,8 @@ REGISTROS = (
         titulo="Quais acontecimentos geram avisos no sininho?",
         categoria="Notificações",
         resumo=(
-            "Para o cliente: relatórios processados pela equipe (“Recebemos e processamos seus relatórios”), "
+            "Para o cliente: relatórios processados pela equipe (“Recebemos e processamos seus relatórios” ou, se "
+            "o total calculado não bater com o informado, “Encontramos uma diferença no total de vendas informado”), "
             "análise publicada (“Seu Relatório Estratégico de MM/AAAA já está disponível”), resposta da "
             "equipe em um chamado, chamado marcado como resolvido e o lembrete de renovação do contrato, quando "
             "a equipe NEXO o dispara."
@@ -61,7 +62,7 @@ REGISTROS = (
         resumo=(
             "O envio em si é confirmado na hora pela mensagem na página e pelo status “AGUARDANDO VALIDAÇÃO” no "
             "cartão do arquivo. O aviso no sininho vem na etapa seguinte, quando a equipe processa os "
-            "relatórios (“Recebemos e processamos seus relatórios”)."
+            "relatórios (“Recebemos e processamos seus relatórios” ou, se os totais não baterem, o aviso de diferença)."
         ),
         perguntas=(
             "Recebo aviso quando envio o arquivo?", "Como sei que a equipe recebeu meu relatório?",

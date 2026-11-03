@@ -812,7 +812,7 @@ class UploadContratualTests(PortalContratualCase):
 
     def _enviar(self, id_analise):
         return self.client_cli.post("/cliente/upload", data={
-            "id_analise": str(id_analise), "tipo_relatorio": "VENDAS",
+            "id_analise": str(id_analise), "tipo_relatorio": "VENDAS", "valor_pdv_informado": "150.000,00",
             "arquivo": (io.BytesIO(CSV_VENDAS), "vendas.csv"),
             "csrf_token": self._csrf(self.client_cli, "/cliente/upload"),
         }, content_type="multipart/form-data")

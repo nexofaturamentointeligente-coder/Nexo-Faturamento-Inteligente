@@ -15,8 +15,8 @@ REGISTROS = (
         tipo="roteiro",
         resumo=(
             "Comece definindo a sua senha pelo link do e-mail de boas-vindas, entre no portal, confira a "
-            "Visão Geral e, em Enviar Relatórios, anexe os arquivos de Vendas e Compras da análise aberta. "
-            "Depois acompanhe o status e aguarde o aviso de publicação."
+            "Visão Geral e, em Enviar Relatórios, anexe os arquivos de Vendas e Compras da análise aberta e "
+            "informe o total de vendas. Depois acompanhe o status e aguarde o aviso de publicação."
         ),
         explicacao=(
             "Não existe autocadastro: a equipe NEXO cadastra a empresa e cria o seu usuário. Você recebe um "
@@ -30,8 +30,8 @@ REGISTROS = (
             "Entre no portal com o seu e-mail e a senha definida.",
             "Na Visão Geral, confira os dados da empresa, o plano e as análises em andamento.",
             "Abra Enviar Relatórios no menu lateral e localize a análise aberta para o período.",
-            "Exporte do seu PDV o relatório de Vendas e o de Compras do período (.csv ou .xlsx) e anexe um em "
-            "cada campo.",
+            "Exporte do seu PDV o relatório de Vendas e o de Compras do período (.csv ou .xlsx) e anote o total "
+            "de vendas que o PDV mostra. Informe esse total no espaço de Vendas e anexe cada arquivo no seu campo.",
             "Acompanhe o status: “AGUARDANDO VALIDAÇÃO” enquanto a equipe confere; depois “PROCESSADO”.",
             "Quando a devolutiva for publicada, você recebe um aviso no sininho e a análise aparece na Visão "
             "Geral e no Histórico.",
@@ -170,7 +170,7 @@ REGISTROS = (
         explicacao=(
             "Os arquivos enviados ficam “AGUARDANDO VALIDAÇÃO” até a equipe processar; depois ficam "
             "“PROCESSADO” ou “ERRO”. Quando o processamento termina com sucesso, você recebe o aviso “Recebemos "
-            "e processamos seus relatórios”; se o arquivo ficar com status “ERRO”, não há aviso no sininho — o "
+            "e processamos seus relatórios” ou, se os totais não baterem, o aviso de diferença; se o arquivo ficar com status “ERRO”, não há aviso no sininho — o "
             "status aparece apenas em Enviar Relatórios, e você pode reenviar o arquivo.; quando a devolutiva é "
             "publicada, recebe outro aviso e a análise passa a aparecer na Visão Geral e no Histórico."
         ),

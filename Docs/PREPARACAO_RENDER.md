@@ -21,6 +21,8 @@ Este documento detalha a configuração técnica necessária para publicar a apl
 3. Publique em branch própria e abra uma PR para revisão. Merge e implantação exigem autorização separada.
 4. **Repositório oficial e `README.md`:** o `origin` local aponta para `https://github.com/nexofaturamentointeligente-coder/Nexo-Faturamento-Inteligente.git`, e o envio é manual, feito pelo proprietário. Na publicação final, **mantenha o `README.md` original do repositório remoto**: o deste projeto não deve substituí-lo. Antes de enviar, rode `git fetch origin` e `git checkout origin/<branch-padrão> -- README.md`, e faça o commit dessa troca. Se o Git recusar o envio por históricos diferentes, não use `--force`: isso apagaria o histórico e o `README.md` do remoto.
 
+5. **Trava do total do PDV:** aplique as migrações `c7d41e9a2b60` e `e2f7a94c1d35` antes de o código novo receber tráfego. Sem elas, nenhuma nova devolutiva é publicada. Ver `Docs/TRAVA_TOTAL_PDV.md`.
+
 ## 3. Configuração no Render
 
 ### A. Criação do Serviço

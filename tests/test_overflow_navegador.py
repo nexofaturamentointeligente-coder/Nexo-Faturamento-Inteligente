@@ -247,7 +247,8 @@ class NavegadorCase(ContratosCase):
     def dados_extensos(self):
         """Nomes, e-mails e produtos longos; faturamento de nove dígitos; uma empresa
         na lixeira; dois chamados; duas análises publicadas (histórico com 2 pontos)."""
-        from models import Analise, ChamadoSuporte, Empresa, MensagemSuporte, Plano, ProdutoCurvaABC, Segmento, UploadRelatorio
+        from models import (Analise, ChamadoSuporte, Empresa, MensagemSuporte, Plano, ProdutoCurvaABC, Segmento,
+                            UploadRelatorio, ValidacaoPdv)
         s = self.db.session
         plano = s.scalar(self.db.select(Plano))
         segmento = Segmento(nome_segmento="MATERIAIS_DE_CONSTRUCAO_E_ACABAMENTOS")
@@ -307,6 +308,13 @@ class NavegadorCase(ContratosCase):
                               nome_arquivo_original="vendas-fevereiro-2026-loja-matriz-e-filiais-consolidado.csv",
                               caminho_arquivo="/tmp/inexistente.csv", extensao_arquivo="CSV", tamanho_arquivo=12,
                               hash_arquivo="0" * 64, status_processamento="PENDENTE"))
+        # A análise em aberto diverge do PDV: o card, com valores de nove dígitos, entra na medição.
+        s.add(ValidacaoPdv(id_analise=aberta.id_analise, valor_pdv_informado=Decimal("123456789.12"),
+                           faturamento_bruto_calculado=Decimal("987654321.98"), diferenca=Decimal("864197532.86"),
+                           valor_devolucoes=Decimal("1234567.89"), valor_cancelado=Decimal("7654321.00"),
+                           status_validacao="DIVERGENTE_PDV", id_usuario_informante=self.cliente_id,
+                           informado_em=datetime(2026, 2, 10, 13, 0, tzinfo=timezone.utc),
+                           validado_em=datetime(2026, 2, 11, 13, 0, tzinfo=timezone.utc)))
         for i, (assunto, status) in enumerate([
                 ("Erro ao enviar planilha de compras em formato XLSX com várias abas e colunas mescladas", "ABERTO"),
                 ("Dúvida sobre o indicador de pressão de estoque do último período", "RESOLVIDO")]):
@@ -652,6 +660,8 @@ class OverflowNavegadorTests(NavegadorCase):
         self.ir(pagina, "/cliente/upload")
         posts = []
         pagina.on("request", lambda r: posts.append(r.url) if r.method == "POST" else None)
+        # O total do PDV é obrigatório: vazio, o navegador barra o envio antes da dropzone.
+        pagina.locator("input[name=valor_pdv_informado]").first.fill("150.000,00")
         pagina.locator("form:has(input[type=file]) button[type=submit]").first.click()
         pagina.wait_for_timeout(300)
         self.assertEqual(posts, [])

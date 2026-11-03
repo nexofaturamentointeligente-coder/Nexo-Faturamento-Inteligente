@@ -139,7 +139,7 @@ class PostgreSQLETLResourceSecurityTests(token_cases._TokenCase):
         endpoint = "/cliente/upload" if customer else f"/admin/analise/{identifier}/upload"
         return client.post(endpoint, data={
             "csrf_token": csrf, "id_analise": str(identifier), "tipo_relatorio": "VENDAS",
-            "arquivo": (BytesIO(content), "substituto.csv"),
+            "valor_pdv_informado": "150.000,00", "arquivo": (BytesIO(content), "substituto.csv"),
         }, content_type="multipart/form-data")
 
     def _snapshot(self, analysis=None):

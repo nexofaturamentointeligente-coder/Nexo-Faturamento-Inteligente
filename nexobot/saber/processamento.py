@@ -118,7 +118,9 @@ REGISTROS = (
         ),
         explicacao=(
             "O princípio é não inventar dados: ou o processamento tem sucesso com números reais, ou é recusado "
-            "com um diagnóstico. Também há sinais de qualidade que a equipe vê no resultado do processamento, "
+            "com um diagnóstico. Com sucesso, o total calculado ainda é conferido com o total informado no envio "
+            "de Vendas; se não bater, a publicação fica bloqueada. Também há sinais de qualidade que a equipe vê "
+            "no resultado do processamento, "
             "como produtos com estoque negativo informado pelo PDV ou itens vendidos abaixo do custo informado "
             "pelo PDV; esses alertas são observações sobre o dado bruto, não cálculos de margem."
         ),
@@ -164,12 +166,13 @@ REGISTROS = (
             "o aviso no sininho. (O status PROCESSADO dos arquivos é visível apenas para a equipe NEXO na área "
             "administrativa.), a análise passa para Em análise e você recebe no sininho o aviso “Recebemos e "
             "processamos seus relatórios de MM/AAAA. Sua devolutiva está em preparação.” (com o mês/ano da "
-            "análise)."
+            "análise). Se o total calculado não bater com o que você informou, o aviso é “Encontramos uma diferença no total de vendas informado”."
         ),
         explicacao=(
-            "Os números em si ainda não ficam visíveis nessa etapa: eles aparecem junto com a devolutiva, "
-            "quando a equipe publica a análise. Se o processamento falhar, o arquivo aparece com o status "
-            "“ERRO” em Enviar relatórios e pode ser reenviado."
+            "Os indicadores ainda não ficam visíveis nessa etapa: eles aparecem junto com a devolutiva, "
+            "quando a equipe publica a análise. A exceção é a divergência com o total do PDV, que aparece em um "
+            "aviso na Visão Geral. Se o processamento falhar, o arquivo aparece com o status “ERRO” em Enviar "
+            "relatórios e pode ser reenviado."
         ),
         perguntas=(
             "Como sei que processou?", "Onde vejo o resultado do processamento?", "Já posso ver os números depois de processar?",
@@ -179,6 +182,39 @@ REGISTROS = (
         relacionados=("nexo.analises.status_em_analise", "nexo.analises.quando_vejo_resultados"),
         destino="upload",
         fontes=("blueprints/admin.py", "templates/cliente/upload.html"),
+    ),
+    registro(
+        id="nexo.processamento.divergencia_pdv",
+        titulo="O que significa a divergência no total de vendas?",
+        categoria="Processamento",
+        resumo=(
+            "No envio de Vendas, você informa o total que o PDV mostra no relatório. No processamento, o motor "
+            "compara esse total com o faturamento bruto do arquivo: sem as vendas canceladas e, quando o relatório "
+            "marca devoluções e trocas, antes de deduzi-las. Se a diferença passar de um real, a análise fica com "
+            "a publicação bloqueada até a conferência."
+        ),
+        explicacao=(
+            "A análise continua Em análise e os arquivos ficam processados: não é erro de leitura, é uma "
+            "diferença entre dois totais. Enquanto ela existir, a devolutiva não é publicada, o que também "
+            "impede o PDF e o aviso de análise disponível. Na Visão Geral aparece um aviso. Se o período estiver "
+            "liberado no contrato, ele traz o total informado, o valor calculado e a diferença; fora disso, só "
+            "mostra o total se ele foi digitado por alguém da sua empresa. Causas comuns: relatório de outro "
+            "período, total digitado errado e descontos ou frete somados de outro jeito no PDV."
+        ),
+        detalhes=(
+            "Para resolver, fale com a equipe NEXO pelo Suporte: ela corrige o total ou reenvia o relatório de "
+            "Vendas e processa de novo. Se os totais baterem, a publicação é liberada. Sem coluna de status ou "
+            "operação no relatório, o calculado é a soma direta das linhas, e linhas negativas já entram nela."
+        ),
+        perguntas=(
+            "O que é divergência no total?", "Por que apareceu diferença no total de vendas?",
+            "O total que informei não bateu, e agora?", "Por que minha devolutiva está bloqueada?",
+            "O que é o aviso de diferença no total?",
+        ),
+        termos="divergencia divergente diferenca total informado conferencia bloqueada bloqueio bater",
+        relacionados=("nexo.processamento.erros", "nexo.uploads.como_enviar", "nexo.admin.publicar"),
+        destino="suporte",
+        fontes=("etl_processor.py", "validacao_pdv.py", "blueprints/admin.py", "templates/cliente/dashboard.html"),
     ),
     registro(
         id="nexo.processamento.erros",

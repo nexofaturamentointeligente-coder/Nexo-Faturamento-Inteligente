@@ -39,19 +39,21 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from etl_inputs import ETLInputError
+from etl_processor import STATUS_PDV_DIVERGENTE
 from etl_uploads import ler_upload_validado, limitar_upload
 
 from blueprints.auth import limite_reautenticacao, trocar_email_autenticado, trocar_senha_autenticada
 import configuracoes_conta
 from extensions import chave_limite_usuario, db, limiter
+import validacao_pdv
 from horario import agora_utc
 from models import (
     Analise, IndicadorAnalise, RelatorioAnalise, UploadRelatorio,
     ChamadoSuporte, MensagemSuporte, GuiaTopico,
 )
 from contract_policy import (
-    agora, data_local, filtrar_analises_consultaveis, obter_situacao_contratual, pode_consultar_analise,
-    pode_enviar_relatorio, pode_exportar_pdf,
+    agora, analise_coberta, data_local, filtrar_analises_consultaveis, obter_situacao_contratual,
+    pode_consultar_analise, pode_enviar_relatorio, pode_exportar_pdf,
 )
 from insights import gerar_semaforos
 from notifications import notificar_admins
@@ -172,6 +174,27 @@ def _auditoria(analise) -> dict | None:
     }
 
 
+def _total_informado_visivel(situacao, analise, linha) -> bool:
+    """Fora do período liberado, o cliente só vê o total que ele mesmo digitou."""
+    return analise_coberta(situacao, analise) or validacao_pdv.informado_pelo_cliente(linha, analise)
+
+
+def _divergencias_pdv(situacao, analises) -> list:
+    """Análises em andamento com o total divergente do PDV. O calculado e a divergência
+    só saem em período que a política libera: informado mais divergência revelam o
+    calculado, e nenhum dado de período não pago chega ao HTML."""
+    linhas = validacao_pdv.por_analise(a.id_analise for a in analises)
+    return [
+        {
+            "analise": a, "validacao": linhas[a.id_analise], "referencia": validacao_pdv.referencia(a),
+            "mostrar_valores": analise_coberta(situacao, a),
+            "mostrar_informado": _total_informado_visivel(situacao, a, linhas[a.id_analise]),
+        }
+        for a in analises
+        if a.id_analise in linhas and linhas[a.id_analise].status_validacao == STATUS_PDV_DIVERGENTE
+    ]
+
+
 @cliente_bp.route("/dashboard")
 @cliente_required
 def dashboard():
@@ -223,6 +246,7 @@ def dashboard():
         analise=analise,
         analises=analises,
         analises_em_andamento=analises_em_andamento,
+        divergencias_pdv=_divergencias_pdv(situacao, analises_em_andamento),
         dashboard_data=dashboard_data,
         semaforos=semaforos,
         auditoria=auditoria,
@@ -557,8 +581,15 @@ def upload():
             .order_by(Analise.data_criacao.desc())
         ).scalars().all() if pode_enviar_relatorio(situacao, a)]
         if request.method != "POST":
-            return render_template("cliente/upload.html", empresa=empresa, analises=analises_abertas,
-                                   situacao=situacao)
+            linhas_pdv = validacao_pdv.por_analise(a.id_analise for a in analises_abertas)
+            return render_template(
+                "cliente/upload.html", empresa=empresa, analises=analises_abertas, situacao=situacao,
+                pdv_disponivel=validacao_pdv.esquema_validacao_pdv_disponivel(),
+                ultimos_totais_pdv={
+                    a.id_analise: linhas_pdv[a.id_analise].valor_pdv_informado for a in analises_abertas
+                    if a.id_analise in linhas_pdv and _total_informado_visivel(situacao, a, linhas_pdv[a.id_analise])
+                },
+            )
         try:
             id_analise = int(request.form.get("id_analise", ""))
         except ValueError:
@@ -588,6 +619,10 @@ def upload():
                 f"Extensão .{ext} não suportada. Aceitos: {sorted(current_app.config['ALLOWED_EXTENSIONS'])}.", "danger",
             )
             return redirect(url_for("cliente.upload"))
+        # Trava do total do PDV: só VENDAS entra no faturamento. required no HTML não protege.
+        valor_pdv = None
+        if tipo == "VENDAS" and validacao_pdv.esquema_validacao_pdv_disponivel():
+            valor_pdv = validacao_pdv.interpretar_valor_digitado(request.form.get("valor_pdv_informado"))
         conteudo, sha = ler_upload_validado(arquivo, ext)
         # Refresh obrigatório: estado/vínculo podem mudar durante a validação.
         analise = db.session.get(Analise, id_analise, with_for_update=True, populate_existing=True)
@@ -625,6 +660,8 @@ def upload():
             tamanho_arquivo=len(conteudo), hash_arquivo=sha,
             status_processamento="PENDENTE",
         ))
+        if valor_pdv is not None:
+            validacao_pdv.registrar_valor_informado(id_analise, valor_pdv, current_user.id_usuario)
         outro = _buscar_upload(id_analise, "COMPRAS" if tipo == "VENDAS" else "VENDAS")
         if outro and analise.status_analise == "AGUARDANDO_RELATORIO":
             analise.status_analise = "RELATORIO_RECEBIDO"

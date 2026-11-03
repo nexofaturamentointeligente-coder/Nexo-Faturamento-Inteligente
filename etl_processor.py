@@ -29,7 +29,8 @@ Regras inegociáveis (MVP/PI2):
     de KPI. 'Total Custo' pode gerar APENAS o alerta "venda abaixo do
     custo informado pelo PDV" — observação do dado bruto, NÃO margem.
   - Falha de leitura/validação nunca é mascarada com dados falsos.
-  - Status CONCLUIDO nunca é setado aqui — é decisão humana via admin.
+  - Status CONCLUIDO da análise nunca é setado aqui — é decisão humana via admin.
+    (O CONCLUIDO de validar_total_pdv é só o resultado da conferência com o PDV.)
 
 Assinatura imutável:
   processar_arquivos_analise(caminho_vendas, caminho_compras,
@@ -46,7 +47,7 @@ import numbers
 import unicodedata
 from datetime import datetime, timezone
 from collections import Counter, namedtuple
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 import numpy as np
 import pandas as pd
@@ -67,6 +68,11 @@ ResultadoETL = namedtuple(
 #   Classe C (Operacionais): acima de 95%
 ABC_LIMITE_A = 80.0
 ABC_LIMITE_B = 95.0
+
+# Trava do total do PDV: diferença maior que a tolerância bloqueia a publicação.
+TOLERANCIA_PDV = Decimal("1.00")
+STATUS_PDV_CONCLUIDO = "CONCLUIDO"
+STATUS_PDV_DIVERGENTE = "DIVERGENTE_PDV"
 
 
 class ETLValidationError(ETLInputError):
@@ -1034,6 +1040,50 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
         telemetria=telemetria,
         alertas=alertas,
     )
+
+
+# =====================================================================
+# 7a) Trava do total do PDV (regra pura; o banco fica em validacao_pdv.py)
+# =====================================================================
+def em_centavos(valor) -> Decimal:
+    """Valor arredondado ao centavo. Comparar em float erraria na fronteira de R$ 1,00:
+    131072.70 - 131071.70 dá 1.0000000000145519, e uma diferença de 1,00 viraria divergência."""
+    with localcontext() as contexto:
+        contexto.prec = 400  # cabe qualquer float finito: o quantize não pode estourar a precisão
+        return Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def validar_total_pdv(faturamento_bruto_calculado, valor_pdv_informado) -> dict:
+    """
+    Compara o total informado no PDV com o faturamento bruto calculado pelo ETL.
+
+    `status` é o resultado da CONFERÊNCIA, e não o da análise: CONCLUIDO aqui só diz que
+    os totais batem. A análise segue em EM_ANALISE até a publicação humana.
+    """
+    calculado = em_centavos(faturamento_bruto_calculado)
+    informado = em_centavos(valor_pdv_informado)
+    diferenca = abs(calculado - informado)
+    return {
+        "status": STATUS_PDV_DIVERGENTE if diferenca > TOLERANCIA_PDV else STATUS_PDV_CONCLUIDO,
+        "valor_pdv_informado": informado,
+        "faturamento_bruto_calculado": calculado,
+        "diferenca": diferenca,
+    }
+
+
+def faturamento_bruto(resultado: ResultadoETL) -> float:
+    """Soma das vendas válidas: sem as canceladas e antes de deduzir devoluções e trocas."""
+    return resultado.kpis["faturamento_total"] + resultado.telemetria.get("valor_devolucoes", 0.0)
+
+
+def conferir_total_pdv(resultado: ResultadoETL, valor_pdv_informado) -> ResultadoETL:
+    """
+    Acrescenta a conferência à telemetria do retorno, para auditoria. Roda no processo
+    pai, depois do cálculo: valor digitado não entra no processo isolado do ETL, e a
+    assinatura de processar_arquivos_analise continua a mesma.
+    """
+    conferencia = validar_total_pdv(faturamento_bruto(resultado), valor_pdv_informado)
+    return resultado._replace(telemetria={**resultado.telemetria, "conferencia_pdv": conferencia})
 
 
 # =====================================================================

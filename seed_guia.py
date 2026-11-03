@@ -22,7 +22,8 @@ TOPICOS = [
             "a equipe NEXO valida e processa.\n\n"
             "1. No menu lateral, clique em “Enviar relatórios”.\n"
             "2. Escolha a análise em aberto correspondente ao período desejado.\n"
-            "3. Anexe o arquivo de VENDAS e o de COMPRAS (formatos aceitos: .csv ou .xlsx).\n"
+            "3. Anexe o arquivo de VENDAS, informando o total de vendas que o PDV mostra, e o de COMPRAS "
+            "(formatos aceitos: .csv ou .xlsx).\n"
             "4. Confirme o envio — o status fica como “Aguardando validação”.\n"
             "5. A equipe NEXO homologa e processa; quando a devolutiva é publicada, "
             "você é avisado pelo sininho e por e-mail."
@@ -53,7 +54,7 @@ TOPICOS = [
             "3. Exporte ambos em Excel (.xlsx) ou CSV (.csv).\n"
             "4. Nomeie de forma clara por período — ex.: “Relatório mensal março 2026 - "
             "vendas.xlsx” e “Relatório mensal março 2026 - compras.xlsx”.\n"
-            "5. Volte ao portal, abra “Enviar relatórios” e anexe os dois arquivos."
+            "5. Volte ao portal, abra “Enviar relatórios”, informe o total de vendas e anexe os dois arquivos."
         ),
     },
 ]
