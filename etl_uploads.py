@@ -12,6 +12,7 @@ import tempfile
 from etl_inputs import ETLInputError
 from etl_limits import get_limits
 from etl_runtime import run_validation
+import security_gatekeeper
 
 
 _CHUNK_SIZE = 64 * 1024
@@ -58,10 +59,13 @@ def limitar_processamento(funcao):
 
 
 def ler_upload_validado(arquivo, extensao: str, limits=None) -> tuple[bytes, str]:
-    """Lê no máximo limite+1 e valida em processo isolado antes de persistir.
+    """Lê no máximo limite+1 e passa pela Baia de Segurança antes de persistir.
 
-    O Content-Length do cliente não é usado como autoridade. Apenas o diretório
-    temporário criado aqui é removido; a validação não executa o ETL comercial.
+    O Content-Length do cliente não é usado como autoridade. A Baia confere a assinatura
+    aqui e faz o resto em processo isolado (validação, neutralização de fórmula, estrutura
+    mínima e inventário de conteúdo ativo). Devolve os bytes liberados e o SHA-256 deles: o
+    próprio arquivo, ou a cópia só com valores quando havia algo a neutralizar. Apenas o
+    diretório temporário criado aqui é removido; a validação não executa o ETL comercial.
     """
     try:
         limits = get_limits() if limits is None else limits
@@ -70,6 +74,7 @@ def ler_upload_validado(arquivo, extensao: str, limits=None) -> tuple[bytes, str
     extensao = extensao.lower().lstrip(".")
     if extensao not in {"csv", "xlsx"}:
         raise ETLInputError("unsupported_format", "Formato não suportado. Envie CSV ou XLSX.")
+    teto = security_gatekeeper.teto_bytes(limits)
     digest = hashlib.sha256()
     content = bytearray()
     try:
@@ -78,19 +83,31 @@ def ler_upload_validado(arquivo, extensao: str, limits=None) -> tuple[bytes, str
             with path.open("wb") as destination:
                 path.chmod(0o600)
                 while True:
-                    chunk = arquivo.read(min(_CHUNK_SIZE, limits.max_file_bytes + 1 - len(content)))
+                    chunk = arquivo.read(min(_CHUNK_SIZE, teto + 1 - len(content)))
                     if not chunk:
                         break
                     if not isinstance(chunk, bytes):
                         raise ETLInputError("upload_io", "Não foi possível ler o arquivo enviado.")
-                    if len(content) + len(chunk) > limits.max_file_bytes:
+                    if len(content) + len(chunk) > teto:
                         raise ETLInputError("file_size", "Arquivo acima do tamanho permitido para processamento.")
                     content.extend(chunk)
                     digest.update(chunk)
                     destination.write(chunk)
             if not content:
                 raise ETLInputError("empty_file", "Arquivo vazio — nada foi salvo.")
-            run_validation(str(path), "." + extensao, limits)
+            try:
+                security_gatekeeper.inspecionar_arquivo(path, extensao)
+                relatorio = run_validation(str(path), "." + extensao, limits)
+                liberado = security_gatekeeper.ler_liberado(path, extensao, teto)
+            except ETLInputError as erro:
+                security_gatekeeper.registrar_recusa(erro, sha256=digest.hexdigest(), tamanho=len(content),
+                                                     extensao=extensao, origem="upload")
+                raise
+            if liberado is not None:
+                original = digest.hexdigest()
+                content, digest = liberado, hashlib.sha256(liberado)
+                security_gatekeeper.registrar_liberacao(relatorio, sha256_original=original,
+                                                        sha256_liberado=digest.hexdigest(), origem="upload")
     except OSError:
         raise ETLInputError("upload_io", "Não foi possível preparar o arquivo enviado. Tente novamente.") from None
     return bytes(content), digest.hexdigest()

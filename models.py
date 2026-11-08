@@ -18,10 +18,11 @@ e type-safe que o estilo Column antigo).
 from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Optional
+import uuid
 
 from sqlalchemy import (
-    String, Integer, Boolean, Date, DateTime, Numeric, Text, LargeBinary,
-    ForeignKey, ForeignKeyConstraint, CheckConstraint, UniqueConstraint, Index, text, true,
+    String, Integer, Boolean, Date, DateTime, Numeric, Text, LargeBinary, Uuid,
+    ForeignKey, ForeignKeyConstraint, CheckConstraint, UniqueConstraint, Index, false, text, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -1292,4 +1293,110 @@ class DiagnosticoEntrada(db.Model):
         CheckConstraint("periodo_inicio IS NULL OR periodo_fim IS NULL OR periodo_inicio <= periodo_fim",
                         name="ck_diagnostico_entrada_periodo"),
         Index("ix_diagnostico_entrada_usuario", "id_usuario"),
+    )
+
+
+# =====================================================================
+# Avaliação de Cenário: captação de leads (revisão f4c2a8e1d9b6)
+# =====================================================================
+STATUS_LEAD_AVALIACAO = ("pendente", "em_processamento", "concluido", "processamento_manual",
+                         "convertido", "expirado")
+
+
+class LeadAvaliacao(db.Model):
+    """
+    Quem pediu a Avaliação de Cenário (ainda não é cliente) e o resumo do resultado.
+
+    O contato (nome, e-mail, WhatsApp e loja) é dado pessoal: a tabela tem RLS no
+    PostgreSQL, e os dados do PDV do lead (BrainstormingDadosPdv) saem em 30 dias se ele não
+    converter (leads_avaliacao.expurgar_dados_pdv). O resumo fica: score de saúde cadastral
+    (0 a 100), vazamento total em R$, plano recomendado e os três blocos de prioridade
+    (urgência, atenção e eletiva) em JSON. Score e vazamento ficam nulos até a avaliação
+    terminar. O nome da coluna do vazamento segue a especificação (com cifrão); o atributo
+    Python é vazamento_total_reais.
+    """
+    __tablename__ = "lead_avaliacao"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    nome_contato: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    whatsapp: Mapped[Optional[str]] = mapped_column(String(20))
+    nome_loja: Mapped[str] = mapped_column(String(120), nullable=False)
+    score_saude_cadastral: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    vazamento_total_reais: Mapped[Optional[Decimal]] = mapped_column("vazamento_total_r$", Numeric(12, 2))
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pendente",
+                                        server_default=text("'pendente'"))
+    plano_recomendado_codigo: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("plano_nivel.codigo", name="fk_lead_avaliacao_plano")
+    )
+    resumo_urgencia_json: Mapped[Optional[str]] = mapped_column(Text)
+    resumo_atencao_json: Mapped[Optional[str]] = mapped_column(Text)
+    resumo_eletiva_json: Mapped[Optional[str]] = mapped_column(Text)
+    criado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc,
+                                                server_default=func.current_timestamp())
+    atualizado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc,
+                                                    onupdate=agora_utc, server_default=func.current_timestamp())
+
+    dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
+                             cascade="all, delete-orphan", passive_deletes=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN (" + ", ".join(f"'{s}'" for s in STATUS_LEAD_AVALIACAO) + ")",
+                        name="ck_lead_avaliacao_status"),
+        CheckConstraint("score_saude_cadastral IS NULL OR (score_saude_cadastral >= 0 "
+                        "AND score_saude_cadastral <= 100)", name="ck_lead_avaliacao_score"),
+        CheckConstraint('"vazamento_total_r$" IS NULL OR "vazamento_total_r$" >= 0',
+                        name="ck_lead_avaliacao_vazamento"),
+        CheckConstraint("length(trim(nome_contato)) > 0 AND length(trim(nome_loja)) > 0",
+                        name="ck_lead_avaliacao_nomes"),
+        CheckConstraint("email LIKE '%_@_%'", name="ck_lead_avaliacao_email"),
+        CheckConstraint("whatsapp IS NULL OR length(whatsapp) BETWEEN 10 AND 20", name="ck_lead_avaliacao_whatsapp"),
+        Index("ix_lead_avaliacao_plano", "plano_recomendado_codigo"),
+        Index("ix_lead_avaliacao_status", "status"),
+        Index("ix_lead_avaliacao_email", "email"),
+    )
+
+
+class BrainstormingDadosPdv(db.Model):
+    """
+    Uma linha por produto e ano de exercício do PDV enviado pelo lead: quantidade, venda
+    bruta, custo médio registrado, as marcas de venda sem custo, abaixo do custo e omissão
+    no ERP, e o vazamento estimado da linha (coluna `vazamento_estimado_r$`, atributo
+    vazamento_estimado_reais). Sai com o lead (ON DELETE CASCADE) e, se o lead não
+    converter, em 30 dias pelo expurgo, que mantém o resumo em LeadAvaliacao.
+    """
+    __tablename__ = "brainstorming_dados_pdv"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lead_avaliacao.id", ondelete="CASCADE", name="fk_brainstorming_dados_pdv_lead"),
+        nullable=False,
+    )
+    ano_exercicio: Mapped[int] = mapped_column(Integer, nullable=False)
+    codigo_produto: Mapped[Optional[str]] = mapped_column(String(60))
+    descricao_produto: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantidade: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    valor_venda_bruto: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    custo_medio_registrado: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    flag_venda_sem_custo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                       server_default=false())
+    flag_venda_abaixo_custo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                          server_default=false())
+    flag_omissao_erp: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    vazamento_estimado_reais: Mapped[Decimal] = mapped_column("vazamento_estimado_r$", Numeric(12, 2),
+                                                              nullable=False, default=Decimal("0"),
+                                                              server_default=text("0"))
+    criado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc,
+                                                server_default=func.current_timestamp())
+
+    lead = relationship("LeadAvaliacao", back_populates="dados_pdv")
+
+    __table_args__ = (
+        CheckConstraint("ano_exercicio BETWEEN 2000 AND 2100", name="ck_brainstorming_dados_pdv_ano"),
+        CheckConstraint("length(trim(descricao_produto)) > 0", name="ck_brainstorming_dados_pdv_descricao"),
+        CheckConstraint("custo_medio_registrado IS NULL OR custo_medio_registrado >= 0",
+                        name="ck_brainstorming_dados_pdv_custo"),
+        CheckConstraint('"vazamento_estimado_r$" >= 0', name="ck_brainstorming_dados_pdv_vazamento"),
+        Index("ix_brainstorming_dados_pdv_lead", "lead_id"),
+        Index("ix_brainstorming_dados_pdv_criado_em", "criado_em"),
     )

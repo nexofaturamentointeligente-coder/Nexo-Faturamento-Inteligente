@@ -1410,10 +1410,19 @@ body:has(> .nexobot) .nexo-toast-wrap { bottom: 96px; }
   .topbar-title {
     white-space: normal; font-size: 0.98rem; line-height: 1.2;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    /* Palavra que não cabe na linha quebra dentro das duas linhas, em vez de ser cortada. */
+    overflow-wrap: anywhere;
   }
   .nexo-card-head { padding: 16px 18px 14px; }
   .nexo-card-body { padding: 16px 18px 18px; }
   .kpi-tile { padding: 18px 18px 16px; }
+}
+/* Celular estreito (320 a 359 px): a topbar cede espaçamento ao título, para "Configurações" e
+   "Conhecimento" caberem inteiros também nas fontes de reserva largas (DejaVu Sans, no Linux).
+   Os botões continuam com 42 px. */
+@media (max-width: 359.98px) {
+  .topbar { padding: 0 6px; gap: 8px; }
+  .topbar-right { gap: 6px; }
 }
 
 /* Movimento reduzido: sem surgimento dos gráficos e sem "lift" nos cartões. */

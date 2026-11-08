@@ -164,6 +164,11 @@ def _parse_valor(bruto):
     if bruto is None:
         return None
     s = str(bruto).strip()
+    # O apóstrofo da neutralização de fórmula (security_gatekeeper) não é sinal nem dígito:
+    # sem tirá-lo, "'-2 un(s)" seria lido como +2 e a devolução viraria venda. O dinheiro já
+    # o ignora (_limpar_monetario).
+    if s.startswith("'"):
+        s = s[1:].strip()
     if s.lower() in ("", "nan", "none", "-", "--"):
         return None
 

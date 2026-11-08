@@ -425,7 +425,9 @@
             el.style.whiteSpace = '';
             var tamanho = parseFloat(window.getComputedStyle(el).fontSize);
             while (el.scrollWidth > el.clientWidth + 1 && tamanho > 18) {
-              tamanho -= 1;
+              // O tamanho calculado costuma ser fracionário (ex.: 18,86px): passos de 1px desceriam
+              // a 17,86px. O piso de 18px vale sempre; abaixo dele o valor quebra a linha.
+              tamanho = Math.max(18, tamanho - 1);
               el.style.fontSize = tamanho + 'px';
             }
             if (el.scrollWidth > el.clientWidth + 1) el.style.whiteSpace = 'normal';

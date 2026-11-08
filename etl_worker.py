@@ -14,12 +14,18 @@ def main():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from etl_limits import ETLLimits, using_limits
     limits = ETLLimits.from_mapping(request["limits"])
+    # A triagem do upload (operação validate) pode gravar a cópia neutralizada do arquivo. Ela
+    # só é liberada até o tamanho aceito na entrada (a releitura e ler_liberado conferem), então
+    # esse é o teto de gravação; as demais operações só gravam o resultado.
+    escrita = limits.max_output_bytes
+    if request.get("operation") == "validate":
+        escrita = max(limits.max_output_bytes, limits.max_file_bytes)
     # Limites são aplicados antes de importar pandas/openpyxl.
     try:
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (limits.memory_mb * 1024 * 1024,) * 2)
         resource.setrlimit(resource.RLIMIT_CPU, (limits.timeout_seconds, limits.timeout_seconds + 1))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limits.max_output_bytes,) * 2)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (escrita,) * 2)
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ImportError, OSError, ValueError):
         output_path.write_text(json.dumps({"ok": False, "code": "platform", "message":
@@ -44,7 +50,10 @@ def main():
         from etl_inputs import validate_input
         with using_limits(limits):
             if request["operation"] == "validate" and len(request["paths"]) == 1:
-                result = validate_input(request["paths"][0], request["extension"], limits)
+                # Baia de Segurança: validação, neutralização, estrutura mínima e, se preciso,
+                # a cópia só com valores ao lado do arquivo (security_gatekeeper.triar).
+                from security_gatekeeper import triar
+                result = triar(request["paths"][0], request["extension"], limits)
             elif request["operation"] == "calculate" and len(request["paths"]) == 2:
                 from etl_processor import _calcular_kpis_local
                 calculated = _calcular_kpis_local(*request["paths"])

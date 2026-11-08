@@ -23,7 +23,7 @@ A auditoria anterior registra cópia privada dos arquivos do projeto. Ela não c
 
 ## 2. O que precisa ser protegido
 
-Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do banco, schema, dados, constraints, índices e estado das sequências. As 29 tabelas ORM atuais são (14 anteriores, 5 da gestão contratual, revisão `81287c74387a`, `sessao_autenticada`, 4 das Configurações da conta, revisão `c7d41e9a2b60`, `validacao_pdv`, revisão `e2f7a94c1d35`, e 4 dos planos por nível, revisão `b3e9d6c1f7a2`):
+Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do banco, schema, dados, constraints, índices e estado das sequências. As 31 tabelas ORM atuais são (14 anteriores, 5 da gestão contratual, revisão `81287c74387a`, `sessao_autenticada`, 4 das Configurações da conta, revisão `c7d41e9a2b60`, `validacao_pdv`, revisão `e2f7a94c1d35`, 4 dos planos por nível, revisão `b3e9d6c1f7a2`, e 2 da Avaliação de Cenário, revisão `f4c2a8e1d9b6`):
 
 | Tabelas | Dados e vínculos que devem sobreviver |
 |---|---|
@@ -44,8 +44,9 @@ Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do
 | `validacao_pdv` | Trava do total do PDV: valor informado, faturamento bruto calculado, diferença e status da conferência por análise (chave natural `id_analise`, sem sequência). Revisão `e2f7a94c1d35`. Tem RLS ligado, com o mesmo requisito de `BYPASSRLS` das tabelas das Configurações. |
 | `plano_nivel`, `funcionalidade`, `plano_funcionalidade` | Catálogo dos planos por nível: hierarquia, limite de histórico, funcionalidades e a matriz que diz o que cada nível libera. Nascem com os dados de referência gravados pela revisão `b3e9d6c1f7a2`; só `funcionalidade` tem sequência. |
 | `diagnostico_entrada` | Último Raio-X do PDV de cada empresa (chave natural `id_empresa`, sem sequência): agregados, listas resumidas em JSON e o plano sugerido. Nenhum arquivo bruto. Sai com a empresa por `ON DELETE CASCADE`. |
+| `lead_avaliacao`, `brainstorming_dados_pdv` | Avaliação de Cenário: contato de quem ainda não é cliente (nome, e-mail, WhatsApp e loja, **dados pessoais**), resumo do resultado e as linhas de PDV do lead por produto e ano (saem com o lead por `ON DELETE CASCADE`). Chaves UUID, sem sequência; as colunas `vazamento_total_r$` e `vazamento_estimado_r$` têm cifrão no nome. As linhas de PDV de leads não convertidos saem em 30 dias pela função `expurgar_brainstorming_pdv`, que também entra no dump. Ver `Docs/BAIA_DE_SEGURANCA_E_LEADS.md`. |
 
-As quatro tabelas da revisão `b3e9d6c1f7a2` têm RLS ligado e, no Supabase, as políticas `deny_api_access` (restritiva, para `anon` e `authenticated`) e `acesso_servidor` (para `postgres` e `service_role`). Restaurar o dump num PostgreSQL sem esses papéis falha nessas políticas: use `--no-policies` (`pg_restore` 18) ou comente as entradas `POLICY` na lista do TOC, e registre a diferença, como já descrito na nota da Etapa 0.2A.
+As quatro tabelas da revisão `b3e9d6c1f7a2` e as duas da `f4c2a8e1d9b6` têm RLS ligado e, no Supabase, as políticas `deny_api_access` (restritiva, para `anon` e `authenticated`) e `acesso_servidor` (para `postgres` e `service_role`). Restaurar o dump num PostgreSQL sem esses papéis falha nessas políticas e nos privilégios da função `expurgar_brainstorming_pdv`: use `--no-policies` e `--no-acl` (`pg_restore` 18) ou comente as entradas `POLICY` e `ACL` na lista do TOC, e registre a diferença, como já descrito na nota da Etapa 0.2A. Sem os `REVOKE` da função, confira depois que `PUBLIC`, `anon` e `authenticated` não a executam.
 
 Incluir também `alembic_version` e quaisquer objetos adicionais encontrados no inventário autorizado do banco. Não limitar o backup a essa lista de nomes nem usar somente `--data-only`/`--schema-only`.
 

@@ -30,6 +30,7 @@ from extensions import db
 from horario import agora_utc
 from models import DiagnosticoEntrada
 import raio_x
+import security_gatekeeper
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +47,17 @@ CAMPOS_FATIA = ("faturamento", "itens", "faturamento_sem_custo", "pct_faturament
 def _gravar_limitado(arquivo, caminho: Path, limits, numero: int) -> str:
     """Copia no máximo o teto + 1 byte; o Content-Length do cliente não é autoridade."""
     digest, tamanho = hashlib.sha256(), 0
+    teto = security_gatekeeper.teto_bytes(limits)
     with caminho.open("wb") as destino:
         caminho.chmod(0o600)
         while True:
-            bloco = arquivo.read(min(_BLOCO, limits.max_file_bytes + 1 - tamanho))
+            bloco = arquivo.read(min(_BLOCO, teto + 1 - tamanho))
             if not bloco:
                 break
             if not isinstance(bloco, bytes):
                 raise ETLInputError("upload_io", f"Arquivo {numero}: não foi possível ler o arquivo enviado.")
             tamanho += len(bloco)
-            if tamanho > limits.max_file_bytes:
+            if tamanho > teto:
                 raise ETLInputError("file_size", f"Arquivo {numero}: acima do tamanho permitido para processamento.")
             digest.update(bloco)
             destino.write(bloco)
@@ -88,6 +90,15 @@ def processar_envio(arquivos, limits=None) -> tuple[dict, list]:
                                         f"Arquivo {numero}: formato não suportado. Envie CSV ou XLSX.")
                 caminho = Path(diretorio) / f"arquivo_{numero:02d}.{extensao}"
                 digest = _gravar_limitado(arquivo, caminho, limits, numero)
+                # Baia de Segurança: assinatura e extensão antes do processo isolado. Os arquivos
+                # do Raio-X não são gravados, então não há cópia neutralizada a liberar; a
+                # leitura do motor já neutraliza as células (etl_inputs.read_raw).
+                try:
+                    security_gatekeeper.inspecionar_arquivo(caminho, extensao, rotulo=f"Arquivo {numero}")
+                except security_gatekeeper.SecurityGatekeeperError as erro:
+                    security_gatekeeper.registrar_recusa(erro, sha256=digest, tamanho=caminho.stat().st_size,
+                                                         extensao=extensao, origem="raio_x")
+                    raise
                 if digest in vistos:
                     raise ETLInputError("raio_x_repetido", f"Arquivo {numero}: é igual a outro arquivo enviado.")
                 vistos.add(digest)

@@ -181,7 +181,10 @@ def _csv_input(path, budget, materialize):
     if not materialize:
         return metadata
     rectangular = [row + [None] * (columns - len(row)) for row in values]
-    return _trim(pd.DataFrame(rectangular, dtype=object))
+    frame = _trim(pd.DataFrame(rectangular, dtype=object))
+    # A Baia de Segurança regrava o CSV neutralizado com o mesmo separador, quando possível.
+    frame.attrs.update({"format": "csv", "separator": separator, "encoding": encoding})
+    return frame
 
 
 def _end_directory(stream, size, limits):
@@ -620,8 +623,14 @@ def _run(path, extension, limits, materialize):
 
 
 def read_raw(path, limits: ETLLimits):
-    """Retorna a matriz legada apenas após validação estrutural e de recursos."""
-    return _run(path, Path(path).suffix, limits, True)
+    """Retorna a matriz legada apenas após validação estrutural e de recursos.
+
+    Toda leitura sai com as células neutralizadas contra fórmula (CSV/Excel injection), para
+    que nenhum texto executável chegue ao banco, à tela ou a uma exportação. A neutralização
+    não muda nenhum número lido pelo ETL (security_gatekeeper.neutralizar_celula).
+    """
+    from security_gatekeeper import neutralizar_matriz
+    return neutralizar_matriz(_run(path, Path(path).suffix, limits, True))
 
 
 def validate_input(path, extension, limits: ETLLimits):

@@ -289,6 +289,9 @@ def create_app(config_name: str = None) -> Flask:
     app.jinja_env.filters["iso_utc"] = iso_utc
     from cli_contratos import registrar_comandos
     registrar_comandos(app)
+    # Avaliação de Cenário: `flask leads expurgar-pdv` (TTL de 30 dias; simulação padrão).
+    from leads_avaliacao import registrar_comandos as registrar_comandos_leads
+    registrar_comandos_leads(app)
 
     # Context processor: injeta os dados do sininho (contagem + 5 recentes) em
     # TODA página renderizada, para o usuário autenticado. Mantém o template

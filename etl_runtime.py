@@ -104,7 +104,14 @@ def _run_job(operation, paths, *, extension=None, limits=None):
 
 
 def run_validation(path, extension, limits=None):
-    return _run_job("validate", [path], extension=extension, limits=limits)
+    """Triagem da Baia de Segurança no processo isolado (security_gatekeeper.triar). Quando há
+    algo a neutralizar, o arquivo é lido duas vezes (o original e a cópia conferida): o prazo é
+    o dobro do configurado, dentro do teto do ETLLimits (120 s), como no Raio-X."""
+    from dataclasses import replace
+    policy = get_limits() if limits is None else limits
+    if isinstance(policy, ETLLimits):
+        policy = replace(policy, timeout_seconds=min(120, policy.timeout_seconds * 2))
+    return _run_job("validate", [path], extension=extension, limits=policy)
 
 
 def run_raio_x(paths, limits=None):
