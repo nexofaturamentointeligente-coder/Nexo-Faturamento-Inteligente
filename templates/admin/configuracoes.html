@@ -12,17 +12,23 @@
     </div>
 </div>
 
+<nav class="config-atalhos" aria-label="Seções das configurações">
+    <a href="#conta-e-email" class="btn-ghost btn-sm-x"><i class="bi bi-shield-lock" aria-hidden="true"></i> Conta e e-mail</a>
+    <a href="#documentos-legais" class="btn-ghost btn-sm-x"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Documentos Legais</a>
+    <a href="{{ url_for('admin.termos_aceites') }}" class="btn-ghost btn-sm-x"><i class="bi bi-person-check" aria-hidden="true"></i> Auditoria de aceites</a>
+</nav>
+
 {% if not esquema_disponivel %}
 <div class="aviso-contrato is-alerta" role="status">
     <i class="bi bi-database-exclamation" aria-hidden="true"></i>
     <div>
         <strong>Falta aplicar a migração destas configurações.</strong>
-        <p>A troca de senha e o status do SMTP já funcionam. Os documentos legais e a cópia de chamados dependem da revisão c7d41e9a2b60 no banco de dados.</p>
+        <p>A troca de senha e o status do SMTP já funcionam. Os documentos legais e a cópia de chamados dependem das revisões c7d41e9a2b60 e a8d3f6b91c24 no banco de dados.</p>
     </div>
 </div>
 {% endif %}
 
-<div class="config-grade mb-4">
+<div class="config-grade mb-4" id="conta-e-email">
     <div class="nexo-card">
         <div class="nexo-card-head">
             <div>
@@ -84,11 +90,11 @@
     </div>
 </div>
 
-<div class="nexo-card">
+<div class="nexo-card" id="documentos-legais">
     <div class="nexo-card-head">
         <div>
-            <h3><i class="bi bi-file-earmark-text text-purple" aria-hidden="true"></i> Termos de Uso e Política de Privacidade</h3>
-            <p class="sub">O texto aparece para os clientes em Configurações, como texto simples. Cada publicação cria uma nova versão, e os aceites anteriores continuam ligados à versão que foi lida.</p>
+            <h3><i class="bi bi-file-earmark-text text-purple" aria-hidden="true"></i> Documentos Legais</h3>
+            <p class="sub">Termos de Uso e Política de Privacidade, como texto simples. Cada publicação cria uma versão nova e a anterior passa a inativa. Os clientes só voltam a navegar no portal depois de aceitar a versão vigente, e cada aceite fica ligado à versão lida. <a href="{{ url_for('admin.termos_aceites') }}">Ver quem já aceitou</a>.</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -96,7 +102,7 @@
         <article class="config-documento">
             <div class="config-documento-topo">
                 <h4>{{ doc.rotulo }}</h4>
-                {% if doc.vigente %}<span class="nexo-badge b-purple">Versão atual: {{ doc.vigente.versao }}</span>{% else %}<span class="nexo-badge b-muted">Não publicado</span>{% endif %}
+                {% if doc.vigente %}<span class="nexo-badge b-purple">Versão vigente: {{ doc.vigente.rotulo_versao }}</span>{% else %}<span class="nexo-badge b-muted">Não publicado</span>{% endif %}
             </div>
             {% if doc.vigente %}
             <p class="field-hint text-break">Publicada em {{ m.horario(doc.vigente.publicado_em) }} por {{ doc.vigente.publicado_por.nome }}.</p>
@@ -109,8 +115,42 @@
                     <label class="nexo-label" for="conteudo_{{ doc.tipo }}">Texto de {{ doc.rotulo }}</label>
                     <textarea class="form-control" id="conteudo_{{ doc.tipo }}" name="conteudo" rows="12" maxlength="{{ tamanho_maximo_documento }}" {{ 'disabled' if not esquema_disponivel }}>{% if rascunho_tipo == doc.tipo %}{{ rascunho_conteudo }}{% elif doc.vigente %}{{ doc.vigente.conteudo }}{% endif %}</textarea>
                 </div>
-                <button type="submit" class="btn-nexo" {{ 'disabled' if not esquema_disponivel }}><i class="bi bi-upload" aria-hidden="true"></i> Publicar nova versão</button>
+                {% if doc.vigente %}
+                <fieldset class="config-alteracao">
+                    <legend class="nexo-label">Ao publicar, esta mudança é</legend>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="alteracao" id="alteracao_revisao_{{ doc.tipo }}" value="revisao" {{ 'checked' if rascunho_alteracao != 'nova' or rascunho_tipo != doc.tipo }} {{ 'disabled' if not esquema_disponivel }}>
+                        <label class="form-check-label" for="alteracao_revisao_{{ doc.tipo }}">Revisão ({{ doc.proxima_revisao }})</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="alteracao" id="alteracao_nova_{{ doc.tipo }}" value="nova" {{ 'checked' if rascunho_alteracao == 'nova' and rascunho_tipo == doc.tipo }} {{ 'disabled' if not esquema_disponivel }}>
+                        <label class="form-check-label" for="alteracao_nova_{{ doc.tipo }}">Nova versão ({{ doc.proxima_nova }})</label>
+                    </div>
+                    <p class="field-hint mb-0">Nos dois casos, todos os clientes precisam aceitar o texto novo antes de seguir no portal.</p>
+                </fieldset>
+                {% endif %}
+                <button type="submit" class="btn-nexo" {{ 'disabled' if not esquema_disponivel }}><i class="bi bi-upload" aria-hidden="true"></i> Publicar {{ doc.proxima_revisao if not doc.vigente else 'nova versão' }}</button>
             </form>
+            {% if doc.versoes %}
+            <details class="config-historico">
+                <summary>Histórico de versões ({{ doc.versoes|length }})</summary>
+                <ol class="config-historico-lista">
+                    {% for item in doc.versoes %}
+                    <li>
+                        <div class="config-historico-topo">
+                            <strong>{{ item.documento.rotulo_versao }}</strong>
+                            {% if item.inativa_desde %}<span class="nexo-badge b-muted">Inativa desde {{ m.horario(item.inativa_desde) }}</span>{% else %}<span class="nexo-badge b-green">Vigente</span>{% endif %}
+                            <span class="field-hint">Publicada em {{ m.horario(item.documento.publicado_em) }} por {{ item.documento.publicado_por.nome }}</span>
+                        </div>
+                        <details>
+                            <summary>Ler o texto da {{ item.documento.rotulo_versao }}</summary>
+                            <div class="config-documento-texto" tabindex="0">{{ item.documento.conteudo }}</div>
+                        </details>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </details>
+            {% endif %}
         </article>
         {% endfor %}
     </div>

@@ -30,9 +30,11 @@ from etl_uploads import ler_upload_validado, limitar_upload, limitar_processamen
 from notifications import notificar_admins, notificar_clientes_empresa
 from emails import (
     CATEGORIAS, CATEGORIAS_RESULTADO_INCERTO, EVENTOS_FALHA_ENTREGA, EstadoEnvio, consultar_entrega_brevo,
-    diagnostico_configuracao, email_analise_publicada, email_boas_vindas, email_teste_configuracao,
-    email_ticket_resolvido, envio_disponivel, historico_envios, ultima_conexao_smtp, verificar_conexao_smtp,
+    diagnostico_configuracao, email_analise_publicada, email_boas_vindas, email_lembrete_aceite,
+    email_teste_configuracao, email_ticket_resolvido, envio_disponivel, historico_envios, ultima_conexao_smtp,
+    verificar_conexao_smtp,
 )
+import termos_legais
 from contas_email import email_em_uso, email_valido, normalizar_email
 from sqlalchemy.exc import IntegrityError, DataError, SQLAlchemyError
 from sqlalchemy.orm.exc import StaleDataError
@@ -210,6 +212,8 @@ def dashboard():
         homologacoes=homologacoes,
         alertas_contratuais=alertas_contratuais,
         divergencias_pdv=validacao_pdv.divergentes(),
+        termos_atrasados=termos_legais.contar_pendencias_atrasadas(),
+        termos_dias_alerta=current_app.config["TERMOS_ALERTA_PENDENCIA_DIAS"],
     )
 
 
@@ -1887,9 +1891,9 @@ def configuracoes_documento():
     try:
         documento = configuracoes_conta.publicar_documento(
             tipo, request.form.get("conteudo"), request.form.get("versao_exibida"),
-            current_user._get_current_object(),
+            current_user._get_current_object(), request.form.get("alteracao"),
         )
-        versao = documento.versao if documento else None
+        versao = documento.rotulo_versao if documento else None
         db.session.commit()
     except (configuracoes_conta.DadoInvalido, IntegrityError) as erro:
         db.session.rollback()
@@ -1897,6 +1901,7 @@ def configuracoes_documento():
               "Outra versão foi publicada ao mesmo tempo. Confira o texto atual e publique de novo.", "danger")
         return render_template("admin/configuracoes.html", rascunho_tipo=tipo,
                                rascunho_conteudo=request.form.get("conteudo") or "",
+                               rascunho_alteracao=request.form.get("alteracao"),
                                **configuracoes_conta.contexto_admin()), 400
     except SQLAlchemyError as erro:
         db.session.rollback()
@@ -1908,8 +1913,49 @@ def configuracoes_documento():
         flash(f"{rotulo}: o texto não mudou, nenhuma versão nova foi criada.", "info")
     else:
         current_app.logger.info("Documento legal publicado | tipo=%s versao=%s admin=%s", tipo, versao, id_admin)
-        flash(f"{rotulo}: versão {versao} publicada.", "success")
+        flash(f"{rotulo}: versão {versao} publicada. Os clientes precisam aceitá-la no próximo acesso.", "success")
     return redirect(url_for("admin.configuracoes"))
+
+
+@admin_bp.route("/termos-aceites")
+@admin_required
+def termos_aceites():
+    """Auditoria do aceite: status de cada cliente, versão aceita, data e IP, e a adesão."""
+    resposta = make_response(render_template("admin/termos_aceites.html", **termos_legais.auditoria()))
+    # IP e e-mail de clientes na página: nada em cache.
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+@admin_bp.route("/termos-aceites/<int:id_usuario>/lembrete", methods=["POST"])
+@admin_required
+# Um e-mail por clique, para uma pessoa: sem disparo em massa.
+@limiter.limit("30 per hour", methods=["POST"], key_func=chave_limite_usuario)
+def termos_aceites_lembrete(id_usuario):
+    """Lembrete por e-mail a um CLIENTE com aceite pendente. Síncrono: o admin vê se o
+    provedor aceitou. A pendência é conferida de novo agora, não na hora em que a tabela abriu."""
+    destino = url_for("admin.termos_aceites")
+    try:
+        usuario = db.session.get(Usuario, id_usuario, populate_existing=True)
+        if usuario is None or usuario.role != "CLIENTE":
+            flash("Usuário não encontrado.", "danger")
+            return redirect(destino)
+        if not usuario.ativo or usuario.primeiro_acesso or not usuario_pode_acessar(usuario):
+            flash("Este usuário não tem acesso ao portal agora: o lembrete não foi enviado.", "warning")
+            return redirect(destino)
+        pendencias = termos_legais.pendentes(usuario.id_usuario) if termos_legais.esquema_configuracoes_disponivel() else []
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        current_app.logger.warning("Lembrete de aceite indisponível (%s).", type(erro).__name__)
+        flash("Não foi possível consultar o usuário agora. Tente novamente.", "danger")
+        return redirect(destino)
+    if not pendencias:
+        flash("Este usuário já aceitou as versões vigentes: nenhum lembrete foi enviado.", "info")
+        return redirect(destino)
+    current_app.logger.info("Lembrete de aceite solicitado pelo administrador | usuario=%s", usuario.id_usuario)
+    _flash_envio_email(email_lembrete_aceite(usuario, pendencias, url_publica("cliente.dashboard")),
+                       "o lembrete de aceite")
+    return redirect(destino)
 
 
 @admin_bp.route("/configuracoes/copia-suporte", methods=["POST"])

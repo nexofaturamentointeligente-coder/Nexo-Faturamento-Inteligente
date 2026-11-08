@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}Termos e aceites — NEXO Admin{% endblock %}
+{% block page_title %}Termos e aceites{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Termos e aceites</h1>
+        <p class="sub">Quem já aceitou a versão vigente dos Termos de Uso e da Política de Privacidade, quando e de qual IP (horário de Brasília).</p>
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('admin.configuracoes') }}#documentos-legais" class="btn-ghost"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Documentos Legais</a>
+    </div>
+</div>
+
+{% if not disponivel %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-database-exclamation" aria-hidden="true"></i>
+    <div>
+        <strong>Falta aplicar a migração dos documentos legais.</strong>
+        <p>A auditoria depende das revisões c7d41e9a2b60 e a8d3f6b91c24 no banco de dados. Até lá, nenhum aceite é exigido.</p>
+    </div>
+</div>
+{% elif not vigentes %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-info-circle" aria-hidden="true"></i>
+    <div>
+        <strong>Nenhum documento publicado.</strong>
+        <p>Sem documento publicado não há o que aceitar, e nenhum cliente é barrado. Publique em <a href="{{ url_for('admin.configuracoes') }}#documentos-legais">Configurações › Documentos Legais</a>.</p>
+    </div>
+</div>
+{% else %}
+<div class="row g-3 mb-4">
+    {% for item in adesao %}
+    <div class="col-12 col-md-6">
+        <div class="kpi-tile">
+            <div class="kpi-top">
+                <span class="kpi-label">Adesão · {{ item.vigente.rotulo }} {{ item.vigente.rotulo_versao }}</span>
+                <span class="kpi-icon is-green"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+            </div>
+            <div class="kpi-value">{% if item.percentual is not none %}{{ item.percentual }}%{% else %}—{% endif %}</div>
+            <div class="kpi-foot">{% if item.total %}{{ item.percentual }}% dos usuários aceitaram a {{ item.vigente.rotulo_versao }} ({{ item.aceitaram }} de {{ item.total }}). Publicada em {{ m.horario(item.vigente.publicado_em) }}.{% else %}Nenhum cliente com acesso ao portal.{% endif %}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% if atrasados %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+    <div>
+        <strong>{{ atrasados }} cliente(s) com aceite pendente há mais de {{ dias_alerta }} dias.</strong>
+        <p>Use “Enviar Lembrete por E-mail” na linha de cada pessoa. A adesão conta só quem tem acesso ao portal: usuário ativo, com a senha definida e de empresa com acesso.</p>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% if disponivel %}
+<div class="nexo-card">
+    <div class="nexo-card-head"><div><h3><i class="bi bi-person-check text-purple" aria-hidden="true"></i> Clientes</h3></div></div>
+    <div class="nexo-card-body">
+        {% if linhas %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table" id="tabelaAceites">
+                <thead>
+                    <tr>
+                        <th>Usuário</th>
+                        <th>Empresa</th>
+                        <th>Status</th>
+                        {% for vigente in vigentes %}<th>{{ vigente.rotulo }}</th>{% endfor %}
+                        <th class="text-end col-acao">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in linhas %}
+                    <tr>
+                        <td class="col-nome"><strong>{{ linha.usuario.nome }}</strong><br><small class="t-mut t-email">{{ linha.usuario.email }}</small></td>
+                        <td class="text-break">{{ linha.empresa.nome_fantasia or linha.empresa.razao_social }}</td>
+                        <td>
+                            {% if not vigentes %}<span class="nexo-badge b-muted">—</span>
+                            {% elif linha.status == 'ACEITO' %}<span class="nexo-badge b-green">ACEITO</span>
+                            {% else %}<span class="nexo-badge {{ 'b-red' if linha.atrasado and linha.elegivel else 'b-amber' }}">PENDENTE</span>
+                            {% if linha.dias_pendente is not none %}<br><small class="t-mut">há {{ linha.dias_pendente }} dia(s)</small>{% endif %}
+                            {% endif %}
+                            {% if linha.situacao %}<br><small class="t-mut">{{ linha.situacao }}</small>{% endif %}
+                        </td>
+                        {% for vigente in vigentes %}
+                        {% set aceite = linha.aceites.get(vigente.tipo) %}
+                        <td>
+                            {% if aceite %}
+                            <span class="nexo-badge {{ 'b-purple' if aceite.vigente else 'b-muted' }}">{{ aceite.rotulo }}</span>
+                            <br><small>{{ m.horario(aceite.aceito_em) }}</small>
+                            <br><small class="t-mut">IP {{ aceite.ip or 'não registrado' }}</small>
+                            {% else %}<span class="t-mut">Nenhum aceite</span>{% endif %}
+                        </td>
+                        {% endfor %}
+                        <td class="text-end col-acao">
+                            {% if linha.pendentes and linha.elegivel %}
+                            <div class="acoes">
+                                <form method="POST" action="{{ url_for('admin.termos_aceites_lembrete', id_usuario=linha.usuario.id_usuario) }}" class="m-0" data-envio-unico>
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn-ghost btn-sm-x" aria-label="Enviar lembrete por e-mail a {{ linha.usuario.nome }}"><i class="bi bi-envelope" aria-hidden="true"></i> Enviar Lembrete por E-mail</button>
+                                </form>
+                            </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% else %}
+        <p class="t-mut mb-0">Nenhum cliente cadastrado.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

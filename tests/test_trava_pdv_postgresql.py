@@ -407,8 +407,10 @@ class _ClusterDaTrava(_PrivateCluster):
             self.db.session.remove()
         self.check("absence_cached_up_to_30s", ausente is False)
         self.check("presence_after_recheck", presente is True)
-        self.head = ScriptDirectory(MIGRATIONS).get_current_head()
-        self.check("migration_reaches_head", self._revisao() == self.head == "e2f7a94c1d35"
+        script = ScriptDirectory(MIGRATIONS)
+        self.head = script.get_current_head()
+        cadeia = {revisao.revision for revisao in script.iterate_revisions(self.head, REVISAO_ANTERIOR)}
+        self.check("migration_reaches_head", self._revisao() == self.head and "e2f7a94c1d35" in cadeia
                    and "validacao_pdv" in self._tabelas(), f"revisão={self._revisao()} head={self.head}")
         diferencas = self._diferencas_metadata()
         self.check("metadata_matches_models", diferencas == [], repr(diferencas)[:400])

@@ -558,16 +558,18 @@ class DocumentosTests(_ConfigCase):
 
     def test_publicar_exibe_escapado_ao_cliente_e_registra_autoria(self):
         from models import DocumentoLegal
-        self.assertIn("versão 1 publicada", self._publicar().get_data(as_text=True))
+        self.assertIn("versão v1.0 publicada", self._publicar().get_data(as_text=True))
         documento = self.db.session.scalar(select(DocumentoLegal))
-        self.assertEqual((documento.tipo, documento.versao, documento.id_usuario_admin),
-                         ("TERMOS_USO", 1, self.admin_id))
+        self.assertEqual((documento.tipo, documento.versao, documento.rotulo_versao, documento.id_usuario_admin),
+                         ("TERMOS_USO", 1, "v1.0", self.admin_id))
         self.assertEqual(documento.conteudo, self.TEXTO)
+        # Antes do aceite, o cliente só recebe o modal, com o mesmo texto escapado.
         for html in (self.client.get(PAGINA_CLIENTE).get_data(as_text=True),
                      self.admin_http.get(PAGINA_ADMIN).get_data(as_text=True)):
             self.assertNotIn("<script>alert(", html)
             self.assertIn("&lt;script&gt;alert(", html)
-        self.assertIn("Nenhum aceite registrado", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
+        self.assertIn("Li e concordo com os Termos de Uso e a Política de Privacidade",
+                      self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
 
     def test_aceite_guarda_o_inicial_e_a_versao_nova_pede_novo_aceite(self):
         from models import AceiteDocumento
@@ -578,18 +580,20 @@ class DocumentosTests(_ConfigCase):
         self.assertEqual(self._contar(AceiteDocumento), 1)
         pagina = self.client.get(PAGINA_CLIENTE).get_data(as_text=True)
         self.assertIn("Você já aceitou a versão atual.", pagina)
-        self.assertNotIn("Li e aceito a versão 1", pagina)
-        self.assertRegex(pagina, r"02/03/2026 às 10:00.*\(versão 1\)")
+        self.assertNotIn("Li e aceito a v1.0", pagina)
+        self.assertRegex(pagina, r"02/03/2026 às 10:00.*\(v1\.0\)")
         self._publicar(conteudo="Texto da segunda versão.", versao=1)
         self.relogio(T0 + timedelta(days=1))
+        # A revisão publicada volta a travar o portal: o modal traz só o documento novo.
         pagina = self.client.get(PAGINA_CLIENTE).get_data(as_text=True)
-        self.assertIn("Li e aceito a versão 2", pagina)
-        self.assertIn("Versão atual: 2", pagina)
-        self.assertIn("(versão 1)", pagina)
+        self.assertIn('id="modalTermos"', pagina)
+        self.assertIn("v1.1", pagina)
+        self.assertIn("Texto da segunda versão.", pagina)
         self.assertIn("Aceite registrado.", self._aceitar(versao=2).get_data(as_text=True))
         pagina = self.client.get(PAGINA_CLIENTE).get_data(as_text=True)
-        self.assertIn("(versão 1)", pagina)
-        self.assertIn("Versão 2, em", pagina)
+        self.assertIn("Versão atual: v1.1", pagina)
+        self.assertIn("(v1.0)", pagina)
+        self.assertIn("v1.1, em", pagina)
         self.assertRegex(pagina, r"Aceite inicial.*02/03/2026 às 10:00")
 
     def test_aceite_de_versao_antiga_ou_tipo_invalido_e_recusado(self):
@@ -608,10 +612,11 @@ class DocumentosTests(_ConfigCase):
         self.assertTrue(outro)
         self._publicar()
         self._aceitar()
+        self.assertIn("Você já aceitou a versão atual.", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
         colega, _ = self._entrar("outra.pessoa@example.invalid")
         pagina = colega.get(PAGINA_CLIENTE).get_data(as_text=True)
-        self.assertIn("Nenhum aceite registrado", pagina)
-        self.assertIn("Li e aceito a versão 1", pagina)
+        self.assertIn('id="modalTermos"', pagina)
+        self.assertNotIn("Você já aceitou", pagina)
 
     def test_texto_igual_nao_cria_versao_e_recusas_preservam_o_que_foi_digitado(self):
         from models import DocumentoLegal
@@ -1411,7 +1416,7 @@ class EsquemaAusenteTests(_ConfigCase):
         self.db.session.remove()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
                 patch("logging.config.fileConfig"):
-            upgrade(directory=str(ROOT / "migrations"), revision="c7d41e9a2b60")
+            upgrade(directory=str(ROOT / "migrations"), revision="head")
         with patch.object(preferencias_usuario.time, "monotonic",
                           return_value=preferencias_usuario.time.monotonic() + 31):
             self.assertTrue(preferencias_usuario.esquema_configuracoes_disponivel())
@@ -1538,6 +1543,7 @@ class CorrecoesDaRevisaoTests(_ConfigCase):
         self.assertTrue([t for t in textos if "Chamado da outra empresa" in t], textos)
 
     def test_exportacao_traz_aceites_preferencias_e_os_chamados_de_quem_exporta(self):
+        from models import ChamadoSuporte
         admin, _ = self._entrar(ADMIN)
         self._enviar("/admin/configuracoes/documentos", cliente=admin, pagina=PAGINA_ADMIN, tipo="TERMOS_USO",
                      conteudo="Termo fictício", versao_exibida="0")
@@ -1549,8 +1555,11 @@ class CorrecoesDaRevisaoTests(_ConfigCase):
         colega = self._novo_cliente("colega@example.invalid")
         self.assertTrue(colega)
         outro, _ = self._entrar("colega@example.invalid")
+        # O colega também aceita: sem isso, a trava dos termos barraria o chamado dele.
+        self._enviar("/cliente/configuracoes/aceitar-documento", cliente=outro, tipo="TERMOS_USO", versao="1")
         self._enviar("/cliente/tickets", cliente=outro, pagina="/cliente/tickets", assunto="Chamado do colega",
                      categoria="FINANCEIRO", mensagem="Texto do colega")
+        self.assertEqual(self._contar(ChamadoSuporte), 2)
         dados = json.loads(cliente.get("/cliente/configuracoes/exportar-dados").get_data(as_text=True))
         self.assertEqual(dados["titular"]["preferencias"], {"lembrete_renovacao": True, "alerta_chamado": False})
         self.assertEqual([(a["documento"], a["versao"]) for a in dados["titular"]["aceites"]], [("TERMOS_USO", 1)])

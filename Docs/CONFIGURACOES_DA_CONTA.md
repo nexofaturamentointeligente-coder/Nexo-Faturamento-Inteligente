@@ -32,7 +32,8 @@ Módulo em `/cliente/configuracoes` e `/admin/configuracoes`. As regras de negó
   não abre outro.
 - **Documentos legais:** texto puro, sempre escapado. Cada publicação é uma versão imutável, e cada aceite
   aponta para a versão lida. Nenhum texto jurídico vem pronto no código: até o administrador publicar, a tela
-  informa que o documento não foi publicado.
+  informa que o documento não foi publicado e ninguém é barrado. O aceite é obrigatório: ver
+  [Termos de Uso e Política de Privacidade](#termos-de-uso-e-política-de-privacidade).
 
 ## Avisos
 
@@ -42,6 +43,8 @@ Módulo em `/cliente/configuracoes` e `/admin/configuracoes`. As regras de negó
 | Chamado respondido | Sim (`alerta_chamado`) | Sininho |
 | Chamado resolvido | Sim (`alerta_chamado`) | Sininho e e-mail |
 | Renovação do contrato | Sim (`lembrete_renovacao`) | Faixa na Visão Geral, sininho e e-mail |
+| Aceite dos termos pendente (para a equipe) | Não | Sininho do admin, ao entrar, e faixa no painel |
+| Lembrete de aceite dos termos | Não (só sai pelo botão do admin) | E-mail |
 
 Sem linha em `preferencia_usuario`, tudo fica ligado. O e-mail de contato da empresa não pertence a um usuário:
 ele só deixa de receber o aviso de chamado resolvido se for o mesmo endereço de quem desligou o alerta.
@@ -61,6 +64,42 @@ flask contratos lembretes-renovacao            # simulação: lista quem seria a
 flask contratos lembretes-renovacao --aplicar  # avisa uma vez por pessoa e por data de término
 ```
 
+## Termos de Uso e Política de Privacidade
+
+As regras ficam em `termos_legais.py` (trava, aceite, auditoria e alerta) e em `configuracoes_conta.py` (texto e
+versões).
+
+- **Publicação:** em Configurações › Documentos Legais, cada envio cria uma versão. A primeira é v1.0; depois o
+  admin escolhe entre revisão (v1.0 → v1.1) e nova versão (v1.0 → v2.0). O rótulo é só informativo: a vigente é
+  sempre a última publicada, a anterior passa a constar como inativa desde a publicação da seguinte, e toda versão
+  nova pede novo aceite. O histórico mostra cada versão com autor, data e texto. Não há flag de “ativa” gravada: com
+  ela, duas publicações ao mesmo tempo poderiam deixar duas versões ativas.
+- **Trava:** um `before_request` do app, depois da troca de senha do primeiro acesso, responde a qualquer página do
+  CLIENTE com versão vigente sem aceite com um modal bloqueante, no lugar do conteúdo pedido. O modal sai do
+  servidor já aberto, sem botão de fechar, e o resto do portal fica `inert`: Esc, clique fora e JavaScript desligado
+  não o fecham. POST de outras rotas vira 303 para o modal sem gravar nada, com um aviso de que a ação não foi
+  concluída; a API do NexoBot responde 428 em JSON (401 e 403 o widget lê como sessão expirada) e o PDF também fica
+  bloqueado: depois do aceite, a pessoa volta à página da análise. Ficam abertos: sair, aceitar e os direitos do
+  titular (exportar os dados e pedir a exclusão, LGPD art. 18), além da landing e do health check. “Como aderir”, com
+  sessão, é desenhada dentro do portal e também mostra o modal. O admin não passa pela trava.
+- **Aceite:** a caixa “Li e concordo com os Termos de Uso e a Política de Privacidade” é conferida no servidor, e um
+  único envio grava todos os documentos pendentes com o mesmo instante e o mesmo IP. Se o admin publicar outra
+  versão enquanto a pessoa lê, nada é gravado e o modal volta com o texto novo. O instante é gravado em UTC
+  (`aceito_em`) e exibido no horário de Brasília. O IP (`ip_usuario`) vem de `request.remote_addr`, que o ProxyFix
+  ajusta com `PROXY_FIX_HOPS`; nenhum cabeçalho é lido direto, e o IP não vai para o log. Os nomes do pedido
+  (`usuario_id`, `documento_legal_id`, `data_aceite`) correspondem às colunas `id_usuario`, `id_documento` e
+  `aceito_em`.
+- **Auditoria:** `/admin/termos-aceites` lista cada CLIENTE com status ACEITO ou PENDENTE, a versão aceita de cada
+  documento, a data, a hora e o IP, e a adesão por documento (“85% dos usuários aceitaram a v2.0”). A adesão conta só
+  quem consegue aceitar: usuário ativo, com a senha definida e de empresa com acesso ao portal.
+- **Alerta:** com cliente pendente há mais de `TERMOS_ALERTA_PENDENCIA_DIAS` (7) dias desde a publicação, cada admin
+  recebe no sininho, ao entrar no portal, um aviso por versão, sem dado pessoal; a faixa do painel mostra quantos
+  estão atrasados. Não há agendador: o login do admin é o gatilho.
+- **Lembrete:** o botão “Enviar Lembrete por E-mail” da auditoria envia, na hora, um e-mail transacional
+  (`lembrete_aceite`) com os nomes e as versões pendentes e o link do portal, sem o texto. A pendência é conferida
+  de novo no clique, e o limite é de 30 por hora por admin.
+- **Exportação LGPD:** cada aceite sai com documento, versão, rótulo, instante e IP.
+
 ## Cópia de novos chamados
 
 Com a caixa definida em `/admin/configuracoes`, cada novo chamado gera um e-mail em cópia oculta (BCC). O
@@ -75,13 +114,21 @@ A revisão `c7d41e9a2b60` só cria tabelas: `preferencia_usuario`, `documento_le
 `configuracao_sistema`. No PostgreSQL elas nascem com RLS ligado e sem política, o que fecha a API pública do
 Supabase e não afeta a aplicação, que entra como dona das tabelas.
 
-O código funciona antes da migração: perfil, senha, e-mail, exportação, pedido de exclusão, tema e status do
-SMTP já operam, e preferências, documentos e cópia de chamados informam que ainda não estão disponíveis. A
-ausência das tabelas é reavaliada a cada 30 segundos, sem reiniciar o processo.
+A revisão `a8d3f6b91c24`, do aceite obrigatório, acrescenta `aceite_documento.ip_usuario` (anulável: aceites
+anteriores ficam sem IP) e `documento_legal.versao_maior` e `versao_menor` (as versões já publicadas viram
+v<versão>.0). Nenhuma linha é criada.
+
+O código funciona antes das migrações: perfil, senha, e-mail, exportação, pedido de exclusão, tema e status do
+SMTP já operam, e preferências, documentos e cópia de chamados informam que ainda não estão disponíveis. Nenhum
+aceite é exigido até as duas revisões estarem aplicadas, porque a checagem confere as tabelas e as colunas. A
+ausência é reavaliada a cada 30 segundos, sem reiniciar o processo.
 
 ```
-NEXO_DB_DIRECT=1 flask db upgrade c7d41e9a2b60
+NEXO_DB_DIRECT=1 flask db upgrade head
 ```
+
+Assim que um documento é publicado, todos os clientes passam a ver o modal no acesso seguinte, porque nenhum
+aceite é presumido.
 
 O downgrade (`NEXO_DB_DIRECT=1 flask db downgrade b6935e8de9d4`) recusa-se a apagar dados: só remove as tabelas se
 estiverem vazias. Rode-o de uma cópia que ainda tenha o arquivo da migração: a partir do código anterior, o Alembic
@@ -120,8 +167,18 @@ autenticado: login, landing e páginas de erro continuam escuros, e a sidebar se
   DELETE FROM notificacao WHERE link_destino LIKE '/admin/tickets/%' AND NOT EXISTS (
     SELECT 1 FROM chamado_suporte c WHERE notificacao.link_destino = '/admin/tickets/' || c.id_chamado);
   ```
-- O primeiro acesso não exige o aceite dos documentos: o aceite é registrado em Configurações. Exigi-lo no
-  primeiro acesso é uma decisão jurídica e comercial.
+- O texto dos Termos de Uso e da Política de Privacidade depende de revisão jurídica: nada vem pronto no código. A
+  Política precisa informar a coleta do IP no aceite e a finalidade dele.
+- Retenção da prova de aceite: a exclusão permanente da empresa apaga os aceites e os IPs junto com os usuários
+  (ON DELETE CASCADE). Quanto tempo guardar essa prova é decisão jurídica (item 17 do documento 05).
+- Toda versão nova pede aceite, inclusive revisão. Dispensar o novo aceite em mudança só de redação é decisão
+  jurídica.
+- “Li e concordo” vale para os dois documentos. Se a Política deve registrar ciência, e não concordância, é
+  decisão jurídica.
+- Com `PROXY_FIX_HOPS=1`, o IP gravado pode ser o da borda do Render ou do Cloudflare, e não o do cliente: conferir
+  no serviço real antes de usar o IP como prova.
+- Uma aba que já estava aberta com o tempo real (Socket.IO) conectado continua recebendo os avisos do sininho até
+  navegar, quando o modal aparece.
 - A landing informa que os documentos ainda não estão disponíveis nela: a página não lê o que o administrador
   publica, e exibi-los ali é uma decisão à parte.
 - O módulo de avaliações, ainda fora desta linha de trabalho, tem uma migração com o mesmo pai (`b6935e8de9d4`) e

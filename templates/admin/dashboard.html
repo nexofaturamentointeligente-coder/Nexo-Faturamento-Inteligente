@@ -76,6 +76,17 @@
 </div>
 {% endif %}
 
+{# ---------------- Termos e Política: aceite pendente além do prazo (detalhe em /admin/termos-aceites) ---------------- #}
+{% if termos_atrasados %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+    <div>
+        <strong>{{ termos_atrasados }} cliente(s) com aceite dos termos pendente há mais de {{ termos_dias_alerta }} dias.</strong>
+        <p>Eles só voltam a navegar no portal depois de aceitar. <a href="{{ url_for('admin.termos_aceites') }}">Abrir termos e aceites</a></p>
+    </div>
+</div>
+{% endif %}
+
 {# ---------------- Trava do total do PDV: sem limite, para nenhuma divergência sumir do painel ---------------- #}
 {% for item in divergencias_pdv %}
 {{ m.card_pdv_consultor(item.validacao, 'Divergência no total do PDV: ' ~ (item.analise.empresa.nome_fantasia or item.analise.empresa.razao_social) ~ ' · ref. ' ~ item.referencia, url_for('admin.analise_upload', id_analise=item.analise.id_analise), 'Abrir a análise') }}

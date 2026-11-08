@@ -244,13 +244,98 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
             with self.subTest(largura=largura):
                 self.assertLessEqual(sobra, 0)
 
+    def _publicar_documentos(self, *, aceitos_por=None):
+        from models import AceiteDocumento, DocumentoLegal
+        documentos = [DocumentoLegal(tipo=tipo, versao=1, conteudo=texto, id_usuario_admin=self.admin_id,
+                                     publicado_em=datetime(2026, 2, 1, 13, tzinfo=timezone.utc))
+                      for tipo, texto in (("TERMOS_USO", "Texto fictício dos Termos de Uso.\n\n" + "Cláusula longa. " * 400),
+                                          ("POLITICA_PRIVACIDADE", "Texto fictício da Política de Privacidade."))]
+        self.db.session.add_all(documentos)
+        self.db.session.flush()
+        if aceitos_por is not None:
+            self.db.session.add_all(AceiteDocumento(id_usuario=aceitos_por, id_documento=documento.id_documento,
+                                                    aceito_em=datetime(2026, 2, 2, 13, tzinfo=timezone.utc),
+                                                    ip_usuario="203.0.113.7") for documento in documentos)
+        self.db.session.commit()
+
+    def test_modal_de_termos_so_fecha_pelo_aceite(self):
+        self._publicar_documentos()
+        for largura, altura in ((390, 844), (1366, 768)):
+            pagina = self._sessao(CLIENTE, largura=largura, altura=altura)
+            self.ir(pagina, "/cliente/dashboard")
+            self.assertTrue(pagina.is_visible("#modalTermos"))
+            self.assertTrue(pagina.evaluate("() => document.getElementById('appShell').inert"))
+            self.assertEqual(pagina.evaluate("() => document.activeElement.id"), "modalTermos")
+            self.assert_layout(pagina, largura, f"modal de termos @ {largura}px")
+            posts = self._posts(pagina)
+            pagina.keyboard.press("Escape")
+            pagina.mouse.click(5, altura - 5)  # fora do diálogo, sobre o fundo
+            pagina.click("#modalTermos button[type=submit].btn-nexo")  # sem a caixa: o navegador barra
+            self.assertTrue(pagina.is_visible("#modalTermos"))
+            self.assertEqual(posts, [])
+            pagina.check("#termosConfirmo")
+            with pagina.expect_navigation(wait_until="load"):
+                pagina.click("#modalTermos button[type=submit].btn-nexo")
+            self.assertEqual(pagina.locator("#modalTermos").count(), 0)
+            self.assertIn("Aceite registrado.", pagina.content())
+            self.assertFalse(pagina.evaluate("() => document.getElementById('appShell').inert"))
+            pagina.context.close()
+            from models import AceiteDocumento
+            self.db.session.query(AceiteDocumento).delete()
+            self.db.session.commit()
+
+    def test_modal_de_termos_com_pouca_altura_mostra_o_texto_e_as_saidas(self):
+        """Celular deitado: o texto não vira uma fresta e o Sair continua alcançável."""
+        self._publicar_documentos()
+        pagina = self._sessao(CLIENTE, largura=844, altura=390)
+        self.ir(pagina, "/cliente/dashboard")
+        self.assert_layout(pagina, 844, "modal de termos @ 844x390")
+        self.assertGreaterEqual(pagina.evaluate(
+            "() => document.querySelector('.termos-documento-texto').getBoundingClientRect().height"), 120)
+        sair = pagina.locator("#modalTermos form[action$='/auth/logout'] button")
+        sair.scroll_into_view_if_needed()
+        self.assertTrue(sair.is_visible())
+        self.assertTrue(pagina.evaluate("""() => { const r = document.querySelector("#modalTermos form[action$='/auth/logout'] button").getBoundingClientRect();
+            return r.top >= 0 && r.bottom <= innerHeight; }"""))
+
+    def test_caixa_do_aceite_tem_borda_visivel_nos_dois_temas(self):
+        """A caixa fica fora do .app-shell: precisa das mesmas regras do painel (borda de 3:1)."""
+        from PIL import Image
+        import io
+        from tests.test_tema_navegador import _razao_pixels
+        self._publicar_documentos()
+        for tema in ("dark", "light"):
+            pagina = self._sessao(CLIENTE, tema=tema)
+            self.ir(pagina, "/cliente/dashboard")
+            caixa = pagina.evaluate("""() => { const e = document.getElementById('termosConfirmo'); e.scrollIntoView({block: 'center'});
+                const r = e.getBoundingClientRect(); return {x: Math.round(r.left), y: Math.round(r.top + r.height / 2)}; }""")
+            recorte = Image.open(io.BytesIO(pagina.screenshot(clip={"x": caixa["x"] - 4, "y": caixa["y"] - 2, "width": 8, "height": 4},
+                                                              animations="disabled"))).convert("RGB")
+            fora = recorte.getpixel((0, 2))
+            borda = max((_razao_pixels(recorte.getpixel((x, 2)), fora) for x in range(3, 6)))
+            with self.subTest(tema=tema):
+                self.assertGreaterEqual(borda, 3, (tema, fora))
+            pagina.context.close()
+
+    def test_contraste_do_modal_de_termos_nos_dois_temas(self):
+        self._publicar_documentos()
+        seletores = [".termos-modal .modal-title", ".termos-modal p", ".termos-documento h3", ".termos-documento .field-hint",
+                     ".termos-documento-texto", ".termos-modal .form-check-label", ".termos-saidas .field-hint",
+                     ".termos-saidas .btn-ghost"]
+        for tema in ("dark", "light"):
+            pagina = self._sessao(CLIENTE, tema=tema)
+            self.ir(pagina, "/cliente/dashboard")
+            for medida in pagina.evaluate(_CONTRASTE, seletores):
+                with self.subTest(tema=tema, seletor=medida["seletor"]):
+                    self.assertNotIn("ausente", medida, "amostra não encontrada na página")
+                    self.assertGreaterEqual(medida["razao"], medida["minimo"], medida)
+            pagina.context.close()
+
     def test_contraste_das_amostras_do_modulo_nos_dois_temas(self):
-        from models import DocumentoLegal
         self.contratar(data_inicio=date(2026, 1, 1), data_fim=date(2026, 3, 10))
         self.ativar_regras()
-        self.db.session.add(DocumentoLegal(tipo="TERMOS_USO", versao=1, conteudo="Texto fictício dos Termos de Uso.",
-                                           publicado_em=datetime(2026, 2, 1, 13, tzinfo=timezone.utc), id_usuario_admin=self.admin_id))
-        self.db.session.commit()
+        # Aceitos pelo cliente: sem o aceite, a trava mostraria o modal no lugar das páginas medidas.
+        self._publicar_documentos(aceitos_por=self.cliente_id)
         amostras = {
             (CLIENTE, PAGINA_CLIENTE): (".config-secao-titulo", ".nexo-label", ".nexo-label .req", ".field-hint", ".form-control",
                                         ".dados-contrato dt", ".dados-contrato dd", ".btn-ghost", ".config-documento-topo h4",

@@ -3,9 +3,10 @@
 Separado de configuracoes_conta.py porque notifications.py e emails.py precisam
 destas consultas e configuracoes_conta.py depende de ambos.
 
-Implantação expand -> migrate -> deploy, como a gestão contratual: antes da
-migração c7d41e9a2b60 o portal segue funcionando, ninguém desligou aviso nenhum e
-as telas informam que aqueles ajustes ainda não estão disponíveis.
+Implantação expand -> migrate -> deploy, como a gestão contratual: antes das
+migrações c7d41e9a2b60 e a8d3f6b91c24 o portal segue funcionando, ninguém desligou
+aviso nenhum, nenhum aceite é exigido e as telas informam que aqueles ajustes ainda
+não estão disponíveis.
 """
 
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from models import PreferenciaUsuario
 logger = logging.getLogger(__name__)
 
 TABELAS_CONFIGURACOES = ("preferencia_usuario", "documento_legal", "aceite_documento", "configuracao_sistema")
+# Colunas da revisão a8d3f6b91c24: os modelos já as mapeiam, e consultar sem elas falharia.
+COLUNAS_CONFIGURACOES = {"documento_legal": ("versao_maior", "versao_menor"), "aceite_documento": ("ip_usuario",)}
 _REVERIFICAR_ESQUEMA_SEGUNDOS = 30.0
 _esquema_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
 
@@ -32,11 +35,13 @@ _COLUNAS_AVISO = {
 
 
 def esquema_configuracoes_disponivel(sessao=None) -> bool:
-    """True quando as tabelas da revisão c7d41e9a2b60 existem neste banco.
+    """True quando as tabelas da revisão c7d41e9a2b60 e as colunas da a8d3f6b91c24
+    existem neste banco.
 
     Confirmada a presença, o resultado fica fixo para o engine; a ausência é
     reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo.
-    Nenhuma decisão de acesso depende disto: esquema parcial só fica indisponível.
+    A trava de aceite dos termos depende disto e falha aberta: esquema ausente ou
+    parcial só deixa os ajustes indisponíveis, e ninguém é barrado.
     """
     sessao = sessao or db.session
     engine = sessao.get_bind()
@@ -48,13 +53,23 @@ def esquema_configuracoes_disponivel(sessao=None) -> bool:
     # A conexão da própria sessão: sem segunda conexão nem reset de pool.
     inspetor = inspect(sessao.connection())
     presentes = {tabela for tabela in TABELAS_CONFIGURACOES if inspetor.has_table(tabela)}
-    if presentes == set(TABELAS_CONFIGURACOES):
+    completo = presentes == set(TABELAS_CONFIGURACOES) and all(
+        set(colunas) <= {coluna["name"] for coluna in inspetor.get_columns(tabela)}
+        for tabela, colunas in COLUNAS_CONFIGURACOES.items()
+    )
+    if completo:
         _esquema_por_engine[engine] = True
         return True
     if presentes:
-        logger.warning("Esquema das Configurações parcial: confira a migração c7d41e9a2b60.")
+        logger.warning("Esquema das Configurações parcial: confira as migrações c7d41e9a2b60 e a8d3f6b91c24.")
     _esquema_por_engine[engine] = time.monotonic()
     return False
+
+
+def esquecer_esquema(sessao=None) -> None:
+    """Uma consulta às tabelas falhou (ex.: downgrade com o processo no ar): a próxima
+    chamada de esquema_configuracoes_disponivel confere o banco de novo."""
+    _esquema_por_engine.pop((sessao or db.session).get_bind(), None)
 
 
 @dataclass(frozen=True)

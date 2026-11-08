@@ -24,6 +24,7 @@ from etl_processor import (
 )
 import etl_uploads
 from notifications import classificar_notificacao
+import preferencias_usuario
 import validacao_pdv
 from tests.contratos_support import ContratosCase
 from tests.deploy_support import ROOT
@@ -199,6 +200,8 @@ class TravaPdvCase(ContratosCase):
                 patch("logging.config.fileConfig"):
             downgrade(directory=str(ROOT / "migrations"), revision="c7d41e9a2b60")
         validacao_pdv._esquema_por_engine.clear()
+        # O downgrade também tira as colunas da a8d3f6b91c24, que vem depois: como reiniciar o processo.
+        preferencias_usuario._esquema_por_engine.clear()
 
 
 class CenariosPedidosTests(TravaPdvCase):

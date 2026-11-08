@@ -1063,6 +1063,10 @@ class DocumentoLegal(db.Model):
     id_documento: Mapped[int] = mapped_column(primary_key=True)
     tipo: Mapped[str] = mapped_column(String(30), nullable=False)
     versao: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Rótulo exibido (v1.0, v1.1, v2.0): o admin escolhe, ao publicar, entre revisão e nova
+    # versão. Ordem e vigência seguem a sequência `versao`; qualquer versão nova pede aceite.
+    versao_maior: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    versao_menor: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     conteudo: Mapped[str] = mapped_column(Text, nullable=False)
     publicado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
     id_usuario_admin: Mapped[int] = mapped_column(ForeignKey("usuario.id_usuario"), nullable=False)
@@ -1073,8 +1077,15 @@ class DocumentoLegal(db.Model):
         CheckConstraint("tipo IN ('TERMOS_USO', 'POLITICA_PRIVACIDADE')", name="ck_documento_tipo"),
         CheckConstraint("versao >= 1", name="ck_documento_versao"),
         CheckConstraint("length(trim(conteudo)) > 0", name="ck_documento_conteudo"),
+        CheckConstraint("versao_maior >= 1", name="ck_documento_versao_maior"),
+        CheckConstraint("versao_menor >= 0", name="ck_documento_versao_menor"),
         UniqueConstraint("tipo", "versao", name="uq_documento_tipo_versao"),
+        Index("uq_documento_tipo_rotulo", "tipo", "versao_maior", "versao_menor", unique=True),
     )
+
+    @property
+    def rotulo_versao(self) -> str:
+        return f"v{self.versao_maior}.{self.versao_menor}"
 
 
 # =====================================================================
@@ -1090,7 +1101,10 @@ class AceiteDocumento(db.Model):
         ForeignKey("usuario.id_usuario", ondelete="CASCADE"), nullable=False,
     )
     id_documento: Mapped[int] = mapped_column(ForeignKey("documento_legal.id_documento"), nullable=False)
+    # Instante em UTC, exibido no horário de Brasília. O IP vem da requisição do aceite, já
+    # corrigido pelo ProxyFix; os aceites anteriores à revisão a8d3f6b91c24 ficam sem IP.
     aceito_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    ip_usuario: Mapped[Optional[str]] = mapped_column(String(45))
 
     documento = relationship("DocumentoLegal")
 

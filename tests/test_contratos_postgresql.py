@@ -451,8 +451,10 @@ class _PrivateCluster:
     @staticmethod
     def _limpar_cache_esquema():
         import contract_policy
+        import preferencias_usuario
         import validacao_pdv
         contract_policy._esquema_por_engine.clear()
+        preferencias_usuario._esquema_por_engine.clear()
         validacao_pdv._esquema_por_engine.clear()
 
     def _nova_empresa(self, nome, *, status="ATIVA", deletado_em=None, senha=False):

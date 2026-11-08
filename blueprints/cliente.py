@@ -42,9 +42,12 @@ from etl_inputs import ETLInputError
 from etl_processor import STATUS_PDV_DIVERGENTE
 from etl_uploads import ler_upload_validado, limitar_upload
 
-from blueprints.auth import limite_reautenticacao, trocar_email_autenticado, trocar_senha_autenticada
+from blueprints.auth import (
+    _destino_abre_por_get, _destino_seguro, limite_reautenticacao, trocar_email_autenticado, trocar_senha_autenticada,
+)
 import configuracoes_conta
 from extensions import chave_limite_usuario, db, limiter
+import termos_legais
 import validacao_pdv
 from horario import agora_utc
 from models import (
@@ -368,7 +371,7 @@ def configuracoes_aceitar_documento():
     _situacao_cliente()
     try:
         configuracoes_conta.registrar_aceite(current_user._get_current_object(), request.form.get("tipo"),
-                                             request.form.get("versao"))
+                                             request.form.get("versao"), termos_legais.ip_do_cliente(request.remote_addr))
         db.session.commit()
     except configuracoes_conta.DadoInvalido as erro:
         db.session.rollback()
@@ -383,6 +386,45 @@ def configuracoes_aceitar_documento():
     else:
         flash("Aceite registrado.", "success")
     return redirect(url_for("cliente.configuracoes"))
+
+
+@cliente_bp.route("/termos/aceitar", methods=["POST"])
+@cliente_required
+@limiter.limit("30 per hour", key_func=chave_limite_usuario)
+def aceitar_termos():
+    """Aceite do modal: todas as versões pendentes de uma vez, com o IP desta requisição.
+
+    A caixa "Li e concordo" é conferida aqui: o atributo required do HTML não protege nada.
+    Depois volta à página que a pessoa tentou abrir, se for local e abrir por GET.
+    """
+    _situacao_cliente()
+    proximo = request.form.get("proximo") or ""
+    destino = proximo if _destino_seguro(proximo) and _destino_abre_por_get(proximo) else url_for("cliente.dashboard")
+    if request.form.get("confirmo") != "1":
+        flash("Marque “Li e concordo com os Termos de Uso e a Política de Privacidade” para continuar.", "danger")
+        return redirect(destino)
+    usuario = current_user._get_current_object()
+    ip = termos_legais.ip_do_cliente(request.remote_addr)
+    try:
+        termos_legais.aceitar_pendentes(usuario, request.form.getlist("documento"), ip)
+        db.session.commit()
+    except configuracoes_conta.DadoInvalido as erro:
+        db.session.rollback()
+        flash(str(erro), "danger")
+        return redirect(destino)
+    except IntegrityError:
+        # Outra aba confirmou ao mesmo tempo: vale se não sobrou nada pendente.
+        db.session.rollback()
+        if termos_legais.pendentes(usuario.id_usuario):
+            flash("Não foi possível registrar o aceite. Tente novamente.", "danger")
+            return redirect(destino)
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        current_app.logger.warning("Aceite dos termos não salvo (%s).", type(erro).__name__)
+        flash("Não foi possível registrar o aceite. Tente novamente.", "danger")
+        return redirect(destino)
+    flash("Aceite registrado. Obrigado!", "success")
+    return redirect(destino)
 
 
 @cliente_bp.route("/configuracoes/solicitar-exclusao", methods=["POST"])

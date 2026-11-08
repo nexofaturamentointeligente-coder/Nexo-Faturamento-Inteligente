@@ -93,6 +93,7 @@ TIPOS = {
     "email_alterado": "aviso de e-mail de acesso alterado",
     "novo_chamado": "cópia de novo chamado",
     "lembrete_renovacao": "lembrete de renovação do contrato",
+    "lembrete_aceite": "lembrete de aceite dos termos",
     "analise_publicada": "análise publicada",
     "ticket_resolvido": "chamado resolvido",
     "teste": "teste de configuração",
@@ -1508,6 +1509,24 @@ def email_lembrete_renovacao(usuario, data_fim, link_url: str) -> EnvioEmail:
         "lembrete_renovacao.html",
         tipo="lembrete_renovacao", referencia=_referencia_usuario(usuario), sincrono=True,
         usuario=usuario, data_fim=data_fim, link_url=link_url,
+    )
+
+
+def email_lembrete_aceite(usuario, documentos, link_url: str) -> EnvioEmail:
+    """Cobra o aceite das versões pendentes dos Termos e da Política. Síncrono: o admin
+    que clicou vê se o provedor aceitou. Leva só o nome e a versão de cada documento,
+    nunca o texto, e o link do portal, onde o aceite acontece."""
+    try:
+        destinatario = usuario.email
+        itens = [f"{documento.rotulo} {documento.rotulo_versao}" for documento in documentos]
+    except Exception as erro:  # noqa: BLE001
+        return _preparo_falhou("lembrete_aceite", None, erro)
+    return enviar_email(
+        destinatario,
+        f"📄 Confirme no portal NEXO: {' e '.join(itens)}",
+        "lembrete_aceite.html",
+        tipo="lembrete_aceite", referencia=_referencia_usuario(usuario), sincrono=True,
+        usuario=usuario, documentos=itens, link_url=link_url,
     )
 
 

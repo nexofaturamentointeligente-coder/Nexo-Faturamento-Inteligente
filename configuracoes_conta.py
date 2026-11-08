@@ -47,6 +47,9 @@ from preferencias_usuario import (
 logger = logging.getLogger(__name__)
 
 TIPOS_DOCUMENTO = {"TERMOS_USO": "Termos de Uso", "POLITICA_PRIVACIDADE": "Política de Privacidade"}
+# Escolha do admin ao publicar: revisão (v1.0 -> v1.1) ou nova versão (v1.0 -> v2.0).
+# Só muda o rótulo: toda versão publicada pede novo aceite.
+ALTERACOES_DOCUMENTO = ("revisao", "nova")
 TAMANHO_MAXIMO_DOCUMENTO = 200_000
 CHAVE_COPIA_SUPORTE = "suporte_bcc_email"
 ASSUNTO_EXCLUSAO_DADOS = "[LGPD] Solicitação de exclusão de dados"
@@ -132,15 +135,33 @@ def _inteiro(valor) -> int | None:
     return int(valor)
 
 
-def publicar_documento(tipo, conteudo, versao_exibida, admin: Usuario) -> DocumentoLegal | None:
+def rotulo_versao(versao_maior: int, versao_menor: int) -> str:
+    return f"v{versao_maior}.{versao_menor}"
+
+
+def proxima_versao(vigente: DocumentoLegal | None, alteracao: str) -> tuple[int, int]:
+    """(maior, menor) da próxima publicação: a primeira é sempre v1.0."""
+    if vigente is None:
+        return 1, 0
+    if alteracao == "nova":
+        return vigente.versao_maior + 1, 0
+    return vigente.versao_maior, vigente.versao_menor + 1
+
+
+def publicar_documento(tipo, conteudo, versao_exibida, admin: Usuario, alteracao=None) -> DocumentoLegal | None:
     """Cria a versão seguinte. Devolve None quando o texto não mudou.
 
     `versao_exibida` é a versão que o admin tinha na tela: se outra foi publicada
     enquanto ele editava, salvar por cima apagaria o trabalho do colega sem aviso.
+    `alteracao` escolhe o rótulo, revisão (o padrão) ou nova versão; a vigente
+    anterior deixa de valer em qualquer caso, e todos precisam aceitar a nova.
     """
     exigir_esquema()
     if tipo not in TIPOS_DOCUMENTO:
         raise DadoInvalido("Documento inválido.")
+    alteracao = "revisao" if alteracao is None else alteracao
+    if alteracao not in ALTERACOES_DOCUMENTO:
+        raise DadoInvalido("Escolha se a publicação é uma revisão ou uma nova versão.")
     texto = _CONTROLES.sub("", conteudo.replace("\r\n", "\n").replace("\r", "\n")).strip() if isinstance(conteudo, str) else ""
     if not texto:
         raise DadoInvalido("Escreva o texto do documento antes de publicar.")
@@ -154,14 +175,17 @@ def publicar_documento(tipo, conteudo, versao_exibida, admin: Usuario) -> Docume
         return None
     if exibida != versao_atual:
         raise DadoInvalido("Outra versão foi publicada enquanto você editava. Confira o texto atual e publique de novo.")
-    documento = DocumentoLegal(tipo=tipo, versao=versao_atual + 1, conteudo=texto, publicado_em=agora_utc(),
+    versao_maior, versao_menor = proxima_versao(vigente, alteracao)
+    documento = DocumentoLegal(tipo=tipo, versao=versao_atual + 1, versao_maior=versao_maior,
+                               versao_menor=versao_menor, conteudo=texto, publicado_em=agora_utc(),
                                id_usuario_admin=admin.id_usuario)
     db.session.add(documento)
     return documento
 
 
-def registrar_aceite(usuario: Usuario, tipo, versao) -> bool:
-    """Aceite da versão vigente, a que estava na tela. Devolve False se já existia."""
+def registrar_aceite(usuario: Usuario, tipo, versao, ip=None) -> bool:
+    """Aceite da versão vigente, a que estava na tela. Devolve False se já existia.
+    `ip` vem da rota (termos_legais.ip_do_cliente), nunca do formulário."""
     exigir_esquema()
     if tipo not in TIPOS_DOCUMENTO:
         raise DadoInvalido("Documento inválido.")
@@ -175,7 +199,7 @@ def registrar_aceite(usuario: Usuario, tipo, versao) -> bool:
     if existente is not None:
         return False
     db.session.add(AceiteDocumento(id_usuario=usuario.id_usuario, id_documento=vigente.id_documento,
-                                   aceito_em=agora_utc()))
+                                   aceito_em=agora_utc(), ip_usuario=ip))
     return True
 
 
@@ -183,20 +207,44 @@ def situacao_documentos(id_usuario: int) -> list[dict]:
     """Por documento: a versão vigente e os aceites DESTE usuário (primeiro e mais recente)."""
     situacoes = []
     for tipo, rotulo in TIPOS_DOCUMENTO.items():
-        aceites = db.session.execute(
-            select(AceiteDocumento.aceito_em, DocumentoLegal.versao)
+        linhas = db.session.execute(
+            select(AceiteDocumento.aceito_em, DocumentoLegal.versao, DocumentoLegal.versao_maior,
+                   DocumentoLegal.versao_menor)
             .join(DocumentoLegal, DocumentoLegal.id_documento == AceiteDocumento.id_documento)
             .where(AceiteDocumento.id_usuario == id_usuario, DocumentoLegal.tipo == tipo)
             .order_by(AceiteDocumento.aceito_em, AceiteDocumento.id_aceite)
         ).all()
+        aceites = [{"aceito_em": linha.aceito_em, "versao": linha.versao,
+                    "rotulo": rotulo_versao(linha.versao_maior, linha.versao_menor)} for linha in linhas]
         vigente = documento_vigente(tipo)
         situacoes.append({
             "tipo": tipo, "rotulo": rotulo, "vigente": vigente,
             "aceite_inicial": aceites[0] if aceites else None,
             "aceite_recente": aceites[-1] if aceites else None,
-            "aceitou_vigente": bool(vigente) and any(a.versao == vigente.versao for a in aceites),
+            "aceitou_vigente": bool(vigente) and any(a["versao"] == vigente.versao for a in aceites),
         })
     return situacoes
+
+
+def historico_documentos() -> list[dict]:
+    """Por documento, todas as versões (a vigente primeiro), com autor e o instante em que
+    cada uma deixou de valer, que é a publicação da seguinte."""
+    versoes = db.session.scalars(
+        select(DocumentoLegal).order_by(DocumentoLegal.tipo, DocumentoLegal.versao.desc())
+        .options(selectinload(DocumentoLegal.publicado_por))
+    ).all()
+    historico = []
+    for tipo, rotulo in TIPOS_DOCUMENTO.items():
+        do_tipo = [versao for versao in versoes if versao.tipo == tipo]
+        vigente = do_tipo[0] if do_tipo else None
+        historico.append({
+            "tipo": tipo, "rotulo": rotulo, "vigente": vigente,
+            "versoes": [{"documento": versao, "inativa_desde": do_tipo[indice - 1].publicado_em if indice else None}
+                        for indice, versao in enumerate(do_tipo)],
+            "proxima_revisao": rotulo_versao(*proxima_versao(vigente, "revisao")),
+            "proxima_nova": rotulo_versao(*proxima_versao(vigente, "nova")),
+        })
+    return historico
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +322,7 @@ def solicitar_exclusao_dados(usuario: Usuario) -> tuple[ChamadoSuporte, bool]:
     db.session.flush()
     db.session.add(MensagemSuporte(
         id_chamado=chamado.id_chamado, id_usuario_remetente=usuario.id_usuario, data_envio=instante,
-        mensagem="Solicitação de exclusão de dados registrada pelo titular em Configurações > Privacidade e LGPD. "
+        mensagem="Solicitação de exclusão de dados registrada pelo titular no portal. "
                  "Nenhum dado foi apagado automaticamente: a equipe NEXO fará a tratativa do expurgo.",
     ))
     nome_emp = empresa.nome_fantasia or empresa.razao_social
@@ -338,7 +386,8 @@ def _analise_exportada(analise: Analise) -> dict:
 def _titular_exportado(usuario: Usuario) -> dict:
     preferencias = obter_preferencias(usuario.id_usuario)
     aceites = db.session.execute(
-        select(DocumentoLegal.tipo, DocumentoLegal.versao, AceiteDocumento.aceito_em)
+        select(DocumentoLegal.tipo, DocumentoLegal.versao, DocumentoLegal.versao_maior, DocumentoLegal.versao_menor,
+               AceiteDocumento.aceito_em, AceiteDocumento.ip_usuario)
         .join(DocumentoLegal, DocumentoLegal.id_documento == AceiteDocumento.id_documento)
         .where(AceiteDocumento.id_usuario == usuario.id_usuario)
         .order_by(AceiteDocumento.aceito_em, AceiteDocumento.id_aceite)
@@ -350,7 +399,9 @@ def _titular_exportado(usuario: Usuario) -> dict:
             "lembrete_renovacao": preferencias.lembrete_renovacao,
             "alerta_chamado": preferencias.alerta_chamado,
         },
-        "aceites": [{"documento": a.tipo, "versao": a.versao, "aceito_em": a.aceito_em} for a in aceites],
+        # O IP do aceite é dado pessoal do titular: sai no arquivo dele.
+        "aceites": [{"documento": a.tipo, "versao": a.versao, "rotulo": rotulo_versao(a.versao_maior, a.versao_menor),
+                     "aceito_em": a.aceito_em, "ip": a.ip_usuario} for a in aceites],
     }
 
 
@@ -621,8 +672,9 @@ def contexto_admin() -> dict:
     disponivel = esquema_configuracoes_disponivel()
     return {
         "esquema_disponivel": disponivel,
-        "documentos": [{"tipo": tipo, "rotulo": rotulo, "vigente": documento_vigente(tipo) if disponivel else None}
-                       for tipo, rotulo in TIPOS_DOCUMENTO.items()],
+        "documentos": historico_documentos() if disponivel else [
+            {"tipo": tipo, "rotulo": rotulo, "vigente": None, "versoes": [], "proxima_revisao": "v1.0",
+             "proxima_nova": "v1.0"} for tipo, rotulo in TIPOS_DOCUMENTO.items()],
         "email_copia": email_copia_suporte(),
         "smtp": situacao_smtp(),
         "tamanho_maximo_documento": TAMANHO_MAXIMO_DOCUMENTO,

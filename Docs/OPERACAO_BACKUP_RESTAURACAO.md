@@ -40,7 +40,7 @@ Um dump lógico completo e bem-sucedido deve preservar todas as tabelas reais do
 | `evento_contratual` | Trilha de auditoria (somente inclusão) de contratação, renovação, troca de plano, suspensão, prorrogação, reativação, cancelamento, coberturas e regras. |
 | `historico_preco_plano` | Cada alteração de `plano.valor_mensal` feita pela atualização auditada do catálogo. |
 | `sessao_autenticada` | Sessões revogáveis: hash do identificador, dono, validade e revogação. |
-| `preferencia_usuario`, `documento_legal`, `aceite_documento`, `configuracao_sistema` | Avisos escolhidos, versões dos Termos e da Política, prova de aceite e caixa da cópia de chamados. Têm RLS ligado: um papel de backup que não seja dono das tabelas precisa de `BYPASSRLS`, ou o `pg_dump` falha. |
+| `preferencia_usuario`, `documento_legal`, `aceite_documento`, `configuracao_sistema` | Avisos escolhidos, versões dos Termos e da Política, prova de aceite (com o IP de quem aceitou, dado pessoal, desde a revisão `a8d3f6b91c24`) e caixa da cópia de chamados. Têm RLS ligado: um papel de backup que não seja dono das tabelas precisa de `BYPASSRLS`, ou o `pg_dump` falha. |
 | `validacao_pdv` | Trava do total do PDV: valor informado, faturamento bruto calculado, diferença e status da conferência por análise (chave natural `id_analise`, sem sequência). Revisão `e2f7a94c1d35`. Tem RLS ligado, com o mesmo requisito de `BYPASSRLS` das tabelas das Configurações. |
 
 Incluir também `alembic_version` e quaisquer objetos adicionais encontrados no inventário autorizado do banco. Não limitar o backup a essa lista de nomes nem usar somente `--data-only`/`--schema-only`.

@@ -253,6 +253,14 @@ def create_app(config_name: str = None) -> Flask:
         ):
             return redirect(url_for("auth.primeiro_acesso"))
 
+    # Aceite obrigatório dos Termos de Uso e da Política de Privacidade (termos_legais.py):
+    # depois da troca de senha, o CLIENTE com versão vigente sem aceite só vê o modal. No
+    # login do admin, as pendências vencidas vão para o sininho dele.
+    import termos_legais
+    from flask_login import user_logged_in
+    app.before_request(termos_legais.trava_de_aceite)
+    user_logged_in.connect(termos_legais.ao_entrar, app)
+
     # Registra blueprints
     from blueprints.auth import auth_bp
     from blueprints.admin import admin_bp
