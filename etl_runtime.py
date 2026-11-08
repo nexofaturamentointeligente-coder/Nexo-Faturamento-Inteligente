@@ -107,6 +107,20 @@ def run_validation(path, extension, limits=None):
     return _run_job("validate", [path], extension=extension, limits=limits)
 
 
+def run_raio_x(paths, limits=None):
+    """Raio-X de entrada no processo isolado. Lê vários meses de uma vez: o prazo é o dobro
+    do configurado, dentro do teto do ETLLimits (120 s)."""
+    from dataclasses import replace
+    from etl_inputs import ETLInputError
+    from raio_x import CHAVES_RESULTADO
+    policy = get_limits() if limits is None else limits
+    policy = replace(policy, timeout_seconds=min(120, policy.timeout_seconds * 2))
+    result = _run_job("raio_x", paths, limits=policy)
+    if set(result) != CHAVES_RESULTADO:
+        raise ETLInputError("worker", "Resultado inválido do processamento isolado.")
+    return result
+
+
 def run_calculation(path_vendas, path_compras, limits=None):
     from etl_processor import ResultadoETL
     from etl_inputs import ETLInputError

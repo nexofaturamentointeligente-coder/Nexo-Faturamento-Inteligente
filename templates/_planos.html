@@ -1,0 +1,90 @@
+{# ===================================================================
+   NEXO — Componentes dos planos por nível
+   Importar com:  {% import "_planos.html" as pl %}
+   Recebem só argumentos (sem current_user/request), como _macros.html.
+
+   item_menu ........ SidebarNavigation: item do menu do cliente, livre ou com
+                      cadeado e selo UPGRADE (entitlements.menu_cliente).
+   dado_protegido ... BlurredDataColumn: o valor, quando o plano libera; senão um
+                      marcador fixo desfocado que leva aos planos. O valor protegido
+                      nunca chega ao template (raio_x_servico.visao troca por None).
+   recomendacao_plano PlanRecommendationWidget: potencial recuperável e o plano
+                      sugerido pelo Raio-X, com os motivos.
+   =================================================================== #}
+{% import "_macros.html" as m %}
+
+{# ---- Fração (0,1234) em porcentagem pt-BR: "12,3%"; None vira "—". ---- #}
+{%- macro pct(fracao) -%}
+{%- if fracao is none -%}—{%- else -%}{{ ('%.1f'|format(fracao * 100))|replace('.', ',') }}%{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Quantidade: inteira com milhar (1.200); fracionada (kg, litro) com duas casas. ---- #}
+{%- macro qtd(valor) -%}
+{%- set v = (valor if valor is not none else 0)|float -%}
+{%- if v == (v|round(0)) -%}{{ m.num(v) }}{%- else -%}{{ ('%.2f'|format(v))|replace('.', ',') }}{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Item do menu lateral. Livre: o mesmo HTML dos itens de sempre. Bloqueado: o
+   nome acessível começa pelo texto visível e diz qual plano libera o recurso. ---- #}
+{%- macro item_menu(item, endpoint_atual) -%}
+{%- if item.bloqueado -%}
+<a class="nav-item is-bloqueado" href="{{ item.href }}" aria-label="{{ item.rotulo }} UPGRADE: disponível a partir do plano {{ item.plano_necessario }}. Conhecer os planos.">
+                <i class="bi bi-lock-fill" aria-hidden="true"></i> {{ item.rotulo }} <span class="nav-roadmap-badge nav-upgrade-badge" aria-hidden="true">UPGRADE</span>
+            </a>
+{%- else -%}
+<a class="nav-item {{ 'active' if endpoint_atual in item.ativos }}" href="{{ item.href }}">
+                <i class="bi {{ item.icone }}"></i> {{ item.rotulo }}
+            </a>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Dado protegido pelo plano. `liberado` decide; `texto` é o valor já formatado
+   (ou "—" quando o dado não existe). O marcador é sempre o mesmo texto fixo: o
+   desfoque não esconde número nenhum. O convite aparece ao passar o mouse ou com o
+   foco do teclado (popover, em static/js/planos.js); sem JavaScript, fica o title. ---- #}
+{%- macro dado_protegido(liberado, texto, plano, url, rotulo, mascara='R$ 0.000,00') -%}
+{%- if liberado -%}{{ texto }}
+{%- else -%}
+{%- set nome_plano = plano.nome if plano else 'superior' -%}
+<a class="dado-protegido" href="{{ url }}" data-nexo-convite title="Disponível no plano {{ nome_plano }}"
+   data-bs-content="{{ rotulo }} aparece a partir do plano {{ nome_plano }}. Clique para conhecer os planos."
+   aria-label="{{ rotulo }}: disponível a partir do plano {{ nome_plano }}. Conhecer os planos."><span class="dado-protegido-marcador" aria-hidden="true">{{ mascara }}</span><i class="bi bi-lock-fill" aria-hidden="true"></i></a>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Seção inteira fora do plano: aviso legível com o plano que a libera. ---- #}
+{%- macro secao_bloqueada(plano, url, rotulo) -%}
+<div class="aviso-contrato secao-bloqueada" role="status">
+    <i class="bi bi-lock" aria-hidden="true"></i>
+    <div><p class="mb-0">{{ rotulo }} aparece a partir do plano {{ plano.nome if plano else 'superior' }}. <a href="{{ url }}">Conhecer os planos</a>.</p></div>
+</div>
+{%- endmacro -%}
+
+{# ---- Recomendação de plano. `recomendacao` vem de blueprints/onboarding.py
+   (plano, motivos, upgrade, url); `recuperavel`, do resultado do Raio-X. ---- #}
+{%- macro recomendacao_plano(recomendacao, recuperavel, plano_atual) -%}
+<section class="recomendacao-plano{{ ' is-upgrade' if recomendacao.upgrade }}" aria-labelledby="recomendacaoTitulo">
+    <div class="recomendacao-valor">
+        <span class="recomendacao-rotulo">Potencial recuperável identificado</span>
+        <strong class="recomendacao-numero"><small>R$</small> {{ m.brl(recuperavel.total) }}</strong>
+        <span class="recomendacao-partes">R$ {{ m.brl(recuperavel.abaixo_custo) }} em vendas abaixo do custo informado ·
+            R$ {{ m.brl(recuperavel.variacao_preco) }} abaixo do preço de referência. Quando a mesma venda está nas
+            duas parcelas, o total conta só a maior.</span>
+    </div>
+    <div class="recomendacao-corpo">
+        {% if recomendacao.plano %}
+        <h2 id="recomendacaoTitulo">Plano sugerido pelo Raio-X: {{ m.badge_plano(recomendacao.plano.codigo) }}</h2>
+        {% else %}
+        <h2 id="recomendacaoTitulo">Plano sugerido pelo Raio-X</h2>
+        {% endif %}
+        <ul class="recomendacao-motivos">
+            {% for motivo in recomendacao.motivos %}<li>{{ motivo }}</li>{% endfor %}
+        </ul>
+        {% if recomendacao.upgrade %}
+        <a class="btn-nexo" href="{{ recomendacao.url }}"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Conhecer o plano {{ recomendacao.plano.nome }}</a>
+        {% elif plano_atual %}
+        <p class="recomendacao-nota"><i class="bi bi-check-circle" aria-hidden="true"></i> O seu plano atual ({{ plano_atual.nome }}) já cobre o que o Raio-X encontrou.</p>
+        {% endif %}
+    </div>
+</section>
+{%- endmacro -%}

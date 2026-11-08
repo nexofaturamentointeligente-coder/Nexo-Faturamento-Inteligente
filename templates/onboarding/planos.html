@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}Planos — NEXO{% endblock %}
+{% block page_title %}Planos{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Planos e funcionalidades</h1>
+        <p class="sub">O que cada nível do NEXO libera no portal. Valores e condições são tratados com a equipe NEXO.</p>
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('onboarding.diagnostico') if disponivel else url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar</a>
+    </div>
+</div>
+
+{% if not disponivel %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-layers" aria-hidden="true"></i></div>
+        <h3>{{ mensagem or 'Os planos por nível ainda não foram ativados no portal.' }}</h3>
+        <p>O seu plano continua aparecendo na Visão Geral. Em caso de dúvida, abra um chamado no Suporte.</p>
+    </div>
+</div>
+{% else %}
+<p class="raio-x-meta">
+    Seu plano: {{ m.badge_plano(assinatura.codigo_plano or '—') }}
+    {% if not assinatura.ativa %}· <strong>assinatura não ativa</strong>: os recursos de plano voltam com a regularização.{% endif %}
+    {% if assinatura.data_expiracao %}· contrato até {{ assinatura.data_expiracao.strftime('%d/%m/%Y') }}{% endif %}
+</p>
+
+<div class="planos-grade mb-4">
+    {% for linha in linhas %}
+    {% set n = linha.nivel %}
+    {% set e_atual = atual is not none and atual.codigo == n.codigo %}
+    <article class="plano-card{{ ' is-atual' if e_atual }}" id="{{ n.ancora }}" aria-labelledby="planoTitulo{{ n.codigo }}">
+        <header class="plano-card-head">
+            <h2 id="planoTitulo{{ n.codigo }}">{{ n.nome }}</h2>
+            {% if e_atual %}<span class="nexo-badge b-purple">Seu plano</span>{% endif %}
+        </header>
+        <p class="plano-modelo">{{ n.modelo_atendimento }}</p>
+        <p class="plano-atendimento">{{ n.atendimento }}</p>
+        <p class="plano-historico"><i class="bi bi-clock-history" aria-hidden="true"></i> {{ n.historico }}</p>
+        <ul class="plano-recursos">
+            {% if linha.herda %}<li class="plano-recurso is-herdado"><i class="bi bi-check2-all" aria-hidden="true"></i> <span>Tudo do {{ linha.herda.nome }}</span></li>{% endif %}
+            {% for f in linha.novas %}
+            <li class="plano-recurso">
+                <i class="bi {{ 'bi-check2' if f.no_portal else 'bi-hourglass-split' }}" aria-hidden="true"></i>
+                <span><strong>{{ f.nome }}</strong>{% if not f.no_portal %} <span class="nexo-badge b-muted selo-implantacao">Em implantação</span>{% endif %}
+                    <small>{{ f.descricao }}</small></span>
+            </li>
+            {% endfor %}
+        </ul>
+    </article>
+    {% endfor %}
+</div>
+
+{% set superiores = linhas | map(attribute='nivel') | selectattr('nivel_hierarquico', 'gt', atual.nivel_hierarquico if atual else 0) | list %}
+{% if superiores %}
+<section class="nexo-card mb-4" aria-labelledby="mudarPlanoTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="mudarPlanoTitulo"><i class="bi bi-arrow-up-circle text-purple" aria-hidden="true"></i> Mudar de plano</h2>
+            <p class="sub">A mudança é feita pela equipe NEXO. Este pedido abre um chamado no Suporte, com o plano escolhido.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <form method="POST" action="{{ url_for('cliente.tickets') }}" class="config-form" data-envio-unico>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="categoria" value="FINANCEIRO">
+            <div class="mb-3">
+                <label class="nexo-label" for="planoDesejado">Plano desejado</label>
+                <select class="form-select" id="planoDesejado" name="assunto" required>
+                    {% for n in superiores %}<option value="Mudança de plano: {{ n.nome }}">{{ n.nome }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="nexo-label" for="mensagemPlano">Mensagem para a equipe</label>
+                <textarea class="form-control" id="mensagemPlano" name="mensagem" rows="3" maxlength="2000" required>Quero mudar de plano. Podem me explicar as condições?</textarea>
+            </div>
+            <button type="submit" class="btn-nexo"><i class="bi bi-send" aria-hidden="true"></i> Pedir a mudança pelo Suporte</button>
+        </form>
+    </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

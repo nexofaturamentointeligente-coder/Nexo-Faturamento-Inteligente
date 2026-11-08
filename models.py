@@ -1184,3 +1184,112 @@ class ValidacaoPdv(db.Model):
             name="ck_validacao_pdv_resultado",
         ),
     )
+
+
+# =====================================================================
+# Planos por nível de inteligência (entitlements) e Raio-X de entrada
+# =====================================================================
+class PlanoNivel(db.Model):
+    """
+    Nível de acesso de cada plano: posição na hierarquia (BRONZE < PRATA < OURO <
+    CUSTOM) e quantos meses de histórico o plano mantém (NULL = sem limite).
+
+    Liga-se ao plano comercial pelo código (plano.nome_plano = plano_nivel.codigo),
+    sem coluna, FK ou CHECK novos em `plano`: a tabela existente continua com preço,
+    frequência e contratos, e o código chega à produção antes da migração sem quebrar
+    nenhuma consulta. CUSTOM existe aqui como nível; nenhuma empresa fica nele enquanto
+    o CHECK de plano.nome_plano não o aceitar. Ver entitlements.py.
+    """
+    __tablename__ = "plano_nivel"
+
+    codigo: Mapped[str] = mapped_column(String(20), primary_key=True)
+    nome: Mapped[str] = mapped_column(String(60), nullable=False)
+    modelo_atendimento: Mapped[str] = mapped_column(String(60), nullable=False)
+    atendimento: Mapped[str] = mapped_column(String(255), nullable=False)
+    nivel_hierarquico: Mapped[int] = mapped_column(Integer, nullable=False)
+    limite_historico_meses: Mapped[Optional[int]] = mapped_column(Integer)
+    criado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("nivel_hierarquico", name="uq_plano_nivel_hierarquia"),
+        CheckConstraint("length(codigo) BETWEEN 2 AND 20", name="ck_plano_nivel_codigo"),
+        CheckConstraint("nivel_hierarquico >= 1", name="ck_plano_nivel_hierarquia"),
+        CheckConstraint("limite_historico_meses IS NULL OR limite_historico_meses >= 1",
+                        name="ck_plano_nivel_historico"),
+    )
+
+
+class Funcionalidade(db.Model):
+    """Recurso que um plano pode liberar, identificado pela `chave` usada no código."""
+    __tablename__ = "funcionalidade"
+
+    id_funcionalidade: Mapped[int] = mapped_column(primary_key=True)
+    chave: Mapped[str] = mapped_column(String(60), nullable=False)
+    nome: Mapped[str] = mapped_column(String(120), nullable=False)
+    descricao: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("chave", name="uq_funcionalidade_chave"),
+        CheckConstraint("length(chave) BETWEEN 3 AND 60", name="ck_funcionalidade_chave"),
+    )
+
+
+class PlanoFuncionalidade(db.Model):
+    """Quais funcionalidades cada nível libera. A migração grava a matriz cumulativa:
+    cada nível tem as do nível abaixo."""
+    __tablename__ = "plano_funcionalidade"
+
+    codigo_plano: Mapped[str] = mapped_column(
+        ForeignKey("plano_nivel.codigo", name="fk_plano_funcionalidade_plano"),
+        primary_key=True, autoincrement=False,
+    )
+    id_funcionalidade: Mapped[int] = mapped_column(
+        ForeignKey("funcionalidade.id_funcionalidade", name="fk_plano_funcionalidade_funcionalidade"),
+        primary_key=True, autoincrement=False,
+    )
+
+    __table_args__ = (
+        Index("ix_plano_funcionalidade_funcionalidade", "id_funcionalidade"),
+    )
+
+
+class DiagnosticoEntrada(db.Model):
+    """
+    Último Raio-X de entrada de cada empresa (um por empresa: o novo substitui o anterior).
+
+    Guarda só agregados e as listas resumidas do resultado (JSON em `resultado`); os
+    arquivos enviados são lidos no processo isolado do ETL e descartados. A linha sai com
+    a empresa por ON DELETE CASCADE, como a validacao_pdv sai com a análise: a exclusão
+    permanente da empresa não precisa consultar esta tabela. Ver raio_x.py.
+    """
+    __tablename__ = "diagnostico_entrada"
+
+    id_empresa: Mapped[int] = mapped_column(
+        ForeignKey("empresa.id_empresa", ondelete="CASCADE", name="fk_diagnostico_entrada_empresa"),
+        primary_key=True, autoincrement=False,
+    )
+    id_usuario: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="SET NULL", name="fk_diagnostico_entrada_usuario")
+    )
+    gerado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    versao_regras: Mapped[str] = mapped_column(String(40), nullable=False)
+    arquivos: Mapped[int] = mapped_column(Integer, nullable=False)
+    periodo_inicio: Mapped[Optional[date]] = mapped_column(Date)
+    periodo_fim: Mapped[Optional[date]] = mapped_column(Date)
+    indice_saude: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    # Sem precisão, como os KPIs: o arquivo não tem teto e o valor não pode estourar a coluna.
+    valor_recuperavel: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    plano_recomendado: Mapped[str] = mapped_column(
+        ForeignKey("plano_nivel.codigo", name="fk_diagnostico_entrada_plano"), nullable=False,
+    )
+    resultado: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("arquivos >= 1", name="ck_diagnostico_entrada_arquivos"),
+        CheckConstraint("indice_saude IS NULL OR (indice_saude >= 0 AND indice_saude <= 100)",
+                        name="ck_diagnostico_entrada_indice"),
+        CheckConstraint("valor_recuperavel >= 0", name="ck_diagnostico_entrada_recuperavel"),
+        CheckConstraint("periodo_inicio IS NULL OR periodo_fim IS NULL OR periodo_inicio <= periodo_fim",
+                        name="ck_diagnostico_entrada_periodo"),
+        Index("ix_diagnostico_entrada_usuario", "id_usuario"),
+    )

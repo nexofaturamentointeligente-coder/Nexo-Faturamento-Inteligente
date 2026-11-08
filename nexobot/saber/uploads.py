@@ -353,13 +353,11 @@ REGISTROS = (
             "“ERRO”, e normalmente indicam colunas essenciais não reconhecidas."
         ),
         explicacao=(
-            "Mensagens típicas do envio: “Extensão não suportada” (use .csv ou .xlsx), “Arquivo vazio”, "
-            "Arquivos acima de 20 MB são recusados pelo servidor antes do envio ser processado: nesse caso "
-            "aparece uma página de erro genérica (“Request Entity Too Large”), não uma mensagem no topo da "
-            "página de envio. Reduza o período ou as colunas do relatório e tente novamente., “Não foi possível "
-            "interpretar o CSV” ou Mensagens típicas do envio: “Extensão .xls não suportada” (use .csv ou "
-            ".xlsx), “Arquivo vazio — nada foi salvo”, “Não foi possível interpretar o CSV com os formatos "
-            "suportados” ou “A estrutura compactada do XLSX é inválida”.. No processamento, a recusa mais comum "
+            "Mensagens típicas do envio: “Extensão .xls não suportada” (use .csv ou .xlsx), “Arquivo vazio — "
+            "nada foi salvo”, “Não foi possível interpretar o CSV com os formatos suportados” ou “A estrutura "
+            "compactada do XLSX é inválida”. Um envio acima de 20 MB é recusado pelo servidor antes de ser "
+            "lido: aparece a página “Envio grande demais”, e nada é gravado. Reduza o período ou as colunas do "
+            "relatório, ou envie menos arquivos por vez, e tente novamente. No processamento, a recusa mais comum "
             "é “Não consegui identificar as colunas essenciais”, acompanhada da lista das colunas reconhecidas. "
             "Esse diagnóstico fica visível para a equipe NEXO, que o repassa a você (pelo chamado de Suporte ou "
             "outro canal) para ajustar a exportação no PDV; no portal, você vê apenas o arquivo marcado como "

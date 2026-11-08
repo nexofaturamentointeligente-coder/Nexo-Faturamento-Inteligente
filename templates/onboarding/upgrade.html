@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}{{ funcionalidade.nome }} — NEXO{% endblock %}
+{% block page_title %}{{ funcionalidade.nome }}{% endblock %}
+
+{% block content %}
+{# Resposta de @requer_funcionalidade (entitlements.py): 403 por plano ou assinatura, 503 sem o
+   esquema dos planos. Nenhum dado do recurso pedido chega aqui. #}
+<div class="page-head">
+    <div>
+        <h1>{{ funcionalidade.nome }}</h1>
+        <p class="sub">Recurso liberado conforme o plano da sua empresa.</p>
+    </div>
+</div>
+
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-lock" aria-hidden="true"></i></div>
+        <h3>{{ mensagem }}</h3>
+        {% if plano_atual %}<p>Seu plano atual: <strong>{{ plano_atual.nome }}</strong>.</p>{% endif %}
+        <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+            {% if url_upgrade %}
+            <a href="{{ url_upgrade }}" class="btn-nexo"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> {{ ('Conhecer o plano ' ~ plano_necessario.nome) if plano_necessario else 'Falar com a equipe NEXO' }}</a>
+            {% endif %}
+            <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-speedometer2" aria-hidden="true"></i> Visão Geral</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

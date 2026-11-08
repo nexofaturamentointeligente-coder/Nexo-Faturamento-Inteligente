@@ -320,8 +320,9 @@ OUTRA_EMPRESA = ("Não tenho acesso a dados de empresas por esta conversa — ne
                  "Cada cliente vê apenas as análises da própria empresa, dentro do portal.")
 DADOS = ("Não tenho acesso aos valores das suas análises por esta conversa. Você pode consultar os "
          "indicadores disponíveis na Visão Geral e, para análises anteriores, no Histórico.")
-DADOS_NAO_CALCULADOS = (" O portal também não apresenta lucro, margem ou CMV: os indicadores são "
-                        "sinalizações gerenciais estimadas.")
+DADOS_NAO_CALCULADOS = (" As análises do portal também não apresentam lucro, margem ou CMV: os indicadores são "
+                        "sinalizações gerenciais estimadas. A margem bruta estimada sobre o custo informado "
+                        "aparece só no Raio-X do PDV, a partir do plano Prata.")
 FORA_ESCOPO = (
     "Sou o assistente do portal NEXO e só consigo ajudar com o uso do portal: envio de relatórios, "
     "análises publicadas, indicadores, Guia, Suporte e Configurações. Para outros assuntos, não tenho como responder.",

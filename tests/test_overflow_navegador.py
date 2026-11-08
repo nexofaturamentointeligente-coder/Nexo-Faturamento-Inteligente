@@ -330,6 +330,28 @@ class NavegadorCase(ContratosCase):
                                   data_envio=datetime(2026, 2, 10 + i, 14, 20, tzinfo=timezone.utc)))
         s.commit()
         self.empresa_longa_id = longa.id_empresa
+        self._raio_x_extenso()
+
+    def _raio_x_extenso(self):
+        """Raio-X do PDV com nomes longos e totais de nove dígitos (o mesmo teto dos cards do
+        painel), em oito meses: o cliente BRONZE vê as colunas de custo desfocadas e o aviso
+        dos meses fora do histórico."""
+        import tempfile
+        import raio_x
+        import raio_x_servico
+        from tests.raio_x_support import executar_como_o_worker, relatorio_do_mes
+        with tempfile.TemporaryDirectory(prefix="raio-x-navegador-") as pasta:
+            caminhos = []
+            for mes in range(5, 13):
+                linhas = [f"{i};{nome};1500;1234,56;{1_800_000 + 100 * i + mes},00;1900000,00"
+                          for i, nome in enumerate(PRODUTOS_LONGOS, 1)]
+                caminho = Path(pasta) / f"arquivo_{mes:02d}.csv"
+                caminho.write_bytes(relatorio_do_mes(2025, mes, linhas))
+                caminhos.append(str(caminho))
+            resultado = executar_como_o_worker(caminhos)
+        raio_x_servico.salvar(self.empresa_id, self.cliente_id, resultado, raio_x.recomendar(resultado, 24),
+                              [f"vendas-por-produto-loja-matriz-{mes:02d}-2025.csv" for mes in range(5, 13)])
+        self.db.session.commit()
 
     # ------------------------------------------------------------ navegador
     def _rota(self, rota):
@@ -456,7 +478,7 @@ class NavegadorCase(ContratosCase):
 
     def paginas_cliente(self):
         return ["/cliente/dashboard", f"/cliente/analise/{self.analise_id}", "/cliente/historico", "/cliente/upload",
-                "/cliente/tickets", "/cliente/guia"]
+                "/cliente/tickets", "/cliente/guia", "/onboarding/diagnostico", "/onboarding/planos"]
 
 
 

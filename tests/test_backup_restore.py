@@ -116,8 +116,9 @@ class PostgreSQLBackupRestoreTests(unittest.TestCase):
                          f"({report.get('error_type', 'erro não identificado')}); saídas brutas omitidas.")
         self.assertEqual(report.get("status"), "ok")
         # 19 tabelas do domínio + alembic_version + sessao_autenticada (SEC-001)
-        # + as 4 das Configurações da conta + a da trava do total do PDV.
-        self.assertEqual(report.get("tables"), 26)
+        # + as 4 das Configurações da conta + a da trava do total do PDV
+        # + as 4 dos planos por nível e do Raio-X (b3e9d6c1f7a2).
+        self.assertEqual(report.get("tables"), 30)
         self.assertEqual(report.get("uploads"), 4)
         self.assertEqual(report.get("files"), 5)
         not_executed = report.get("not_executed", [])
@@ -207,7 +208,7 @@ class BackupDrillSafetyTests(unittest.TestCase):
             for tool in TOOLS:
                 _tool(Path(fake), tool).write_bytes(b"")
             for platform, approved, accepted in cases:
-                report = {"status": "ok", "tables": 26, "uploads": 4, "files": 5,  # espelha o ensaio real
+                report = {"status": "ok", "tables": 30, "uploads": 4, "files": 5,  # espelha o ensaio real
                           "checks": approved, "not_executed": ["etl"]}
                 completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(report))
                 with self.subTest(platform=platform, checks=approved[-1:], accepted=accepted), \
@@ -296,10 +297,10 @@ class _PrivateDrill(unittest.TestCase):
     def fixture(self):
         from extensions import db
         from models import (AceiteDocumento, Analise, ChamadoSuporte, CoberturaPaga, ConfiguracaoSistema,
-                            Contrato, DocumentoLegal, Empresa, EventoContratual, GuiaTopico, HistoricoPrecoPlano,
-                            IndicadorAnalise, MensagemSuporte, Notificacao, Plano, PreferenciaUsuario,
-                            ProdutoCurvaABC, RegimeContratual, RelatorioAnalise, Segmento, UploadRelatorio,
-                            Usuario, ValidacaoPdv)
+                            Contrato, DiagnosticoEntrada, DocumentoLegal, Empresa, EventoContratual, GuiaTopico,
+                            HistoricoPrecoPlano, IndicadorAnalise, MensagemSuporte, Notificacao, Plano,
+                            PreferenciaUsuario, ProdutoCurvaABC, RegimeContratual, RelatorioAnalise, Segmento,
+                            UploadRelatorio, Usuario, ValidacaoPdv)
         import storage
 
         plano = Plano(nome_plano="BRONZE", valor_mensal=100, qtd_analises_mes=1,
@@ -397,6 +398,12 @@ class _PrivateDrill(unittest.TestCase):
             ValidacaoPdv(id_analise=self.analysis_ids[0], valor_pdv_informado=25, faturamento_bruto_calculado=25,
                          diferenca=0, status_validacao="CONCLUIDO", id_usuario_informante=clientes[0].id_usuario,
                          informado_em=instante, validado_em=instante),
+            # Planos por nível: o catálogo vem da migração; o Raio-X é o único dado de cliente.
+            DiagnosticoEntrada(id_empresa=self.company_ids[0], id_usuario=clientes[0].id_usuario,
+                               gerado_em=instante, versao_regras="raio-x-ficticio", arquivos=1,
+                               periodo_inicio=date(2026, 1, 1), periodo_fim=date(2026, 1, 31),
+                               indice_saude=80, valor_recuperavel=12, plano_recomendado="PRATA",
+                               resultado='{"ficticio": true}'),
         ])
         guia_ref = storage.salvar(GUIA, "guia/imagem_ficticia.png")
         db.session.add(GuiaTopico(categoria="Teste", pergunta="Recuperação fictícia?",

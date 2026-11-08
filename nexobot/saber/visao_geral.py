@@ -185,9 +185,9 @@ REGISTROS = (
         categoria="Visão Geral",
         tipo="visao_geral",
         resumo=(
-            "O portal do cliente tem seis áreas: Visão Geral (indicadores e devolutiva mais recente), "
-            "Enviar Relatórios, Histórico de análises (com exportação em PDF), Guia, Suporte (chamados) e "
-            "Configurações. "
+            "O portal do cliente tem estas áreas: Visão Geral (indicadores e devolutiva mais recente), "
+            "Enviar Relatórios, Histórico de análises (com exportação em PDF), Raio-X do PDV, Auditoria de "
+            "custos (a partir do plano Prata), Guia, Suporte (chamados) e Configurações. "
             "Há ainda o sininho de notificações e este assistente, o NexoBot."
         ),
         explicacao=(
@@ -198,6 +198,10 @@ REGISTROS = (
             "de cada arquivo.\n\n"
             "Histórico: todas as análises publicadas; cada uma abre a análise completa, com indicadores, "
             "tabela da Curva ABC, semáforos e devolutiva, e o botão Exportar PDF.\n\n"
+            "Raio-X do PDV: a partir dos relatórios de vendas de vários meses, mostra a saúde do cadastro, os "
+            "itens vendidos com preços diferentes no mesmo mês, o potencial recuperável e o plano sugerido. "
+            "Auditoria de custos: vendas abaixo do custo informado, margem bruta por item e preços que não "
+            "acompanharam o custo; aparece com cadeado no menu de quem ainda não tem o plano Prata.\n\n"
             "Guia: tutoriais mantidos pela equipe NEXO. Suporte: abertura e acompanhamento de chamados. "
             "Sininho: avisos de processamento dos relatórios, publicação da devolutiva, respostas da equipe em chamados e chamados marcados como resolvidos."
         ),
@@ -210,7 +214,7 @@ REGISTROS = (
         relacionados=("nexo.dashboard.visao_geral", "nexo.uploads.como_enviar", "nexo.historico.abrir",
                       "nexo.suporte.abrir_chamado"),
         destino="dashboard",
-        fontes=("templates/base.html", "blueprints/cliente.py"),
+        fontes=("templates/base.html", "blueprints/cliente.py", "blueprints/onboarding.py", "entitlements.py"),
     ),
     registro(
         id="nexo.visao_geral.o_que_nao_e",
@@ -225,8 +229,9 @@ REGISTROS = (
             "O seu PDV continua responsável por registrar vendas, compras, caixa, estoque físico e documentos "
             "fiscais. O NEXO trabalha depois disso, com os relatórios exportados, e produz leitura gerencial: "
             "faturamento, total comprado, Indicador de Pressão de Estoque, produtos de destaque, Curva ABC, "
-            "semáforos e devolutiva. Por regra do produto, ele nunca apresenta lucro, margem, CMV ou "
-            "rentabilidade."
+            "semáforos e devolutiva. Por regra do produto, as análises nunca apresentam lucro, margem, CMV ou "
+            "rentabilidade; a margem bruta estimada sobre o custo informado aparece só no Raio-X do PDV, a "
+            "partir do plano Prata."
         ),
         perguntas=(
             "O NEXO emite notas fiscais?", "O NEXO é um ERP?", "O NEXO substitui meu PDV?",

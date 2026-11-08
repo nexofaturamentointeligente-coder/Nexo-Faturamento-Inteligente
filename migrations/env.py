@@ -64,8 +64,11 @@ def run_migrations_offline():
 
     """
     url = config.get_main_option("sqlalchemy.url")
+    # paramstyle "named", como no modelo do Alembic: com o pyformat do psycopg2, todo "%" de um
+    # texto literal sairia duplicado ("100%% digital") no SQL gerado pela prévia offline.
     context.configure(
-        url=url, target_metadata=get_metadata(), literal_binds=True
+        url=url, target_metadata=get_metadata(), literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
     )
 
     with context.begin_transaction():

@@ -851,7 +851,7 @@ def empresa_excluir_permanente(id_empresa):
          (nome e assunto digitado pelo cliente, com link para o que vai sair);
       4) Usuario(s) da empresa (sessões, preferências e aceites saem por
          ON DELETE CASCADE);
-      5) a própria Empresa.
+      5) a própria Empresa (o último Raio-X do PDV sai por ON DELETE CASCADE).
 
     Empresa com histórico contratual (contratos, períodos pagos, eventos ou
     regime) NÃO é excluída: contratos, valores e pagamentos são registros

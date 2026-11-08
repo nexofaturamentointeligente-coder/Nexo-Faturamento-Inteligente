@@ -2242,3 +2242,83 @@ body.termos-bloqueio { overflow: hidden; }
   --bs-form-switch-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%23a49cc4'/%3e%3c/svg%3e");
 }
 .form-switch .field-hint { display: block; margin-top: 2px; }
+
+/* ===== PLANOS POR NÍVEL E RAIO-X DO PDV ===== */
+/* Item de menu de plano superior: o mesmo desenho, em tom apagado, com o cadeado no lugar
+   do ícone e o selo UPGRADE (a pílula .nav-roadmap-badge). */
+.nav-item.is-bloqueado { color: #9590b2; }
+.nav-item.is-bloqueado i { color: #b9b2d8; background: rgba(255, 255, 255, 0.03); }
+.nav-item.is-bloqueado:hover { color: #f1ecff; }
+.nav-item.is-bloqueado:hover i { background: rgba(168, 85, 247, 0.18); color: #ecdfff; }
+.nav-upgrade-badge { flex: 0 0 auto; }
+
+/* Dado protegido pelo plano: um marcador fixo desfocado (o valor nunca vem do servidor) e um
+   cadeado; o link leva aos planos e o convite aparece no popover (static/js/planos.js). */
+.dado-protegido {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 2px;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.dado-protegido:hover { color: var(--text); }
+.dado-protegido:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.dado-protegido-marcador { filter: blur(4px); -webkit-user-select: none; user-select: none; }
+.dado-protegido .bi { font-size: 0.75rem; color: var(--primary-2); }
+.secao-bloqueada a { font-weight: 600; }
+
+/* Recomendação de plano do Raio-X: o valor recuperável à esquerda, o plano e os motivos à direita. */
+.recomendacao-plano {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px;
+  margin-bottom: 24px; padding: 22px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-lg);
+  /* Sobre o vidro opaco dos cartões: o texto secundário passa AA mesmo sobre a faixa clara da paisagem. */
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.24) 0%, rgba(20, 15, 38, 0.74) 70%), var(--glass-strong);
+  box-shadow: var(--shadow-glass), var(--glass-shine);
+}
+@media (min-width: 992px) {
+  .recomendacao-plano { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: center; }
+}
+.recomendacao-valor { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.recomendacao-rotulo { color: var(--text-muted); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.recomendacao-numero { font-family: var(--font-mono); font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.1; color: var(--text); overflow-wrap: anywhere; }
+.recomendacao-numero small { margin-right: 4px; font-size: 0.55em; color: var(--text-muted); }
+.recomendacao-partes { color: var(--text-muted); font-size: 0.82rem; }
+.recomendacao-corpo { min-width: 0; }
+.recomendacao-corpo h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 1.05rem; }
+.recomendacao-motivos { margin: 0 0 14px; padding-left: 1.1rem; color: var(--text); font-size: 0.9rem; }
+.recomendacao-motivos li + li { margin-top: 4px; }
+.recomendacao-nota { margin: 0; color: var(--text-muted); font-size: 0.88rem; }
+
+/* Raio-X: metadados, inconsistências e avisos. */
+/* Texto solto sobre a paisagem: a cor do subtítulo das páginas (.page-head .sub), que passa AA. */
+.raio-x-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 0 16px; color: #b7b2d3; font-size: 0.86rem; }
+.raio-x-subtitulo { margin: 22px 0 10px; color: var(--text); font-size: 0.95rem; font-weight: 600; }
+.raio-x-avisos { margin: 6px 0 0; padding-left: 1.1rem; }
+
+/* Página de planos: um cartão por nível; o do plano atual em destaque. */
+.planos-grade { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 768px) { .planos-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1400px) { .planos-grade { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.plano-card {
+  display: flex; flex-direction: column; gap: 10px;
+  min-width: 0; padding: 20px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  box-shadow: var(--shadow-glass), var(--glass-shine);
+  scroll-margin-top: calc(var(--topbar-h) + 16px);
+}
+.plano-card.is-atual { border-color: var(--glass-border-2); box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.35), var(--shadow-glass); }
+.plano-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.plano-card-head h2 { margin: 0; font-size: 1.15rem; }
+.plano-modelo { margin: 0; color: #d8b4fe; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.plano-atendimento, .plano-historico { margin: 0; color: var(--text-muted); font-size: 0.88rem; }
+.plano-recursos { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0; padding: 0; list-style: none; }
+.plano-recurso { display: flex; align-items: flex-start; gap: 8px; color: var(--text); font-size: 0.88rem; }
+.plano-recurso > .bi { margin-top: 2px; color: var(--success); }
+.plano-recurso small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 0.8rem; }
+.plano-recurso.is-herdado { color: var(--text-muted); }
+.selo-implantacao { margin-left: 4px; vertical-align: middle; }

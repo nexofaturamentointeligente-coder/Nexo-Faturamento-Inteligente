@@ -74,7 +74,7 @@ class CSPNavegadorTests(NavegadorCase):
         pagina = self._abrir_com_coletor()
         self.entrar(pagina, "cliente-test@example.invalid")
         for caminho in ("/cliente/dashboard", f"/cliente/analise/{self.analise_id}", "/cliente/tickets",
-                        "/cliente/upload", "/cliente/historico"):
+                        "/cliente/upload", "/cliente/historico", "/onboarding/diagnostico", "/onboarding/planos"):
             with self.subTest(caminho=caminho):
                 self._assert_pagina_limpa(pagina, caminho)
         self.ir(pagina, "/cliente/dashboard")

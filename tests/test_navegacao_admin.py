@@ -23,7 +23,10 @@ import unittest
 from tests.deploy_support import DeployTestCase
 
 ROTULOS_ADMIN = ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"]
-ROTULOS_CLIENTE = ["Visão Geral", "Enviar relatórios", "Histórico", "Guia", "Suporte", "Configurações"]
+# O cliente das fixtures é BRONZE: o Raio-X do PDV é livre e a Auditoria de custos (PRATA) aparece
+# com o cadeado e o selo UPGRADE, cujo texto conta no rótulo (planos por nível, entitlements.py).
+ROTULOS_CLIENTE = ["Visão Geral", "Enviar relatórios", "Histórico", "Raio-X do PDV", "Auditoria de custos UPGRADE",
+                   "Guia", "Suporte", "Configurações"]
 
 _ASIDE = re.compile(r'<aside\b[^>]*\bclass="[^"]*\bsidebar\b[^"]*"[^>]*>(.*?)</aside>', re.S)
 _NAV = re.compile(r'<nav\b[^>]*\bclass="[^"]*\bsidebar-nav\b[^"]*"[^>]*>(.*?)</nav>', re.S)

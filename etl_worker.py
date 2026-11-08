@@ -49,6 +49,15 @@ def main():
                 from etl_processor import _calcular_kpis_local
                 calculated = _calcular_kpis_local(*request["paths"])
                 result = calculated._asdict()
+            elif request["operation"] == "raio_x" and request["paths"]:
+                # Raio-X de entrada: cada relatório passa pela mesma validação do upload antes
+                # de ser lido; a extensão vem do nome que o processo pai deu ao arquivo.
+                from raio_x import MAX_ARQUIVOS, diagnosticar
+                if len(request["paths"]) > MAX_ARQUIVOS:
+                    raise ValueError("Operação inválida.")
+                for path in request["paths"]:
+                    validate_input(path, Path(path).suffix.lower(), limits)
+                result = diagnosticar(request["paths"])
             else:
                 raise ValueError("Operação inválida.")
         envelope = {"ok": True, "result": result}

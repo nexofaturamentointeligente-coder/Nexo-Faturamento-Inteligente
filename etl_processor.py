@@ -28,6 +28,8 @@ Regras inegociáveis (MVP/PI2):
     defensivo (não confundem com outras colunas) e DESCARTADOS para fins
     de KPI. 'Total Custo' pode gerar APENAS o alerta "venda abaixo do
     custo informado pelo PDV" — observação do dado bruto, NÃO margem.
+    A margem bruta estimada do Raio-X do PDV (raio_x.py, liberada por plano)
+    é outro produto e não entra nos KPIs, no PDF nem na devolutiva.
   - Falha de leitura/validação nunca é mascarada com dados falsos.
   - Status CONCLUIDO da análise nunca é setado aqui — é decisão humana via admin.
     (O CONCLUIDO de validar_total_pdv é só o resultado da conferência com o PDV.)
@@ -616,12 +618,20 @@ def _validar_compras(mapa: dict) -> bool:
 
 
 def carregar_vendas(caminho: str) -> pd.DataFrame:
-    nome = os.path.basename(caminho)
-    bruto = _ler_bruto(caminho)
+    return _vendas_do_bruto(_ler_bruto(caminho), os.path.basename(caminho))
+
+
+def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
+    """carregar_vendas a partir da matriz já lida: o Raio-X lê cada arquivo uma vez só e
+    tira dela também o período do cabeçalho (_extrair_periodo_base)."""
     if bruto.empty:
         raise ETLValidationError(f"O arquivo de vendas '{nome}' está totalmente vazio.")
 
     idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_VENDAS, _validar_vendas)
+    # Título normalizado de cada coluna reconhecida. Os KPIs não o usam; o Raio-X precisa
+    # saber se o custo é unitário e se o total da linha veio do preço unitário.
+    cabecalhos = {canonico: " ".join(_norm_chave(bruto.iat[idx + k, coluna]) for k in range(linhas_cab)).strip()
+                  for canonico, coluna in mapa.items()}
     df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
     situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab)
     if situacao is not None:
@@ -662,6 +672,7 @@ def carregar_vendas(caminho: str) -> pd.DataFrame:
     if "_situacao" in df.columns:
         df = _aplicar_situacao_das_vendas(df, nome)
     df.attrs["qualidade"] = dict(qualidade)
+    df.attrs["cabecalhos"] = cabecalhos
     return df
 
 

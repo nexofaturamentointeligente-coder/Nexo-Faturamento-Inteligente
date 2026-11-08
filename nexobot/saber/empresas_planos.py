@@ -189,7 +189,8 @@ REGISTROS = (
         categoria="Planos",
         resumo=(
             "O NEXO tem três planos: BRONZE, PRATA e OURO. O seu plano atual aparece na Visão Geral e é "
-            "definido no cadastro pela equipe NEXO."
+            "definido no cadastro pela equipe NEXO. Projetos sob medida para redes (Custom / Enterprise) "
+            "são combinados diretamente com a equipe."
         ),
         explicacao=(
             "Os planos BRONZE e PRATA trabalham com análises mensais; o plano OURO é o único que permite "
@@ -214,9 +215,10 @@ REGISTROS = (
         titulo="Qual é a diferença entre os planos Bronze, Prata e Ouro?",
         categoria="Planos",
         resumo=(
-            "A regra aplicada pelo portal é a frequência: Bronze e Prata recebem análises mensais; Ouro pode "
-            "receber análises quinzenais. Os demais níveis de entrega e atendimento são combinados com a "
-            "equipe NEXO."
+            "O portal aplica a frequência e os recursos de cada nível. Bronze e Prata recebem análises mensais; "
+            "Ouro pode receber análises quinzenais. O Raio-X do PDV vale para todos, e a Auditoria de custos e a "
+            "margem bruta estimada começam no Prata. A página Planos do portal mostra o que cada nível libera; "
+            "o atendimento e as condições são combinados com a equipe NEXO."
         ),
         explicacao=(
             "No cadastro, cada plano traz descrições de nível de entrega, de dashboard e de atendimento, mas "
@@ -235,7 +237,7 @@ REGISTROS = (
         ),
         termos="diferenca planos comparar mensal quinzenal ouro prata bronze preco valor custo regra",
         relacionados=("nexo.analises.mensal_quinzenal", "nexo.planos.meu_plano"),
-        fontes=("blueprints/admin.py", "models.py", "seed.py"),
+        fontes=("blueprints/admin.py", "models.py", "seed.py", "entitlements.py", "templates/onboarding/planos.html"),
     ),
     registro(
         id="nexo.planos.meu_plano",
@@ -244,7 +246,8 @@ REGISTROS = (
         tipo="procedimento",
         resumo=(
             "O plano aparece na Visão Geral, no cartão da empresa. A troca de plano é feita pela equipe NEXO: "
-            "abra um chamado em Suporte ou fale pelo canal combinado."
+            "na página Planos, o pedido abre um chamado com o plano escolhido; também dá para abrir o chamado "
+            "em Suporte ou falar pelo canal combinado."
         ),
         perguntas=(
             "Qual é o meu plano?", "Onde vejo meu plano?", "Como troco de plano?", "Quero mudar para o plano Ouro.",

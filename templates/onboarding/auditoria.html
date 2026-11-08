@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_planos.html" as pl %}
+
+{% block title %}Auditoria de custos — NEXO{% endblock %}
+{% block page_title %}Auditoria de custos{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Auditoria de custos</h1>
+        <p class="sub">Vendas abaixo do custo, margem bruta por item e preços que não acompanharam o custo, a partir do seu último Raio-X.</p>
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('onboarding.diagnostico') }}" class="btn-ghost"><i class="bi bi-activity" aria-hidden="true"></i> Raio-X do PDV</a>
+    </div>
+</div>
+
+{% if not raio_x %}
+<div class="nexo-card">
+    <div class="empty-state">
+        <div class="es-icon"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i></div>
+        <h3>Ainda não há Raio-X da sua empresa.</h3>
+        <p>A auditoria usa os relatórios de vendas enviados no Raio-X do PDV.</p>
+        <div class="d-flex justify-content-center mt-3">
+            <a href="{{ url_for('onboarding.diagnostico') }}" class="btn-nexo"><i class="bi bi-activity" aria-hidden="true"></i> Gerar o Raio-X</a>
+        </div>
+    </div>
+</div>
+{% else %}
+{% set prot = raio_x.protegido %}
+{% set aud = raio_x.auditoria %}
+<p class="raio-x-meta"><i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} · {{ raio_x.arquivos | length }} relatório(s) de vendas</p>
+
+<div class="row g-3 mb-4">
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Custo informado das vendas</span><span class="kpi-icon is-info"><i class="bi bi-receipt" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ pl.dado_protegido(not prot.cmv, ('<small>R$</small> '|safe ~ m.brl(aud.custo_total)) if aud.custo_total is not none else '—', plano_cmv, url_upgrade(plano_cmv), 'Custo informado das vendas') }}</div>
+            <div class="kpi-foot">Sobre R$ {{ m.brl(aud.faturamento_com_custo) }} vendidos com custo</div></div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Margem bruta estimada</span><span class="kpi-icon is-green"><i class="bi bi-percent" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ pl.dado_protegido(not prot.margem, pl.pct(aud.margem_percentual), plano_margem, url_upgrade(plano_margem), 'Margem bruta', '00,0%') }}</div>
+            <div class="kpi-foot">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(aud.margem_valor)) if aud.margem_valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Margem bruta em reais') }}</div></div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Perda em vendas abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+            <div class="kpi-value"><small>R$</small> {{ m.brl(aud.perda_abaixo_custo) }}</div>
+            <div class="kpi-foot">{{ m.num(aud.itens_venda_abaixo_custo) }} item(ns) vendidos abaixo do custo</div></div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Itens com margem negativa</span><span class="kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(aud.itens_margem_negativa) }}</div>
+            <div class="kpi-foot">No total do período, abaixo do custo</div></div>
+    </div>
+</div>
+
+{# ---------------- Vendas abaixo do custo ---------------- #}
+<section class="nexo-card mb-4" aria-labelledby="abaixoTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="abaixoTitulo"><i class="bi bi-arrow-down-circle text-purple" aria-hidden="true"></i> Vendas abaixo do custo informado</h2>
+            <p class="sub">Só as vendas feitas por menos do que o custo que o próprio PDV informa, somadas por item; as de maior perda primeiro. Em cada linha, perda = custo dessas vendas − valor vendido.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if aud.itens_abaixo_custo is none %}
+        {{ pl.secao_bloqueada(plano_auditoria, url_upgrade(plano_auditoria), 'A lista de vendas abaixo do custo') }}
+        {% elif aud.itens_abaixo_custo %}
+        <div class="table-wrap">
+            <div class="table-responsive-x">
+                <table class="nexo-table" id="tabelaAbaixoCusto">
+                    <caption class="visually-hidden">Itens vendidos abaixo do custo informado</caption>
+                    <thead><tr><th>Produto</th><th class="text-end">Qtde vendida abaixo do custo</th><th class="text-end">Vendido por</th><th class="text-end">Custo dessas vendas</th><th class="text-end">Perda</th></tr></thead>
+                    <tbody>
+                        {% for item in aud.itens_abaixo_custo %}
+                        <tr>
+                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_abaixo) if item.quantidade_abaixo is defined else '—' }}</td>
+                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.faturamento_abaixo)) if item.faturamento_abaixo is defined else '—' }}</td>
+                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_abaixo)) if item.custo_abaixo is defined else '—' }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(item.perda) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <p class="field-hint mb-0">Nenhuma venda abaixo do custo informado nos relatórios enviados.</p>
+        {% endif %}
+    </div>
+</section>
+
+{# ---------------- Margem por item ---------------- #}
+<section class="nexo-card mb-4" aria-labelledby="margemTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="margemTitulo"><i class="bi bi-percent text-purple" aria-hidden="true"></i> Margem bruta por item</h2>
+            <p class="sub">Os itens de maior faturamento com custo informado.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if aud.margem_por_item is none %}
+        {{ pl.secao_bloqueada(plano_margem, url_upgrade(plano_margem), 'A margem bruta por item') }}
+        {% elif aud.margem_por_item %}
+        <div class="table-wrap">
+            <div class="table-responsive-x">
+                <table class="nexo-table" id="tabelaMargem">
+                    <caption class="visually-hidden">Margem bruta estimada por item</caption>
+                    <thead><tr><th>Produto</th><th class="text-end">Qtde com custo</th><th class="text-end">Faturamento</th><th class="text-end">Custo médio</th><th class="text-end">Margem bruta</th><th class="text-end">Margem %</th></tr></thead>
+                    <tbody>
+                        {% for item in aud.margem_por_item %}
+                        <tr>
+                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
+                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_medio)) if item.custo_medio is not none else '—' }}</td>
+                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.margem_valor)) if item.margem_valor is not none else '—' }}</td>
+                            <td class="text-end t-mono">{{ pl.pct(item.margem_percentual) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <p class="field-hint mb-0">Nenhuma venda com custo informado nos relatórios enviados.</p>
+        {% endif %}
+    </div>
+</section>
+
+{# ---------------- Precificação desatualizada ---------------- #}
+<section class="nexo-card mb-4" aria-labelledby="precificacaoTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="precificacaoTitulo"><i class="bi bi-tags text-purple" aria-hidden="true"></i> Preços que não acompanharam o custo</h2>
+            <p class="sub">Entre o primeiro e o último mês com custo, o custo unitário subiu ao menos 5% e o preço médio subiu menos. O impacto é a margem por unidade perdida vezes a quantidade do último mês.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if aud.precificacao is none %}
+        {{ pl.secao_bloqueada(plano_precificacao, url_upgrade(plano_precificacao), 'Os alertas de precificação') }}
+        {% elif not aud.precificacao_visivel %}
+        <p class="field-hint mb-0">Para comparar custo e preço no tempo, envie ao menos dois meses com o período no cabeçalho e a coluna de custo.</p>
+        {% elif aud.precificacao %}
+        <div class="table-wrap">
+            <div class="table-responsive-x">
+                <table class="nexo-table" id="tabelaPrecificacao">
+                    <caption class="visually-hidden">Itens cujo custo subiu mais que o preço</caption>
+                    <thead><tr><th>Produto</th><th class="text-end">Custo unitário</th><th class="text-end">Preço médio</th><th class="text-end">Alta do custo</th><th class="text-end">Alta do preço</th><th class="text-end">Impacto</th></tr></thead>
+                    <tbody>
+                        {% for alerta in aud.precificacao %}
+                        <tr>
+                            <td>{{ alerta.produto }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(alerta.custo_unitario_inicial) }} → {{ m.brl(alerta.custo_unitario_final) }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(alerta.preco_inicial) }} → {{ m.brl(alerta.preco_final) }}</td>
+                            <td class="text-end t-mono">{{ pl.pct(alerta.variacao_custo) }}</td>
+                            <td class="text-end t-mono">{{ pl.pct(alerta.variacao_preco) }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(alerta.impacto) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <p class="field-hint mb-0">Nenhum item com custo subindo à frente do preço no período enviado.</p>
+        {% endif %}
+    </div>
+</section>
+
+<div class="nota-pressao mb-4">
+    <i class="bi bi-info-circle" aria-hidden="true"></i>
+    <span>Estimativas sobre o custo que o relatório de vendas do PDV informa. A margem bruta não é lucro (não desconta despesas, impostos nem taxas) e o custo das vendas não é o CMV contábil, que depende de inventário.</span>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+{% endblock %}

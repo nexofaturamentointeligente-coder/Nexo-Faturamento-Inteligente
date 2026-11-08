@@ -117,24 +117,12 @@
                continua existindo e sendo servido normalmente. #}
             {% else %}
             <span class="nav-section">Minha Empresa</span>
-            <a class="nav-item {{ 'active' if request.endpoint == 'cliente.dashboard' }}" href="{{ url_for('cliente.dashboard') }}">
-                <i class="bi bi-speedometer2"></i> Visão Geral
-            </a>
-            <a class="nav-item {{ 'active' if request.endpoint == 'cliente.upload' }}" href="{{ url_for('cliente.upload') }}">
-                <i class="bi bi-cloud-arrow-up"></i> Enviar relatórios
-            </a>
-            <a class="nav-item {{ 'active' if request.endpoint in ['cliente.historico', 'cliente.analise'] }}" href="{{ url_for('cliente.historico') }}">
-                <i class="bi bi-clock-history"></i> Histórico
-            </a>
-            <a class="nav-item {{ 'active' if request.endpoint == 'cliente.guia' }}" href="{{ url_for('cliente.guia') }}">
-                <i class="bi bi-book"></i> Guia
-            </a>
-            <a class="nav-item {{ 'active' if request.endpoint in ['cliente.tickets', 'cliente.ticket_detalhe'] }}" href="{{ url_for('cliente.tickets') }}">
-                <i class="bi bi-life-preserver"></i> Suporte
-            </a>
-            <a class="nav-item {{ 'active' if request.endpoint == 'cliente.configuracoes' }}" href="{{ url_for('cliente.configuracoes') }}">
-                <i class="bi bi-gear"></i> Configurações
-            </a>
+            {# Itens conforme o plano (entitlements.MENU_CLIENTE): os de plano superior vêm com
+               cadeado e selo UPGRADE; sem o esquema dos planos, só os de sempre. #}
+            {% import "_planos.html" as pl %}
+            {% for item in menu_cliente | default([]) %}
+            {{ pl.item_menu(item, request.endpoint) }}
+            {% endfor %}
             {% endif %}
         </nav>
 
@@ -622,6 +610,9 @@
             form.addEventListener('submit', function (e) {
               if (input.files && input.files.length) return;
               e.preventDefault();
+              /* O guarda de envio único (data-envio-unico) já marcou o formulário: como o envio
+                 parou aqui, a marca sai, e o próximo clique com arquivo não é descartado. */
+              delete form.dataset.enviado;
               mostrarErro('Selecione um arquivo antes de enviar.');
               input.focus();
             });

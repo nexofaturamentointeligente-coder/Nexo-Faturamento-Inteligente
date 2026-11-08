@@ -1,5 +1,6 @@
 """SEC-005: leitura limitada e preflight, sem calcular indicadores no upload."""
 
+from contextlib import contextmanager
 import hashlib
 from functools import wraps
 import threading
@@ -37,6 +38,18 @@ def _limitar_entrada(funcao, destino_busy=None):
 
 def limitar_upload(funcao):
     return _limitar_entrada(funcao)
+
+
+@contextmanager
+def vaga_de_entrada():
+    """A mesma vaga única de upload/processamento, para a rota que monta a própria resposta
+    de "ocupado" (JSON na API do Raio-X). Rende True quando a vaga foi obtida."""
+    obtida = _UPLOAD_ADMISSION.acquire(blocking=False)
+    try:
+        yield obtida
+    finally:
+        if obtida:
+            _UPLOAD_ADMISSION.release()
 
 
 def limitar_processamento(funcao):

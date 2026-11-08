@@ -51,9 +51,12 @@ def main():
         )
 
     with app.app_context():
-        db.drop_all()
-        db.create_all()
-        print("✅ Tabelas do MVP criadas com sucesso.")
+        # O arquivo já foi apagado: o esquema sai das migrações reais, como em produção. Assim
+        # vêm também os dados de referência que só elas gravam (catálogo dos planos por nível)
+        # e o alembic_version, e um `flask db upgrade` posterior continua funcionando.
+        from flask_migrate import upgrade
+        upgrade(directory=str(Path(__file__).resolve().parent / "migrations"))
+        print("✅ Tabelas criadas pelas migrações.")
 
         # Verificação rápida: lista as tabelas que existem agora.
         from sqlalchemy import inspect

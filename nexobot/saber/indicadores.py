@@ -33,9 +33,10 @@ REGISTROS = (
             "estimado parado, quando o relatório de compras traz produto e quantidade."
         ),
         detalhes=(
-            "O que não existe por regra do produto: lucro, margem, CMV, rentabilidade, prejuízo e estoque "
-            "físico real. Esses conceitos exigiriam dados contábeis e contagem física que o relatório do PDV "
-            "não fornece."
+            "O que não existe nas análises, por regra do produto: lucro, margem, CMV, rentabilidade, prejuízo e "
+            "estoque físico real. Esses conceitos exigiriam dados contábeis e contagem física que o relatório do "
+            "PDV não fornece. À parte das análises, o Raio-X do PDV mostra, a partir do plano Prata, a margem "
+            "bruta estimada sobre o custo que o próprio relatório de vendas informa."
         ),
         perguntas=(
             "Quais indicadores existem?", "O que o NEXO mede?", "Quais são os KPIs?", "Que indicadores vejo no painel?",
@@ -166,18 +167,19 @@ REGISTROS = (
         categoria="Indicadores",
         tipo="regra",
         resumo=(
-            "Não, por regra do produto. O NEXO trabalha apenas com faturamento, total comprado, o "
-            "descompasso entre eles (Indicador de Pressão de Estoque), produtos de destaque e Curva ABC. "
-            "Lucro, margem, CMV, rentabilidade e estoque físico exigem dados que o relatório do PDV não sustenta."
+            "Nas análises, não, por regra do produto. Os indicadores trabalham com faturamento, total "
+            "comprado, o descompasso entre eles (Indicador de Pressão de Estoque), produtos de destaque e "
+            "Curva ABC. Lucro, CMV contábil, rentabilidade e estoque físico exigem dados que o relatório do PDV "
+            "não sustenta. A única margem do portal está no Raio-X do PDV, a partir do plano Prata: a margem "
+            "bruta estimada sobre o custo que o próprio relatório de vendas informa."
         ),
         explicacao=(
-            "Essa regra vale em todas as camadas: o processamento descarta colunas de lucro, Essa regra vale em "
-            "todas as camadas: o processamento descarta colunas de lucro, a devolutiva gerada com apoio de IA é "
-            "verificada automaticamente contra esses termos antes de ser aproveitada e os semáforos nunca "
-            "afirmam rentabilidade. O texto final da devolutiva é revisado e publicado pela equipe NEXO, que "
-            "segue a mesma regra. e os semáforos nunca afirmam rentabilidade. Se o seu PDV informa custo, o "
-            "sistema pode apenas apontar à equipe que houve itens vendidos abaixo do custo informado, como "
-            "observação do dado bruto."
+            "Nas análises, a regra vale em todas as camadas: o processamento descarta colunas de lucro, a "
+            "devolutiva gerada com apoio de IA é verificada automaticamente contra esses termos antes de ser "
+            "aproveitada e os semáforos nunca afirmam rentabilidade. O texto final da devolutiva é revisado e "
+            "publicado pela equipe NEXO, que segue a mesma regra. No Raio-X do PDV, a margem bruta é o "
+            "faturamento menos o custo informado, só nas vendas que trazem custo: não desconta despesas, "
+            "impostos nem taxas, então não é lucro, e não é o CMV contábil, que depende de inventário."
         ),
         perguntas=(
             "O NEXO calcula lucro?", "Onde vejo minha margem?", "Qual é o meu CMV?", "O portal mostra rentabilidade?",
@@ -185,7 +187,7 @@ REGISTROS = (
         ),
         termos="lucro margem cmv rentabilidade prejuizo nao calcula regra proibido",
         relacionados=("nexo.indicadores.pressao_nao_e_lucro", "nexo.visao_geral.o_que_nao_e"),
-        fontes=("etl_processor.py", "ai_devolutiva.py", "insights.py"),
+        fontes=("etl_processor.py", "ai_devolutiva.py", "insights.py", "raio_x.py", "entitlements.py"),
     ),
     registro(
         id="nexo.indicadores.produto_mais_vendido",
