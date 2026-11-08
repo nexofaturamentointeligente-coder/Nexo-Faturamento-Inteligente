@@ -67,7 +67,7 @@ Onde o pedido dava uma faixa, o histórico usa o limite maior (Bronze 3 a 6 mese
 - Os arquivos ficam num diretório temporário e somem com ele. O banco guarda só o resultado, uma linha por empresa (`diagnostico_entrada`), e o envio novo substitui o anterior.
 - O worker exige Linux (módulo `resource`). Num Windows de desenvolvimento, o envio responde "A plataforma não oferece o isolamento…", como o processamento das análises.
 
-**Definições** (as mesmas da tela; detalhes em `raio_x.py`, versão das regras `raio-x-2026-11.3`):
+**Definições** (as mesmas da tela; detalhes em `raio_x.py`, versão das regras `raio-x-2026-11.4`, a do saneamento de 11/2026 descrito em `Docs/SANEAMENTO_MOTOR_ETL.md`; Raio-X gravado com a `11.3` continua legível, sem os campos de CMV líquido):
 - **Venda analisada:** linha válida com quantidade e valor maiores que zero. Canceladas saem; devoluções e trocas ficam fora das contas de preço e custo. Um envio sem nenhuma venda analisada é recusado, e nada é gravado.
 - **Custo informado:** a coluna de custo do relatório. Coluna de custo por unidade (custo unitário, unid., und., ou custo médio e preço de custo sem "total" no título) é multiplicada pela quantidade. As demais, e as que já trazem a multiplicação no título ("Qtde x Custo"), valem como custo total da linha. Valor e custo de cada venda ficam em centavos, então a perda de cada linha da auditoria fecha com "custo dessas vendas − vendido por".
 - **Índice de saúde cadastral (0 a 100):** parte do faturamento analisado que tem custo informado e cujo produto não aparece com código ou nome conflitante.

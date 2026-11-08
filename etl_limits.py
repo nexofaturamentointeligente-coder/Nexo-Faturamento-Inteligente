@@ -41,11 +41,13 @@ class ETLLimits:
         return cls(**mapping)
 
 
+# Tetos que nenhuma configuração ultrapassa. Células por aba: 500 mil é trava rígida (o padrão
+# e o teto são iguais), porque o worker isolado tem 384 MiB e lê a aba inteira em memória.
 _HARD_CAPS = {
     "max_file_bytes": 20 * 1024 * 1024, "max_sheets": 64,
     "max_zip_entries": 1024, "max_uncompressed_bytes": 64 * 1024 * 1024,
     "max_zip_ratio": 1000, "max_rows": 200_000, "max_columns": 256,
-    "max_cells_per_sheet": 1_000_000, "max_cells_per_file": 2_000_000,
+    "max_cells_per_sheet": 500_000, "max_cells_per_file": 2_000_000,
     "max_field_chars": 32_768, "max_record_chars": 1024 * 1024,
     "timeout_seconds": 120, "memory_mb": 512,
     "max_output_bytes": 4 * 1024 * 1024,

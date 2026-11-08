@@ -1,0 +1,1712 @@
+# Diagnóstico do Motor ETL: inventário de regras
+
+Anexo de [DIAGNOSTICO_MOTOR_ETL.md](DIAGNOSTICO_MOTOR_ETL.md). Fotografia do código no commit `91e5fb0` (8 de novembro de 2026): as linhas citadas valem para esse commit e mudam com edições posteriores.
+
+Cada recorte traz os componentes (módulos, funções e constantes e o papel de cada um), as regras, os formatos e variações e os limites medidos. Cada item tem o arquivo, o símbolo (função, constante ou classe) e as linhas onde mora, seguidos da descrição medida, dos testes que o cobrem e do commit de origem. Alguns itens têm uma "nota da revisão", que acrescenta o que a verificação adversarial do relatório encontrou depois do mapeamento. O levantamento foi feito por cinco mapeamentos independentes, um por recorte; por isso uma mesma regra pode aparecer em mais de um recorte, vista de ângulos diferentes (por exemplo, as regras herdadas pelo Raio-X, `RX-R41` a `RX-R44`, repetem regras do cálculo). Todas as citações do mapeamento foram conferidas de forma automática contra o código: 632, contando também os fluxos passo a passo, que estão no relatório principal e não neste anexo. O verificador apontou 30, e nenhuma era citação errada: ou o primeiro intervalo citava uma constante ou um uso em vez da definição, ou o símbolo era descritivo (por exemplo, "docstring do módulo" ou uma pasta). As descrições são as dos mapeadores: a revisão adversarial conferiu o relatório principal e as notas da revisão, não cada item deste anexo.
+
+Os exemplos marcados como "medido" vieram de experimentos com dados sintéticos numa cópia do repositório sem `.env`. Nenhum arquivo do projeto foi alterado nesses experimentos.
+
+## Sumário
+
+- [A.1 Entrada, leitura e Baia de Segurança](#a1-entrada-leitura-e-baia-de-segurança): 38 componentes, 24 regras, 24 formatos e variações, 17 desempenho e limites
+- [A.2 Cálculo da análise (KPIs, Curva ABC e trava do PDV)](#a2-cálculo-da-análise-kpis-curva-abc-e-trava-do-pdv): 29 componentes, 63 regras, 16 formatos e variações, 12 desempenho e limites
+- [A.3 Raio-X do PDV](#a3-raio-x-do-pdv): 29 componentes, 55 regras, 15 formatos e variações, 14 desempenho e limites
+- [A.4 Tabelas de lead e Avaliação de Cenário](#a4-tabelas-de-lead-e-avaliação-de-cenário): 38 componentes, 48 regras, 14 formatos e variações, 16 desempenho e limites
+- [A.5 Volume e desempenho](#a5-volume-e-desempenho): 31 componentes, 20 regras, 10 formatos e variações, 25 desempenho e limites
+
+## A.1 Entrada, leitura e Baia de Segurança
+
+Do upload até a matriz bruta (`etl_inputs.read_raw`): rotas, cópia limitada, Baia, isolamento, CSV e XLSX.
+
+### Componentes (A.1)
+
+- **ENT-C01** · borda HTTP — `config.py; app.py` › `Config.MAX_CONTENT_LENGTH; create_app._grande_demais` › linhas config.py 227-229; app.py 470-481
+  - Teto do corpo HTTP inteiro, aplicado pelo Werkzeug antes da rota: MAX_CONTENT_LENGTH_MB (padrão 20) x 1 MiB. Vale para o formulário de um arquivo (cliente e consultor) e para o Raio-X, em que os até 36 arquivos somam no mesmo multipart. Acima do teto, a resposta é um 413 de app.create_app.\_grande_demais, com texto próprio nos dois endpoints do Raio-X: 'Os relatórios enviados passam de 20 MB somados. Nada foi gravado: envie menos meses por vez.'. O render.yaml versionado não define MAX_CONTENT_LENGTH_MB nem variável ETL_\*, então em produção valem os padrões.
+  - Testes: tests/test_planos_raio_x.py::RaioXPortalTests.test_envio_acima_do_limite_somado_responde_413_em_portugues (653-669) · Origem: fc63708 (config.py 143-144 daquele commit)
+- **ENT-C02** · configuração de formatos — `config.py` › `Config.ALLOWED_EXTENSIONS` › linhas 275-277 (usada em blueprints/cliente.py 657-663 e blueprints/admin.py 999-1006)
+  - ALLOWED_EXTENSIONS = {'csv','xlsx'}. O comentário explica que .xls fica de fora por falta do xlrd. As rotas de upload conferem a extensão depois de secure_filename + os.path.splitext, com a mensagem 'Extensão .&lt;ext> não suportada. Aceitos: [...]'. O Raio-X não usa esta constante: tem a própria lista fixa (raio_x_servico.py 88).
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests.test_invalid_extension_does_not_persist_for_either_role (181) · Origem: fc63708 (config.py 173 daquele commit)
+- **ENT-C03** · configuração de limites — `config.py; app.py` › `Config.ETL_LIMITS; create_app` › linhas config.py 279-280; app.py 73-76
+  - Config.ETL_LIMITS = asdict(limits_from_environment()), lido das variáveis ETL_&lt;CAMPO>. create_app revalida com ETLLimits.from_mapping antes de iniciar banco e servidor, e um valor inválido impede o boot. Exemplo: ETL_MAX_ROWS=0 gera ValueError 'Configuração inválida de limite ETL: max_rows'.
+  - Testes: tests/test_etl_runtime_limits.py::ETLLimitConfigurationTests (23-86) · Origem: 2da719b (SEC-005)
+- **ENT-C04** · limites — `etl_limits.py` › `ETLLimits (__post_init__, from_mapping)` › linhas 9-41
+  - Dataclass congelada com os orçamentos padrão: max_file_bytes 20 MiB, max_sheets 16, max_zip_entries 256, max_uncompressed_bytes 32 MiB, max_zip_ratio 200, max_rows 100.000, max_columns 128, max_cells_per_sheet 500.000, max_cells_per_file 1.000.000, max_field_chars 16.384, max_record_chars 131.072, timeout_seconds 60, memory_mb 384, max_output_bytes 4 MiB. _\_post_init__ exige int exato (True, 1.5 e '10' são recusados), 1 <= valor <= teto e memory_mb >= 128. from_mapping recusa chave desconhecida.
+  - Testes: tests/test_etl_runtime_limits.py::ETLLimitConfigurationTests (23-86); tests/test_etl_resource_limits.py::test_invalid_limit_configuration_never_disables_protection (385-390) · Origem: 2da719b; max_output_bytes de 2 para 4 MiB em 0ac01c8
+- **ENT-C05** · limites — `etl_limits.py` › `_HARD_CAPS, limits_from_environment, _ACTIVE_LIMITS, get_limits, using_limits` › linhas 44-93
+  - \_HARD_CAPS são os tetos de configuração: 20 MiB, 64 abas, 1024 entradas ZIP, 64 MiB expandidos, razão 1000, 200.000 linhas, 256 colunas, 1.000.000/2.000.000 células, campo de 32.768, registro de 1 MiB, 120 s, 512 MiB e saída de 4 MiB. limits_from_environment aceita só dígitos ASCII e não repete o valor recebido no erro. get_limits procura a política nesta ordem: ContextVar (no worker), app.config['ETL_LIMITS'] (com Flask) e o ambiente. using_limits fixa a política dentro do processo isolado.
+  - Testes: tests/test_etl_runtime_limits.py::ETLLimitConfigurationTests (test_environment_configuration_accepts_only_finite_decimal_values 59, test_configuration_errors_never_echo_environment_values 69, test_flask_configuration_is_validated_without_reading_application_secrets 76) · Origem: 2da719b
+- **ENT-C06** · admissão/concorrência — `etl_uploads.py` › `_UPLOAD_ADMISSION, _limitar_entrada, limitar_upload, vaga_de_entrada, limitar_processamento` › linhas 19-58
+  - \_UPLOAD_ADMISSION = BoundedSemaphore(1) por processo. \_limitar_entrada só age em POST: sem vaga, faz flash 'Há outro upload ou processamento em andamento. Tente novamente em instantes.' e redireciona sem ler o arquivo. A mesma vaga atende limitar_upload (uploads), limitar_processamento (processamento, que redireciona para admin.dashboard) e vaga_de_entrada (Raio-X, que responde flash ou JSON 503). Como o render.yaml usa gunicorn -w 1, é uma única vaga para o servidor inteiro.
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests.test_busy_admission_rejects_post_without_validation_but_keeps_get_available (231), test_busy_admission_does_not_bypass_csrf (246), test_busy_processing_uses_shared_admission_before_storage_and_status_changes (253); tests/test_planos_raio_x.py::RaioXPortalTests.test_envio_ocupado_nao_processa (671-679) · Origem: 2da719b; vaga_de_entrada em ec4ba95
+- **ENT-C07** · recepção do upload — `etl_uploads.py` › `ler_upload_validado` › linhas 61-113
+  - Cópia limitada do upload do cliente e do consultor. Exige extensão csv ou xlsx (senão 'unsupported_format'). O teto é teto_bytes(limits) = min(max_file_bytes, 50 MiB) = 20 MiB, e a leitura vai em blocos de 64 KiB até teto+1 sem confiar no Content-Length ('file_size' acima disso), calculando o SHA-256 e gravando 'arquivo.&lt;ext>' (0600) em TemporaryDirectory('nexo-etl-upload-'). Arquivo vazio gera 'empty_file' ('Arquivo vazio — nada foi salvo.'). Em seguida chama inspecionar_arquivo (o formato devolvido não é usado), run_validation('.'+ext) e ler_liberado. Uma recusa chama registrar_recusa e é propagada. Com cópia neutralizada, troca os bytes e o SHA e chama registrar_liberacao. OSError vira 'upload_io'. Devolve (bytes, sha256) para a rota gravar.
+  - Testes: tests/test_etl_upload_security.py::UploadReadBoundsTests (41-95); tests/test_security_gatekeeper.py::TetoTests.test_upload_acima_do_teto_absoluto_para_de_ler_no_teto_mais_um (623-640), BaiaNoPortalTests (672-750) · Origem: 2da719b; Baia em 91e5fb0
+- **ENT-C08** · recepção do Raio-X — `raio_x_servico.py` › `_gravar_limitado, processar_envio` › linhas 47-110
+  - Entrada do Raio-X. Descarta FileStorage sem nome; nenhum arquivo gera 'raio_x_vazio' e mais de 36 gera 'raio_x_arquivos' ('até 3 anos, um por mês'). Para cada arquivo: secure_filename (ou 'arquivo-N'), extensão csv/xlsx com lista própria, \_gravar_limitado em 'arquivo_NN.&lt;ext>' (mesmo teto por arquivo, blocos de 64 KiB, SHA-256), inspecionar_arquivo com rótulo 'Arquivo N' e registrar_recusa(origem='raio_x'). Um SHA repetido gera 'raio_x_repetido', e os nomes são cortados em 80 caracteres. Depois chama etl_runtime.run_raio_x(caminhos), e tudo some com o diretório 'nexo-raio-x-'. Não chama triar, então não há estrutura mínima nem inventário XLSX: a neutralização vem do read_raw.
+  - Testes: tests/test_planos_raio_x.py::RaioXPortalTests.test_erros_de_envio_nao_gravam_e_explicam (636-651); tests/test_security_gatekeeper.py::BaiaNoRaioXTests (753-764) · Origem: ec4ba95; Baia em 91e5fb0
+- **ENT-C09** · Baia - 1ª triagem (processo do servidor) — `security_gatekeeper.py` › `teto_bytes, _ASSINATURAS, _INICIOS_PROIBIDOS, _e_executavel_pe, _e_texto, _inicio_textual, _ole_e_planilha, identificar_conteudo, inspecionar_arquivo` › linhas 104-237
+  - Usa só a biblioteca padrão e lê os primeiros 8 KiB (\_AMOSTRA). identificar_conteudo decide assim: 'PK\x03\x04' é zip; OLE2 é 'xls' quando o diretório tem o fluxo Workbook ou Book (\_ole_e_planilha), senão 'documento_ole'. São recusados: PE (MZ + 'PE\0\0' no deslocamento de 0x3C), ELF, Mach-O/Java, WebAssembly, .lnk, PNG/JPEG/TIFF, RAR/7z/gzip/xz/zstd, ZIP vazio ou dividido e RIFF. O teste de texto (\_e_texto) recusa como 'binario'. O início textual, depois do BOM, sem NUL e em minúsculas, é recusado se começar com '<', '#!', '@echo', '%pdf-', '{\rtf' ou 'gif8x'. Em seguida exige coerência: .xlsx precisa ser zip, .csv e .txt precisam ser texto, e .xls é sempre recusado ('xls_binario' ou 'xls_disfarcado', com a orientação de salvar como .xlsx ou .csv). Devolve o formato de leitura, 'xlsx' ou 'csv' (.txt vira 'csv').
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests (212-282) · Origem: 91e5fb0
+- **ENT-C10** · Baia - 2ª triagem (worker) — `security_gatekeeper.py` › `triar` › linhas 733-758
+  - Roda no worker, operação 'validate'. Exige formato csv ou xlsx com sufixo igual ('formato_de_leitura') e recusa se 'liberado.&lt;ext>' já existir ou for link ('liberado_existente'). A sequência é: read_raw (que já neutraliza), exigir_estrutura_minima, inventariar_xlsx (só XLSX) e, se houver achado ou célula neutralizada, \_liberar_copia. Devolve {'format','liberado':'original'|'copia_neutralizada','achados','celulas_neutralizadas','linhas','colunas'}.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests (361-611), WorkerUsaABaiaTests (767-782; o worker real só roda em POSIX) · Origem: 91e5fb0
+- **ENT-C11** · neutralização (CSV/Excel injection) — `security_gatekeeper.py` › `_RESTOS_DE_BOM, _INICIOS_SUSPEITOS, _SINAL_DE_FORMULA, _SEPARADOR_INTERNO, _formula_no_inicio, _neutralizar_trechos, neutralizar_celula, _talvez_ativa, neutralizar_matriz` › linhas 285-379
+  - neutralizar_celula põe o apóstrofo em texto que começa com '=' ou '@', ou com '+'/'-' seguido de algo que só fórmula tem (\_SINAL_DE_FORMULA). TAB, CR e LF iniciais viram espaço. A mesma regra vale depois de um resto de BOM (\_RESTOS_DE_BOM: U+FEFF, 'ï»¿', 'ÿþ', 'þÿ') e depois de cada separador interno (; , TAB |). Exemplos: "=cmd|' /C calc'!A0" vira "'=cmd|' /C calc'!A0"; 'TAB=1+1' vira "' =1+1"; 'ok;=cmd|x!A1' vira "ok;'=cmd|x!A1". '-12,50', '10,00-', '-R$ 3,00', '-1,5E+03' e '+5%' ficam como estão; '-2 un(s)' vira "'-2 un(s)". Não mexe no que não é texto e é idempotente. neutralizar_matriz aplica coluna a coluna, com o pré-filtro \_talvez_ativa, e grava attrs['celulas_neutralizadas'].
+  - Testes: tests/test_security_gatekeeper.py::NeutralizacaoTests (288-355); TriagemTests.test_toda_leitura_do_motor_sai_neutralizada (605-611), test_numeros_iguais_aos_da_leitura_de_antes_da_baia (467-487) · Origem: 91e5fb0
+- **ENT-C12** · Baia - inventário XLSX — `security_gatekeeper.py` › `_PARTES_PASSIVAS, _RELACOES_PASSIVAS, _PARTES_ATIVAS, _ELEMENTOS_ATIVOS, _ler_xml, _elementos_ativos, _relacoes_passivas, inventariar_xlsx` › linhas 385-510
+  - Funciona por lista do que é permitido. O próprio XLSX só segue quando quatro condições valem: (1) todo nome de parte casa com \_PARTES_PASSIVAS ([Content_Types].xml, \_rels/.rels, docProps core/app/custom, xl/workbook.xml e a .rels dele, xl/worksheets/sheetN.xml, styles, sharedStrings, theme); (2) as relações das duas .rels são dos tipos de \_RELACOES_PASSIVAS e internas; (3) nenhum elemento de \_ELEMENTOS_ATIVOS (f, formula, formula1, formula2, definedName, oleObject(s), control(s), ddeLink, oleLink) aparece em parte nenhuma, com o expat seguindo UTF-8 ou UTF-16 e proibindo DTD e entidade; (4) [Content_Types] não cita macroEnabled nem vbaProject. Qualquer outra parte vira achado (macro_vba, macro_xlm, activex, objeto_ole, vinculo_externo, conexao_dados, interface_personalizada, controle_formulario, complemento_web ou parte_nao_reconhecida), inclusive comentários, rels de aba, printerSettings e calcChain.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_formula_do_xlsx_sai_e_fica_o_valor (380-394), test_macros_activex_ole_vinculos_e_conexoes_sao_descartados (396-409), test_so_libera_o_original_quando_toda_parte_e_de_dados (427-465) · Origem: 91e5fb0
+- **ENT-C13** · Baia - estrutura mínima — `security_gatekeeper.py` › `_minimo_vendas, _minimo_compras, exigir_estrutura_minima` › linhas 513-533
+  - Usa o mesmo detector de cabeçalho do motor (etl_processor.\_detectar_cabecalho, com ALIAS_VENDAS e ALIAS_COMPRAS), num mínimo mais brando que o do processamento. Vendas precisa de 'produto' mais 'quantidade', 'valor_venda' ou 'preco_unitario'. Compras precisa de 'produto' ou 'fornecedor', mais 'valor_nf', 'produtos_total', 'custo_unitario' ou 'qtde_comprada'. Exemplos: 'a;b' e 'Produto;Observacao' geram 'estrutura_ausente'; 'Fornecedor;Valor NF' passa, e 'Descricao;Preco unitario' também passa, mesmo abaixo de linhas de título.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_estrutura_minima_de_relatorio_de_pdv (558-571) · Origem: 91e5fb0
+- **ENT-C14** · Baia - cópia só com valores — `security_gatekeeper.py` › `_ausente, _linhas, _mesma_matriz, _escrever_xlsx, _numero_que_o_motor_le_igual, _escrever_csv, _codificacao_da_copia, _CODIGOS_DE_TAMANHO, _liberar_copia` › linhas 536-731
+  - \_liberar_copia grava a cópia e só a aceita se read_raw da cópia for idêntico à matriz já neutralizada (\_mesma_matriz: mesma forma, ausentes nas mesmas posições, textos iguais). XLSX (\_escrever_xlsx): 6 partes, uma aba 'Dados' e textos em sharedStrings. O número só vira célula numérica se \_numero_que_o_motor_le_igual; '12.125' com cara de milhar e '007' ficam texto. CSV (\_escrever_csv): mesma codificação em que o original foi lido (\_codificacao_da_copia: 'utf-8-sig' só se havia BOM), LF, separador original primeiro, QUOTE_MINIMAL e depois QUOTE_ALL. A cópia passa de novo pela assinatura, porque um título '<<...>>' sem aspas pareceria marcação. São até 2 codificações x 4 separadores x 2 citações = 16 tentativas. Quando falha, a cópia é apagada e a recusa é 'copia_acima_do_teto' (toda tentativa bateu em limite de tamanho, inclusive EFBIG do RLIMIT_FSIZE) ou 'neutralizacao_inviavel'.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests (test_csv_com_formula_vira_copia_neutralizada_lida_igual_pelo_motor 368-378, test_titulo_entre_aspas_que_comeca_com_menor_que_continua_aceito 489-495, test_copia_csv_perto_do_teto_cresce_so_pelos_apostrofos 497-509, test_bom_que_o_leitor_nao_consome_nao_deixa_formula_na_primeira_celula 511-521, test_copia_xlsx_compacta_com_numeros_numericos 531-544, test_copia_acima_do_teto_tem_orientacao_de_tamanho 546-556, test_copia_que_o_motor_nao_reproduz_e_recusada_sem_deixar_arquivo 573-581) · Origem: 91e5fb0
+- **ENT-C15** · Baia - liberação — `security_gatekeeper.py` › `ler_liberado` › linhas 240-259
+  - Roda no processo pai. Lê 'liberado.&lt;ext>' ao lado do upload sem seguir link (O_NOFOLLOW quando existe) e confere que é arquivo regular, que 0 < tamanho <= teto e que o descritor aberto é o mesmo inode do lstat. Depois relê a assinatura: zip para xlsx, texto para csv. Devolve None quando o próprio arquivo foi liberado; qualquer falha é 'liberado_invalido'.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_copia_liberada_passa_de_novo_pelo_teto_e_pela_assinatura (593-603) · Origem: 91e5fb0
+- **ENT-C16** · Baia - quarentena e log — `security_gatekeeper.py` › `_CODIGO_SEGURO, registrar_recusa, registrar_liberacao` › linhas 262-282
+  - registrar_recusa grava em WARNING a origem (upload ou raio_x), o código saneado (só [a-z0-9_:], até 64 caracteres), a extensão, o tamanho em bytes e o SHA-256. Nunca grava nome, caminho ou conteúdo, e o código 'busy' não é registrado. registrar_liberacao grava em INFO os achados, as células neutralizadas e os dois SHA-256. O arquivo recusado só existe no diretório temporário da requisição.
+  - Testes: tests/test_security_gatekeeper.py::QuarentenaLogTests (646-669), BaiaNoPortalTests.test_executavel_e_html_disfarcados_nao_chegam_ao_banco (740-750) · Origem: 91e5fb0
+- **ENT-C17** · isolamento (processo pai) — `etl_runtime.py` › `_WORKER_PATH, _ADMISSION, _worker_environment, _stop_owned_process, _run_job` › linhas 16-103
+  - Executa uma operação num processo filho novo. Usa uma segunda vaga por processo (\_ADMISSION, BoundedSemaphore(1)); ocupada, devolve 'busy'. O pedido JSON tem até 16 KiB, em TemporaryDirectory('nexo-etl-job-'). O filho sobe com Popen([python, '-I', '-B', etl_worker.py, request, result]): stdin, stdout e stderr em DEVNULL, cwd próprio, ambiente filtrado (\_worker_environment mantém PATH/HOME/TEMP/LANG/proxy/CA, põe BLAS/OMP/MKL/NumExpr em 1 thread e não passa DATABASE_URL, SECRET_KEY nem PYTHONPATH) e sessão nova em POSIX. Se wait(timeout) estoura, mata o grupo com SIGKILL e devolve 'timeout'. O resultado precisa caber em max_output_bytes e ter envelope {'ok': bool}. Um erro do filho só atravessa como code (até 64) + message (1 a 1024 caracteres).
+  - Testes: tests/test_etl_runtime_limits.py::ETLIsolatedRuntimeTests (88-285), ETLGunicornThreadedRuntimeTests (288-309, POSIX) · Origem: 2da719b
+- **ENT-C18** · isolamento (operações) — `etl_runtime.py` › `run_validation, run_raio_x, run_calculation` › linhas 106-146
+  - run_validation e run_raio_x dobram o prazo: min(120, 2 x timeout_seconds), que dá 120 s no padrão. run_calculation usa o prazo configurado (60 s), confere os campos de ResultadoETL e as datas ISO do período. run_raio_x confere as chaves de raio_x.CHAVES_RESULTADO.
+  - Testes: tests/test_etl_runtime_limits.py::ETLIsolatedRuntimeTests.test_calculation_restores_dates_and_rejects_incomplete_payloads (247-259) · Origem: 2da719b; prazo dobrado em ec4ba95 (Raio-X) e 91e5fb0 (validate)
+- **ENT-C19** · isolamento (processo filho) — `etl_worker.py` › `main` › linhas 8-100
+  - Entrypoint do filho, sem banco, rede ou stdin. Aceita pedido de até 16 KiB e monta a política com ETLLimits.from_mapping. Antes de importar o pandas, aplica RLIMIT_AS = memory_mb, RLIMIT_CPU = timeout (+1 no limite duro), RLIMIT_FSIZE = max_output_bytes (na 'validate', que grava a cópia, max(saída, max_file_bytes)) e RLIMIT_CORE = 0. Sem o módulo resource (Windows), devolve code 'platform'. Um audit hook recusa socket, subprocess, exec, spawn e fork. Operações: 'validate' (1 caminho, triar), 'calculate' (2 caminhos, \_calcular_kpis_local) e 'raio_x' (1 a 36 caminhos: validate_input em todos e depois diagnosticar). MemoryError vira 'memory', e code 'data' recebe uma mensagem fixa. O envelope leva 'runtime' com os rlimits, o pico de RSS e se models ou config foram carregados.
+  - Testes: tests/test_etl_runtime_limits.py::test_real_worker_reports_applied_os_limits_and_no_database_modules (263-285), test_reduced_real_address_space_budget_fails_closed_without_large_fixture (236-245, POSIX); tests/test_security_gatekeeper.py::WorkerUsaABaiaTests (767-782); tests/test_planos_raio_x.py::MotorRaioXTests.test_worker_tem_a_operacao_e_o_teto_de_arquivos (256-260) · Origem: 2da719b; 'raio_x' em ec4ba95; triar e FSIZE da validate em 91e5fb0
+- **ENT-C20** · leitor tabular (fachada) — `etl_inputs.py` › `_run, read_raw, validate_input` › linhas 601-638
+  - Ponto único de leitura. \_run cria o \_Budget, confere o arquivo com \_file_size e despacha pela extensão: 'csv' vai para \_csv_input; 'xlsx' para \_xlsx_input; 'xls' é 'unsupported' com 'Formato .xls não suportado. Converta o arquivo para .xlsx ou .csv.'; qualquer outra (inclusive 'txt') é 'unsupported'. Repassa ETLInputError e MemoryError, e qualquer outra exceção vira 'invalid', sem detalhe da biblioteca. validate_input (materialize=False) devolve só metadados, sem DataFrame: formato, linhas, colunas, células e codificação/separador ou aba escolhida, mais file_bytes. read_raw (materialize=True) devolve a matriz neutralizada por neutralizar_matriz.
+  - Testes: tests/test_etl_resource_limits.py (21-405); tests/test_etl_financial_equivalence.py::test_raw_input_matrices_preserve_values_and_missing_cells (113-122) · Origem: 2da719b; neutralização em 91e5fb0
+- **ENT-C21** · leitor CSV — `etl_inputs.py` › `ENCODINGS, SEPARATORS, _CSVLines, _csv_pass, _csv_signature, _csv_input` › linhas 26-27; 81-187
+  - \_csv_signature olha os 64 primeiros bytes, sem espaços e sem BOM UTF-8, e recusa ZIP/OLE/PDF/PNG/JPEG/GIF/WEBP com 'csv_incompatible'. \_CSVLines entrega linhas físicas com readline limitado (max_record_chars por registro lógico, somando as linhas físicas de um campo entre aspas) e remove NUL. \_csv_pass percorre o arquivo com csv.reader(delimiter=sep) contando linhas e o máximo de colunas; só na passagem final valida linhas, colunas, células e campo e materializa. \_csv_input faz o laço codificação x separador, a passagem final, o retângulo com None, DataFrame(dtype=object), \_trim e attrs {'format','separator','encoding'}.
+  - Testes: tests/test_etl_resource_limits.py 98-183 e 337-338; tests/test_etl_financial_equivalence.py 74-83 · Origem: fc63708 (regras) e 2da719b (leitura incremental); attrs em 91e5fb0
+- **ENT-C22** · preflight ZIP/XML do XLSX — `etl_inputs.py` › `_end_directory, _member_start, _coordinate, _XMLCheck, _MaybeXML, _stream_member, _zip_preflight` › linhas 190-517
+  - Roda antes do openpyxl. \_end_directory acha o EOCD nos últimos 65.557 bytes, recusa multidisco, comentário inconsistente, offset errado, 0 ou 65535 entradas, e conta os cabeçalhos centrais reais com memória constante ('zip_entries' acima de 256). No ZipFile são recusados nome vazio, duplicado, com '\\', NUL, absoluto, '..' e link simbólico; também criptografia e compressão fora de STORED/DEFLATE. A soma declarada precisa ficar em até 32 MiB e a razão em até 200. \_member_start confere o cabeçalho local contra o central (inclusive ZIP64), e há checagem de sobreposição. \_stream_member descomprime em blocos de 64 KiB conferindo volume real, razão, CRC e EOF. \_MaybeXML reconhece XML pelo conteúdo (BOM UTF-8/16/32 dividido entre blocos) mesmo com extensão trocada. \_XMLCheck (expat) recusa DOCTYPE e entidades, profundidade acima de 64, excesso de nós, mais de 16 abas, sharedStrings acima de 1.000.000, coordenadas inválidas ou fora de ordem, linha acima de 100.000, coluna acima de 128, retângulo acima de 500.000 por aba ou 1.000.000 somado e texto de célula acima de 16.384. Exige [Content_Types].xml, xl/workbook.xml, xl/\_rels/workbook.xml.rels e ao menos uma aba.
+  - Testes: tests/test_etl_resource_limits.py 232-372 e 393-405 · Origem: 2da719b
+- **ENT-C23** · leitor XLSX — `etl_inputs.py` › `_filled, _disambiguate_numbers, _xlsx_input` › linhas 520-598
+  - \_xlsx_input abre com load_workbook(read_only=True, data_only=True, keep_links=False) e percorre todas as worksheets, inclusive as ocultas; chartsheets não entram em book.worksheets. Usa reset_dimensions, limita linhas, colunas, células e campo, e pontua cada aba por \_filled (vazio, erro e STR_NA_VALUES não contam). Vence a maior pontuação, e no empate a primeira. Só a vencedora é materializada, com pd.read_excel(dtype=str, header=None, engine='openpyxl', sheet_name=índice); aba vazia gera 'empty'. Depois vêm \_disambiguate_numbers e \_trim. A aba escolhida só aparece nos metadados do validate_input.
+  - Testes: tests/test_etl_resource_limits.py::test_xlsx_cover_and_tie_select_first_maximum_sheet (192-194), test_xlsx_only_winner_is_materialized_by_pandas (196-202), test_xlsx_validation_does_not_materialize_any_pandas_sheet (204-207); tests/test_etl_financial_equivalence.py 99-103; tests/test_etl_regras_financeiras.py 139-154 · Origem: fc63708 (critério da aba); 2da719b (sem carregar todas as abas); 0ac01c8 (desambiguação)
+- **ENT-C24** · base do leitor — `etl_inputs.py` › `ETLInputError, _reject, _Budget, _file_size, _trim` › linhas 33-78
+  - ETLInputError(code, safe_message) é a única exceção cuja mensagem chega à interface, e \_reject a levanta. \_Budget guarda o prazo cooperativo (monotonic + timeout_seconds) e os contadores; check() é chamado nos laços e gera 'timeout'. \_file_size recusa arquivo inexistente ('unavailable', sem caminho na mensagem), não regular ('invalid_file'), de 0 byte ('empty') e acima de max_file_bytes ('file_bytes'). \_trim aplica dropna(how='all') nas linhas e depois nas colunas, com reset_index; se tudo sumir, devolve a matriz original.
+  - Testes: tests/test_etl_resource_limits.py::test_zero_byte_csv_is_rejected (70-72), test_missing_file_error_has_no_internal_path (85-86), test_directory_cannot_be_used_as_input (88-89), test_cooperative_deadline_checked_during_input_scan (380-383) · Origem: 2da719b; \_trim vem de \_trim_vazios de fc63708
+- **ENT-C25** · ponte entrada-motor — `etl_processor.py` › `ETLValidationError, _ler_bruto` › linhas 80-85; 342-347
+  - \_ler_bruto chama read_raw(caminho, get_limits()) e converte ETLInputError em ETLValidationError preservando o code ('rows', 'timeout' etc.; o padrão é 'data'). É chamado por carregar_vendas (626), carregar_compras (691), \_detectar_periodo_arquivo (776) e raio_x.\_ler_arquivo (158).
+  - Testes: tests/test_etl_financial_equivalence.py::test_raw_input_matrices_preserve_values_and_missing_cells (113-122); tests/test_etl_regras_financeiras.py::test_excel_sem_valor_ambiguo_e_lido_uma_vez_so (149-154) · Origem: 2da719b (antes, fc63708 tinha o leitor inteiro aqui)
+- **ENT-C26** · código morto do leitor antigo — `etl_processor.py` › `csv, io, ENCODINGS, SEPARADORES, _trim_vazios` › linhas 44-45; 88-89; 328-339
+  - Restos do leitor anterior à SEC-005, sem nenhum uso no repositório (conferido com grep): import csv (44), import io (45), ENCODINGS (88) e SEPARADORES (89), cópias de etl_inputs.ENCODINGS/SEPARATORS, e \_trim_vazios (328-339), cópia de etl_inputs.\_trim. O Docs/RELATORIO_COBERTURA_ETL.md (linhas 25-26) ainda cita \_trim_vazios como a defesa ativa.
+  - Testes: nenhum · Origem: fc63708 (leitor original); sem uso desde 2da719b
+- **ENT-C27** · armazenamento — `storage.py` › `PREFIXO_DB, _NOME_CHAVE, chave_valida, salvar, obter` › linhas 40; 53-96
+  - salvar(conteudo, nome_final) grava os bytes em arquivo_armazenado (LargeBinary deferred) sem commit, dentro da transação da rota, com content_type por mimetypes; devolve 'db:&lt;chave>', e regravar a mesma chave substitui o conteúdo. As rotas usam a chave 'analise_{id}_{TIPO}_{sha[:8]}.{ext}'. obter e chave_valida aceitam até 200 caracteres sem '/', '\\' ou controles, com prefixo 'guia/' opcional.
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests.test_admin_and_client_valid_csv_xlsx_preserve_bytes_sha_and_status (145) · Origem: b7c4e2a9f031 (migration do storage no banco); 2da719b
+- **ENT-C28** · materialização para o ETL — `storage.py` › `materializar_para_etl` › linhas 145-220
+  - Gera uma cópia exclusiva para o cálculo. Só aceita extensão .csv ou .xlsx ('unsupported_format'). Para 'db:', faz SELECT length(conteudo) e depois SELECT conteudo com o predicado length <= max_bytes: o campo tamanho não é autoridade, e o predicado protege contra troca concorrente. Vazio gera 'empty_file'. Para legado, abre com O_NONBLOCK, aceita só arquivo regular e copia em blocos de 64 KiB até max+1. O destino é 'arquivo.&lt;ext>' (0600) em TemporaryDirectory('nexo-etl-materialized-'). Solta o BYTEA antes do yield e nunca apaga a fonte nem o cache.
+  - Testes: tests/test_etl_upload_security.py::ETLStorageMaterializationTests (316-417); tests/postgresql_etl_resource_security.py::test_stored_blob_actual_length_is_enforced_before_processing_despite_false_size_metadata (376) · Origem: 2da719b
+- **ENT-C29** · armazenamento legado — `storage.py` › `resolver, _caminho_legado, _materializar, remover` › linhas 99-141; 223-266
+  - resolver, \_materializar, \_caminho_legado e remover tratam referências antigas. Uma referência 'db:' vai para o cache compartilhado (tempdir/nexo_arquivos, escrita atômica); uma legada é confinada ao UPLOAD_FOLDER. No fluxo atual do ETL só \_caminho_legado é alcançado (materializar_para_etl, linha 187). admin.\_resolver_caminho (blueprints/admin.py 963-966) não tem chamador e é o único caminho de produção até \_materializar. remover apaga 'db:' na transação e agenda o legado para depois do commit.
+  - Testes: tests/test_storage_deletion_security.py (17-239) · Origem: fc63708 / 9613921 (SEC-004)
+- **ENT-C30** · modelos da entrada — `models.py` › `UploadRelatorio, ArquivoArmazenado` › linhas 361-398; 716-735
+  - UploadRelatorio guarda tipo VENDAS/COMPRAS, nome_arquivo_original (secure_filename), caminho_arquivo, extensao_arquivo, tamanho e hash da versão gravada, status PENDENTE/PROCESSADO/ERRO e mensagem_erro. O CHECK extensao_arquivo IN ('CSV','XLSX','XLS') ainda aceita 'XLS', que é resto do esquema inicial (d87a6fbc2fbe linha 227), e não aceitaria 'TXT'. UNIQUE(id_analise, tipo_relatorio) permite um arquivo de vendas e um de compras por análise. ArquivoArmazenado tem chave String(255), conteudo LargeBinary deferred, content_type, tamanho e data_criacao.
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests (97-313) · Origem: d87a6fbc2fbe; b7c4e2a9f031
+- **ENT-C31** · rota de upload (cliente) — `blueprints/cliente.py` › `upload (+ cliente_required 80-88)` › linhas 609-726
+  - /cliente/upload (GET/POST) tem cliente_required (login + perfil), CSRF global, 30 POST/hora por usuário e limitar_upload. A rota confere se a análise é da empresa e está aberta (STATUS_ACEITA_UPLOAD + pode_enviar_relatorio), o tipo, o arquivo e a extensão, e lê o total do PDV em VENDAS. Depois chama ler_upload_validado, relê a análise com FOR UPDATE e relê a situação contratual. Em seguida grava com storage.salvar, substitui o upload anterior (remove o blob se não for compartilhado), insere UploadRelatorio PENDENTE com id_usuario_admin=None, notifica os admins e faz commit. ETLInputError gera rollback e flash da safe_message.
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests (97-313); tests/test_security_gatekeeper.py::BaiaNoPortalTests (672-750) · Origem: fc63708; limites em 2da719b; Baia em 91e5fb0
+- **ENT-C32** · rota de upload (consultor) — `blueprints/admin.py` › `analise_upload` › linhas 969-1062
+  - /admin/analise/&lt;id>/upload tem admin_required e limitar_upload, sem limite de taxa. Recusa a troca de arquivo de análise com devolutiva publicada, antes da validação e de novo depois dela, sob FOR UPDATE. A sequência é a mesma do cliente: ler_upload_validado, storage.salvar e UploadRelatorio PENDENTE, aqui com id_usuario_admin preenchido.
+  - Testes: tests/test_etl_upload_security.py::ETLUploadSecurityTests (97-313) · Origem: fc63708; 2da719b; 91e5fb0
+- **ENT-C33** · rota de processamento (entrada do cálculo) — `blueprints/admin.py` › `processar_analise` › linhas 1389-1478
+  - POST /admin/analise/&lt;id>/processar tem limitar_processamento e mantém Analise FOR UPDATE durante todo o cálculo. Exige VENDAS e COMPRAS e marca a análise como EM_ANALISE. Num ExitStack, materializa os dois arquivos com materializar_para_etl(…, limits.max_file_bytes) e chama processar_arquivos_analise. ETLInputError vira ResultadoETL(False, safe_message). Com sucesso, os uploads ficam PROCESSADO e roda a conferência do PDV; com falha, a análise volta a RELATORIO_RECEBIDO e os uploads ficam ERRO com a mensagem.
+  - Testes: tests/postgresql_etl_resource_security.py (62-392) · Origem: 2da719b
+- **ENT-C34** · rotas do Raio-X — `blueprints/onboarding.py` › `limite_raio_x, _executar_raio_x, diagnostico_enviar, api_diagnostico_enviar` › linhas 39; 114-162; 212-229
+  - POST /onboarding/diagnostico e POST /api/onboarding/diagnostico têm cliente_required, limite compartilhado de 10 envios/hora por usuário (scope 'raio-x'), requer_funcionalidade('raio_x_entrada') e vaga_de_entrada (ocupado responde flash ou JSON 503). \_executar_raio_x chama processar_envio, relê a situação contratual (só ESTADO_ATIVA grava), recomenda o plano e grava com raio_x_servico.salvar + commit. ETLInputError vira flash ou JSON 422 com 'codigo'.
+  - Testes: tests/test_planos_raio_x.py::RaioXPortalTests (577-744) · Origem: ec4ba95
+- **ENT-C35** · leitura no Raio-X — `raio_x.py` › `MAX_ARQUIVOS, _ler_arquivo, diagnosticar` › linhas 63; 154-165; 397-403
+  - No worker, lê cada relatório com \_ler_bruto uma vez e reaproveita a matriz para o período (\_extrair_periodo_base) e para \_vendas_do_bruto. ETLValidationError com code 'data' vira 'raio_x_dados' ('Arquivo N: não foi possível identificar produto, quantidade e valor de venda...'); os outros codes (limites) passam com a mensagem do ETL. diagnosticar confere 1 a MAX_ARQUIVOS=36 e lê os arquivos em sequência no mesmo processo.
+  - Testes: tests/test_planos_raio_x.py::MotorRaioXTests.test_arquivo_sem_colunas_de_vendas_tem_mensagem_segura (235-241), test_quantidade_de_arquivos_fora_do_limite (243-246) · Origem: ec4ba95
+- **ENT-C36** · migração legada de arquivos — `migrar_arquivos_para_db.py` › `main` › linhas 57-84
+  - Script manual que copia arquivos legados do disco para arquivo_armazenado byte a byte e confere o SHA-256 contra hash_arquivo. Não passa pela Baia nem pelos limites de entrada; esses arquivos só são conferidos depois, por read_raw, no processamento.
+  - Testes: tests/test_maintenance.py (test_migration_cli_requires_explicit_apply 85 a test_apply_commits_valid_uploads_and_guide_images_together 140) · Origem: fc63708
+- **ENT-C37** · interface (seletor de arquivo) — `templates/cliente/upload.html; templates/admin/upload.html; templates/onboarding/diagnostico.html` › `input[type=file]` › linhas cliente/upload.html 92; admin/upload.html 83; onboarding/diagnostico.html 212
+  - Os campos de arquivo anunciam só CSV e XLSX: accept='.csv,.xlsx' no upload do cliente e do consultor, e accept='.csv,.xlsx' multiple no Raio-X. É só uma dica do navegador; a autoridade é o servidor.
+  - Testes: nenhum específico
+- **ENT-C38** · servidor — `render.yaml` › `startCommand` › linhas 11; 21
+  - O serviço sobe com gunicorn -w 1 --threads 50 --timeout 180, no plano free. Com um processo só, as vagas de etl_uploads e etl_runtime valem para o servidor inteiro, e o prazo do worker (até 120 s) fica abaixo dos 180 s do gunicorn.
+  - Testes: tests/test_etl_runtime_limits.py::ETLGunicornThreadedRuntimeTests (288-309, POSIX)
+
+### Regras (A.1)
+
+- **ENT-R01** · codificação — `etl_inputs.py` › `ENCODINGS; _csv_input` › linhas 26; 148-172
+  - Cascata de codificações sem detecção estatística. Para cada item de ENCODINGS = ('utf-8-sig','cp1252','utf-8','latin1'), o leitor percorre o arquivo inteiro com os 4 separadores. Um UnicodeDecodeError em qualquer ponto descarta a codificação; não existe mais errors='ignore'. Vence a primeira codificação que decodifica e dá mais de uma coluna. Medido: b'Produto;Qtde\nCaf\xc3\xa9;2' sai como utf-8-sig, b'...Caf\xe9;2' como cp1252 e b'...A\x81;2' como latin1. Só os bytes 0x81, 0x8D, 0x8F, 0x90 e 0x9D, indefinidos no cp1252, levam ao latin1. A terceira codificação ('utf-8') nunca decide, porque tudo o que ela decodifica a 'utf-8-sig' já decodificou antes. No UTF-8 com BOM, o BOM é consumido.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_encoding_order_and_latin1_fallback (157-163); tests/test_etl_financial_equivalence.py::test_all_supported_csv_separators_and_encoding_precedence (74-78) · Origem: ordem já em fc63708 (etl_processor.ENCODINGS); leitura incremental e fim do errors='ignore' em 2da719b
+- **ENT-R02** · separador — `etl_inputs.py` › `SEPARATORS; _csv_input` › linhas 27; 154-165
+  - SEPARATORS = (';', ',', TAB, '|'). Para cada separador, o csv.reader percorre o arquivo inteiro, sem amostra, e guarda o maior número de colunas de qualquer linha. Vence o maior por comparação estrita, então o empate fica com a ordem da tupla. Separador dentro de aspas não conta, e um csv.Error descarta o candidato. Medido: 'a;b,c / 1;2,3' sai com ';' (empate 2x2), 'a,b TAB c TAB d' sai com TAB (3 colunas) e '"a;b;c;d",x' sai com ','. Setenta linhas decorativas de 1 coluna antes do cabeçalho não atrapalham.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_all_supported_delimiters_are_detected (147-151), test_csv_late_wide_header_drives_full_file_separator_choice (153-155); tests/test_etl_financial_equivalence.py::test_csv_quotes_multiline_nul_and_late_header (80-83) · Origem: fc63708 (\_montar: separador que maximiza colunas)
+- **ENT-R03** · estrutura CSV — `etl_inputs.py` › `_csv_input` › linhas 168-172
+  - São exigidas pelo menos 2 colunas. Se nenhuma codificação produzir mais de uma coluna, a recusa é 'csv_invalid': 'Não foi possível interpretar o CSV com os formatos suportados.'. Exemplos: b'Produto\nCafe\n' é recusado, e relatório com separador ':' ou em largura fixa também.
+  - Testes: nenhum teste exercita o código 'csv_invalid' (conferido com arquivo sintético neste levantamento) · Origem: fc63708 ('if melhor_ncols <= 1: return None')
+- **ENT-R04** · limpeza de bytes — `etl_inputs.py` › `_CSVLines.__next__` › linhas 100-101
+  - O NUL ('\x00') é removido de cada linha física antes do csv.reader, porque o PostgreSQL não grava NUL em texto. Exemplo: 'Ca\x00fe' vira 'Cafe'. É essa remoção que faz UTF-16 e UTF-32 funcionarem (ver ENT-F11).
+  - Testes: tests/test_etl_resource_limits.py::test_csv_quotes_line_breaks_and_nul_keep_legacy_values (143-145); fixture 'csv_nul_removal' em tests/test_etl_financial_equivalence.py (80-83) · Origem: fc63708 (texto.replace('\x00',''))
+- **ENT-R05** · aspas — `etl_inputs.py` › `_csv_pass (csv.reader)` › linhas 104-130 (reader em 108)
+  - O csv.reader usa o dialeto padrão: aspas duplas, aspas dobradas como escape e strict=False. Um campo entre aspas pode ter separador e quebra de linha: '"Arroz; tipo 1 LF linha 2";2' vira 'Arroz; tipo 1\nlinha 2'. Aspas abertas sem fechar engolem o resto do arquivo num único campo, em silêncio, enquanto couber nos limites. Medido: 'Produto;Qtde / "Arroz;2 / Feijao;3' vira ['Arroz;2\nFeijao;3\n', None], e a linha do feijão some. Acima de 16.384 caracteres a recusa é 'field_chars'; acima de 131.072, 'record_chars'.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_multiline_quoted_record_has_cumulative_budget (134-136); fixture 'csv_quoted_multiline' (tests/etl_equivalence_support.py 136-137); aspas não fechadas: nenhum · Origem: fc63708
+- **ENT-R06** · retângulo e nulos (CSV) — `etl_inputs.py` › `_csv_input` › linhas 183-184
+  - Linhas curtas são completadas à direita com None até o máximo de colunas. Campo vazio continua sendo '' (texto vazio, não None), e 'NA', 'NULL' e 'None' continuam texto. Exemplo: [['Decoration'],['a','b']] vira [['Decoration',None],['a','b']]. A matriz tem dtype object.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_irregular_rows_preserve_none_padding (138-141); fixture 'csv_empty_string_padding' (tests/etl_equivalence_support.py 205-206) · Origem: fc63708
+- **ENT-R07** · aparar vazios — `etl_inputs.py` › `_trim` › linhas 74-78
+  - \_trim remove primeiro as linhas e depois as colunas totalmente nulas (None ou NaN) e renumera; se tudo for nulo, devolve a matriz original. No CSV só some a linha em branco, que vira toda None; uma coluna de '' fica. No XLSX também some a coluna só de vazio ou STR_NA_VALUES. Exemplo de CSV: '\n\nProduto;;Qtde\nCafe;;2\n\n' vira [['Produto','','Qtde'],['Cafe','','2']].
+  - Testes: tests/test_etl_financial_equivalence.py::test_compound_and_shifted_headers_with_footer (85-88), test_raw_input_matrices_preserve_values_and_missing_cells (113-122) · Origem: fc63708 (\_trim_vazios)
+- **ENT-R08** · orçamento CSV — `etl_inputs.py` › `_CSVLines; _csv_pass` › linhas 81-130
+  - Em toda passagem, o registro lógico fica limitado a 131.072 caracteres, contando o fim de linha e somando as linhas de um campo entre aspas; acima disso, 'record_chars'. Linhas (100.000), colunas (128), retângulo e campo (16.384) só são validados na passagem final, com o separador escolhido, para que um candidato errado não recuse uma linha legítima. O retângulo é linhas x colunas e precisa ficar em min(1.000.000, 500.000) = 500.000, contando linhas em branco e preenchimento. O csv.field_size_limit global não é alterado.
+  - Testes: tests/test_etl_resource_limits.py 98-136, 178-182, 337-338 · Origem: 2da719b
+- **ENT-R09** · assinatura (motor) — `etl_inputs.py` › `_csv_signature` › linhas 134-145
+  - Antes de decodificar, os 64 primeiros bytes, sem espaços e sem BOM UTF-8, não podem começar com ZIP (PK\x03\x04, \x05\x06 ou \x07\x08), OLE2, %PDF-, PNG, JPEG, GIF87a/89a ou RIFF....WEBP; se começarem, a recusa é 'csv_incompatible'. Exemplo: b'%PDF-1.4\nProduto;Qtde...' é recusado mesmo tendo ';'.
+  - Testes: tests/test_etl_resource_limits.py::test_known_binary_formats_cannot_impersonate_csv_with_incidental_delimiters (165-171) · Origem: 2da719b
+- **ENT-R10** · escolha da aba (XLSX) — `etl_inputs.py` › `_filled; _xlsx_input` › linhas 520-527; 551-582
+  - Entram todas as worksheets, inclusive as ocultas. Vence a aba com mais células preenchidas segundo \_filled: None, erro (#N/A, #DIV/0!) e texto em STR_NA_VALUES não contam, e número inteiro é normalizado como no pandas. No empate fica a primeira. Só a vencedora é lida, e as demais são ignoradas sem aviso. Medido: com abas '2022' (30 linhas), '2023' (50) e '2024' (40), só '2023' é lida; a aba oculta 'Base', com 9 células, ganha da visível 'Vendas', com 4; uma aba só com 'NA', 'NULL', 'n/a', 'None', '#N/A', 'nan', '' e 'null' perde para uma aba com 4 células reais.
+  - Testes: tests/test_etl_resource_limits.py::test_xlsx_cover_and_tie_select_first_maximum_sheet (192-194), test_xlsx_only_winner_is_materialized_by_pandas (196-202); tests/test_etl_financial_equivalence.py::test_xlsx_sheet_tie_keeps_original_sheet_order (99-100); fixture 'xlsx_na_count_selection' (tests/etl_equivalence_support.py 202-204) · Origem: fc63708 (pandas sheet_name=None + maior notna); reimplementado sem carregar todas as abas em 2da719b
+- **ENT-R11** · tipos (XLSX) — `etl_inputs.py` › `_xlsx_input` › linhas 587-595
+  - A aba é lida com pd.read_excel(dtype=str, header=None, engine='openpyxl'), em read_only, data_only e keep_links=False. Vale o valor em cache da fórmula, e fórmula sem cache vira NaN. Texto em STR_NA_VALUES e célula vazia viram NaN, e erro vira NaN. Aba vencedora vazia gera 'empty'. A conversão de cada tipo de célula está em ENT-F18.
+  - Testes: tests/test_etl_financial_equivalence.py::test_xlsx_cached_formulas_and_na_strings (102-103); fixture 'xlsx_cell_conversion' (tests/etl_equivalence_support.py 195-201) · Origem: fc63708 (mesmos dtype=str, header=None, engine='openpyxl')
+- **ENT-R12** · número com cara de milhar — `etl_inputs.py` › `_LOOKS_LIKE_THOUSANDS; _disambiguate_numbers` › linhas 30; 530-545
+  - Com dtype=str, o número 12.125 e o texto '12.125' viram o mesmo texto, mas só o texto pode ser milhar pt-BR. Se alguma célula casar com -?[0-9]{1,3}\.[0-9]{3}, a aba é relida com dtype=object e as que eram float ganham um '0' no fim: 12.125 vira '12.1250' (lido depois como 12,125) e -5.899 vira '-5.8990'. O texto '12.125' fica como está e é lido como 12.125 mil. Se as duas leituras tiverem formas diferentes, a recusa é 'invalid'.
+  - Testes: tests/test_etl_regras_financeiras.py::test_numero_de_verdade_no_excel_nunca_e_milhar (139-142), test_texto_no_excel_segue_a_regra_de_milhar (144-147), test_excel_sem_valor_ambiguo_e_lido_uma_vez_so (149-154) · Origem: 0ac01c8
+- **ENT-R13** · formatos recusados e erros saneados — `etl_inputs.py` › `_run` › linhas 601-622
+  - \_run só aceita 'csv' e 'xlsx'. A extensão 'xls' é 'unsupported' com a mensagem 'Formato .xls não suportado. Converta o arquivo para .xlsx ou .csv.'. Qualquer outra, 'txt' inclusive, é 'unsupported' com 'Envie um arquivo CSV ou XLSX.'. Uma exceção de biblioteca vira 'invalid', sem detalhe. MemoryError sobe para o worker, que devolve 'memory'.
+  - Testes: tests/test_etl_resource_limits.py::test_xls_is_not_silently_enabled (91-93), test_unsupported_extension_is_rejected (95-96), test_library_exception_details_are_sanitized (374-378) · Origem: 2da719b. Antes, o leitor de fc63708 lia qualquer extensão não Excel como texto e tentava o xlrd para .xls
+- **ENT-R14** · neutralização em toda leitura — `etl_inputs.py; security_gatekeeper.py` › `read_raw; neutralizar_celula; neutralizar_matriz` › linhas etl_inputs.py 625-633; security_gatekeeper.py 327-379
+  - read_raw devolve a matriz neutralizada no processamento, no Raio-X e na Baia, inclusive para arquivos gravados antes da Baia. O efeito visível é só no nome: um produto que começa com fórmula ganha apóstrofo ("'=== PROMO ==="). Números e chave de produto não mudam: os conversores de dinheiro e de quantidade ignoram o apóstrofo, e por isso "'-5" passou a valer -5 (Docs/BAIA_DE_SEGURANCA_E_LEADS.md 55-61).
+  - Testes: tests/test_security_gatekeeper.py::NeutralizacaoTests.test_neutralizacao_nao_muda_nenhum_numero_nem_chave_de_produto_do_etl (337-349); TriagemTests.test_numeros_iguais_aos_da_leitura_de_antes_da_baia (467-487), test_toda_leitura_do_motor_sai_neutralizada (605-611) · Origem: 91e5fb0
+- **ENT-R15** · Baia - motivos de recusa — `security_gatekeeper.py` › `SecurityGatekeeperError; motivo_de_quarentena; identificar_conteudo; inspecionar_arquivo` › linhas 58-101; 190-237
+  - Motivos possíveis: vazio; extensao_nao_aceita (fora de xlsx, xls, csv e txt); executavel_pe, executavel_elf, executavel_macho e executavel_wasm; atalho_windows; imagem; compactado; midia; binario; marcacao; script; pdf; rtf; documento_ole; xls_binario; xls_disfarcado; e disfarce_&lt;natureza>\_como_&lt;ext> (por exemplo, disfarce_texto_como_xlsx). Na triagem profunda ainda há estrutura_ausente, neutralizacao_inviavel, copia_acima_do_teto, formato_de_leitura, liberado_existente e liberado_invalido. A mensagem ao usuário é sempre 'Arquivo fora do padrão aceito para auditoria.', mais uma orientação fixa (XLS, extensão, estrutura, tamanho ou neutralização). No Raio-X ela vem prefixada por 'Arquivo N:'. O motivo só aparece no code 'quarentena:&lt;motivo>'.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests (212-282) · Origem: 91e5fb0
+- **ENT-R16** · Baia - limiar de texto — `security_gatekeeper.py` › `_CONTROLES_DE_TEXTO; _e_texto; _inicio_textual; _INICIOS_PROIBIDOS` › linhas 127-160
+  - Regras aplicadas só aos primeiros 8 KiB. Sem os NUL, precisa sobrar pelo menos 1/4 dos bytes, porque UTF-16 perde metade e UTF-32 três quartos. Pode haver no máximo 1% de bytes de controle fora de TAB, LF, CR, VT, FF e 0x1A, ou DEL; acima disso, 'binario'. Medido: CSV com 2% de controles dá 'binario'. Um UTF-16 com aspas curvas e travessão em toda linha também dá 'binario', porque em UTF-16LE os caracteres “, ” e – viram os bytes 0x1C, 0x1D e 0x13; um UTF-16 só com acentos latinos passa. Um início textual '<' é recusado mesmo num título legítimo sem aspas ('<< RELATORIO >>' seguido de 'Produto;Qtde' dá 'marcacao'); entre aspas, passa.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_formatos_verdadeiros_passam_e_dizem_como_ler (258-268); TriagemTests.test_titulo_entre_aspas_que_comeca_com_menor_que_continua_aceito (489-495); UTF-16 com pontuação tipográfica: nenhum · Origem: 91e5fb0
+- **ENT-R17** · Baia - liberação — `security_gatekeeper.py` › `triar; _liberar_copia` › linhas 690-758
+  - O arquivo original é gravado byte a byte só quando o inventário volta vazio e nenhuma célula foi neutralizada. Caso contrário, é gravada a cópia só com valores, conferida por releitura com o mesmo motor (ENT-C14). Se a releitura não reproduzir exatamente a matriz, nada é gravado.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_csv_limpo_e_liberado_sem_copia (362-366), test_numeros_do_etl_iguais_no_original_e_na_copia (411-425); BaiaNoPortalTests.test_arquivo_limpo_e_gravado_byte_a_byte (734-738) · Origem: 91e5fb0
+- **ENT-R18** · gravação do upload — `etl_uploads.py; blueprints/cliente.py; blueprints/admin.py` › `ler_upload_validado; upload; analise_upload` › linhas etl_uploads.py 106-113; cliente.py 683-704; admin.py 1023-1045
+  - Com cópia, hash_arquivo e tamanho_arquivo passam a ser os da cópia, e o SHA-256 do original vai só para o log. nome_arquivo_original e extensao_arquivo continuam os do envio. A chave do storage usa os 8 primeiros hexadecimais do SHA da versão gravada. O upload anterior do mesmo tipo é substituído; o blob só é removido se nenhum outro upload o referenciar.
+  - Testes: tests/test_security_gatekeeper.py::BaiaNoPortalTests.test_cliente_e_consultor_gravam_so_a_copia_neutralizada (713-732) · Origem: 91e5fb0
+- **ENT-R19** · leitura limitada — `etl_uploads.py; raio_x_servico.py` › `ler_upload_validado; _gravar_limitado` › linhas etl_uploads.py 77-97; raio_x_servico.py 47-66
+  - O Content-Length não é autoridade. A leitura vai em blocos de até 64 KiB até teto+1 ('file_size'). Um stream que devolve algo que não é bytes dá 'upload_io', e um arquivo vazio dá 'empty_file'. Nada é persistido antes da Baia e da validação, e uma recusa nunca substitui o upload anterior.
+  - Testes: tests/test_etl_upload_security.py::UploadReadBoundsTests (41-95), test_empty_file_never_replaces_previous_upload_for_either_role (162), test_oversize_file_never_replaces_previous_upload_for_either_role (172); tests/test_security_gatekeeper.py::TetoTests (617-640) · Origem: 2da719b
+- **ENT-R20** · lote do Raio-X — `raio_x_servico.py; etl_worker.py; raio_x.py` › `processar_envio; main; MAX_ARQUIVOS; diagnosticar` › linhas raio_x_servico.py 69-110; etl_worker.py 61-69; raio_x.py 63, 397-400
+  - O lote tem de 1 a 36 arquivos ('até 3 anos, um por mês'), limite conferido no pai, no worker e em diagnosticar. Arquivo idêntico (mesmo SHA-256) é recusado: 'Arquivo N: é igual a outro arquivo enviado.'. Todos são validados com validate_input antes de qualquer cálculo. Os arquivos não são guardados, só o resultado, que substitui o envio anterior da empresa.
+  - Testes: tests/test_planos_raio_x.py::RaioXPortalTests.test_erros_de_envio_nao_gravam_e_explicam (636-651), test_novo_envio_substitui_o_anterior (699); MotorRaioXTests.test_quantidade_de_arquivos_fora_do_limite (243-246) · Origem: ec4ba95
+- **ENT-R21** · materialização — `storage.py` › `materializar_para_etl; _caminho_legado` › linhas 123-141; 145-220
+  - A autoridade é o tamanho real do BYTEA (length), e não o campo tamanho. Uma referência legada só é lida se for arquivo regular (FIFO e dispositivo recusados) e dentro do UPLOAD_FOLDER. A extensão armazenada precisa ser .csv ou .xlsx, e a cópia do processamento é privada e apagada ao sair.
+  - Testes: tests/test_etl_upload_security.py::ETLStorageMaterializationTests (316-417) · Origem: 2da719b; confinamento legado em 9613921
+- **ENT-R22** · concorrência — `etl_uploads.py; etl_runtime.py; blueprints/admin.py` › `_UPLOAD_ADMISSION; _ADMISSION; processar_analise` › linhas etl_uploads.py 19; etl_runtime.py 17, 49-50; admin.py 1395-1452
+  - Há uma entrada de upload, processamento ou Raio-X por processo (ENT-C06) e um filho ativo por processo (ENT-C17). O upload relê a análise com FOR UPDATE antes de gravar. O processamento segura o lock até registrar sucesso ou erro e usa SAVEPOINT na gravação dos KPIs, mantendo os anteriores em caso de falha.
+  - Testes: tests/postgresql_etl_resource_security.py::test_same_analysis_concurrent_processing_is_serialized_by_real_row_lock (266), test_customer_upload_waits_for_processing_and_rechecks_committed_status (299) · Origem: 2da719b
+- **ENT-R23** · isolamento e mensagens — `etl_worker.py; etl_runtime.py` › `main; _run_job` › linhas etl_worker.py 24-47, 73-81; etl_runtime.py 72-97
+  - O filho não tem banco, rede, subprocesso nem segredos. Do erro, só o code e a mensagem segura atravessam para o pai; o code 'data' vira 'Não foi possível identificar os dados essenciais. Revise as colunas de vendas e compras.'. Um envelope inválido, saída maior que 4 MiB ou código de retorno diferente de 0 com ok=True geram 'worker' ou 'output'. Numa plataforma sem rlimits, o processamento é recusado ('platform').
+  - Testes: tests/test_etl_runtime_limits.py::ETLIsolatedRuntimeTests (88-285) · Origem: 2da719b
+- **ENT-R24** · prazo — `etl_inputs.py; etl_runtime.py; etl_worker.py` › `_Budget.check; _run_job; main` › linhas etl_inputs.py 46-57; etl_runtime.py 67-71; etl_worker.py 27
+  - Cada chamada ao leitor tem um prazo cooperativo (\_Budget com timeout_seconds), checado nos laços de leitura de linhas, nos blocos ZIP, no XML e na varredura de abas. Ele não interrompe uma chamada nativa do pandas ou do openpyxl em curso; quem corta essas chamadas é o wait(timeout) do pai e o RLIMIT_CPU do filho.
+  - Testes: tests/test_etl_resource_limits.py::test_cooperative_deadline_checked_during_input_scan (380-383); tests/test_etl_runtime_limits.py::test_timeout_terminates_and_reaps_the_owned_child_before_returning (128-134) · Origem: 2da719b
+
+### Formatos e variações (A.1)
+
+- **ENT-F01** · extensão — `config.py; etl_inputs.py` › `ALLOWED_EXTENSIONS; _run` › linhas config.py 277; etl_inputs.py 606-607
+  - .csv é aceito em toda a cadeia: portal, Raio-X, Baia, motor e storage. O separador e a codificação são detectados (ENT-R01 e ENT-R02).
+  - Testes: tests/test_etl_resource_limits.py; tests/test_etl_upload_security.py
+- **ENT-F02** · extensão — `etl_inputs.py; security_gatekeeper.py` › `_zip_preflight; inventariar_xlsx` › linhas etl_inputs.py 479-517; security_gatekeeper.py 480-510
+  - .xlsx é aceito em toda a cadeia. Precisa ser um ZIP STORED/DEFLATE não criptografado, com [Content_Types].xml, xl/workbook.xml, xl/\_rels/workbook.xml.rels e ao menos uma aba. Um .xlsm renomeado para .xlsx passa pela assinatura e vira cópia só com valores.
+  - Testes: tests/test_etl_resource_limits.py::test_non_workbook_zip_is_not_accepted_by_extension (268-269); tests/test_security_gatekeeper.py::TriagemTests.test_macros_activex_ole_vinculos_e_conexoes_sao_descartados (396-409)
+- **ENT-F03** · extensão TXT — `security_gatekeeper.py` › `EXTENSOES_RECONHECIDAS; FORMATO_DE_LEITURA; inspecionar_arquivo` › linhas 62-64; 217-237
+  - Só a Baia reconhece .txt: EXTENSOES_RECONHECIDAS e FORMATO_DE_LEITURA txt->csv; inspecionar_arquivo devolve 'csv'. O resto da cadeia recusa: ALLOWED_EXTENSIONS (config.py 277), ler_upload_validado (etl_uploads.py 75-76), processar_envio (raio_x_servico.py 88-90), triar exige sufixo .csv (security_gatekeeper.py 742-743; medido 'quarentena:formato_de_leitura'), \_run dá 'unsupported' (etl_inputs.py 612-613), materializar_para_etl dá 'unsupported_format' (storage.py 158-160), o CHECK do banco não tem 'TXT' (models.py 389) e o accept do HTML não lista .txt. Historicamente o leitor de fc63708 lia qualquer extensão não Excel como texto, mas o portal nunca aceitou .txt: ALLOWED_EXTENSIONS já era {'csv','xlsx'} em fc63708.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_formatos_verdadeiros_passam_e_dizem_como_ler (258-268); tests/test_planos_raio_x.py::RaioXPortalTests.test_erros_de_envio_nao_gravam_e_explicam ('notas.txt', 639)
+- **ENT-F04** · extensão XLS (BIFF) — `security_gatekeeper.py; etl_inputs.py` › `_ole_e_planilha; inspecionar_arquivo; _run` › linhas security_gatekeeper.py 163-187, 227-229; etl_inputs.py 610-611; models.py 389
+  - Um Excel 97-2003 verdadeiro (OLE2 com fluxo Workbook ou Book) é reconhecido e recusado com a orientação de salvar como .xlsx ou .csv: 'xls_binario', ou 'xls_disfarcado' se vier com outra extensão. O motor também recusa .xls. Não há leitor BIFF, porque o xlrd não está no requirements.txt (comentário nas linhas 3-4). O CHECK de upload_relatorio ainda aceita 'XLS', resto do esquema inicial. O leitor de fc63708 tentava o xlrd se estivesse instalado.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_xls_verdadeiro_e_reconhecido_e_recusado_com_orientacao (250-256); tests/test_etl_resource_limits.py::test_xls_is_not_silently_enabled (91-93)
+- **ENT-F05** · falso XLS — `security_gatekeeper.py` › `_INICIOS_PROIBIDOS; identificar_conteudo` › linhas 127-131; 210-213
+  - A 'planilha XML' do Excel 2003 e o HTML salvos como .xls, comuns em PDV web, são recusados como 'marcacao', sem orientação de conversão. A recusa sai na assinatura, antes da regra da extensão.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_executaveis_scripts_e_formatos_estranhos_sao_recusados (213-237)
+- **ENT-F06** · codificação UTF-8 — `etl_inputs.py; security_gatekeeper.py` › `ENCODINGS; _codificacao_da_copia` › linhas etl_inputs.py 26; security_gatekeeper.py 676-682
+  - UTF-8, com ou sem BOM, é lido como 'utf-8-sig', e o BOM é consumido. attrs['encoding'] = 'utf-8-sig'. Na cópia da Baia, o BOM só é regravado se o original o tinha.
+  - Testes: tests/test_etl_financial_equivalence.py (fixture 'csv_semicolon_utf8sig', 74-78)
+- **ENT-F07** · codificação cp1252 — `etl_inputs.py` › `_csv_input` › linhas 151-170
+  - Windows-1252, a exportação típica de PDV no Windows, é lida como 'cp1252'. Inclui os tipográficos 0x80-0x9F: 0x96 é '–', 0x93/0x94 são '“”' e 0x80 é '€'. Um byte 0x81, 0x8D, 0x8F, 0x90 ou 0x9D faz a decodificação cair para latin1.
+  - Testes: tests/test_etl_financial_equivalence.py (fixture 'csv_tab_cp1252')
+- **ENT-F08** · codificação ISO-8859-1 — `etl_inputs.py` › `ENCODINGS` › linhas 26
+  - O latin1 é a última opção e sempre decodifica. Só é alcançado quando o cp1252 falha (bytes 0x81, 0x8D, 0x8F, 0x90 ou 0x9D). Medido: b'Produto;Qtde\nA\x81;2' é lido com encoding='latin1' e a célula vira 'A\x81'.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_encoding_order_and_latin1_fallback (157-163); fixture 'csv_latin1_fallback'
+- **ENT-F09** · codificação mista (mojibake) — `etl_inputs.py` › `_csv_input` › linhas 151-170
+  - Um arquivo UTF-8 com um único byte cp1252 perdido é decodificado inteiro como cp1252. Medido: 'Café' vira 'CafÃ©' e etl_processor.\_normalizar_produto devolve 'CAFA' em vez de 'CAFE'. Num lote de 36 meses, o mesmo produto pode se dividir em duas chaves entre meses. Não há aviso nem detecção.
+  - Testes: nenhum
+- **ENT-F10** · BOM não consumido — `etl_inputs.py; security_gatekeeper.py` › `_csv_input; _RESTOS_DE_BOM` › linhas etl_inputs.py 151-170; security_gatekeeper.py 290
+  - Um arquivo com BOM UTF-8 e corpo cp1252 cai para cp1252 e deixa 'ï»¿' na primeira célula. Medido: 'ï»¿Produto' fica com \_norm_chave 'i produto', e o alias por substring ainda acha 'produto'. A neutralização trata esses restos de BOM (\_RESTOS_DE_BOM).
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_bom_que_o_leitor_nao_consome_nao_deixa_formula_na_primeira_celula (511-521)
+- **ENT-F11** · codificação UTF-16 (via remoção de NUL) — `etl_inputs.py` › `_CSVLines; _csv_input` › linhas 100-101; 148-187
+  - Não existe decodificação UTF-16. O 'Texto Unicode' do Excel (UTF-16LE com BOM e TAB) falha no utf-8-sig, é decodificado como cp1252 e tem os NUL removidos linha a linha. Medido: a primeira célula fica 'ÿþProduto' (\_norm_chave 'y produto') e os acentos latinos saem certos. Caracteres fora do Latin-1 viram controle: 'Pão – francês' vira 'Pão \x13 francês'. Com CRLF, cada linha conta duas vezes: 61 linhas lógicas deram rows=123 e foram recusadas com max_rows=100, enquanto o UTF-8 equivalente passou. Com LF não dobra. UTF-16BE sem BOM também passa por cp1252. A Baia recusa como 'binario' um UTF-16 com pontuação tipográfica frequente (ENT-R16). Num UTF-16 com fórmula, a cópia liberada sai em cp1252 começando com os bytes FF FE: o ETL relê igual, mas o Excel interpretaria como UTF-16. Nenhuma rota baixa planilhas: /midia só serve 'guia/' (app.py 321-337).
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_formatos_verdadeiros_passam_e_dizem_como_ler (utf16, 260-262), TriagemTests.test_bom_que_o_leitor_nao_consome_nao_deixa_formula_na_primeira_celula (511-521); contagem dobrada e caracteres fora do Latin-1: nenhum
+- **ENT-F12** · codificação UTF-32 — `etl_inputs.py; security_gatekeeper.py` › `_csv_input; _e_texto` › linhas etl_inputs.py 148-187; security_gatekeeper.py 144-151
+  - UTF-32 é tratado como o UTF-16, via cp1252 e remoção de NUL. Medido: com BOM, a primeira célula fica 'ÿþProduto'. A Baia aceita até 3/4 de NUL na amostra.
+  - Testes: nenhum
+- **ENT-F13** · separadores — `etl_inputs.py` › `SEPARATORS` › linhas 27
+  - Os separadores reconhecidos são ';', ',', TAB e '|', nessa ordem de desempate. Outros (':', '^', espaço, largura fixa) produzem uma coluna só e dão 'csv_invalid'. A cópia da Baia tenta primeiro o separador original.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_all_supported_delimiters_are_detected (147-151)
+- **ENT-F14** · fim de linha — `etl_inputs.py; security_gatekeeper.py` › `_csv_pass; _escrever_csv` › linhas etl_inputs.py 106-108; security_gatekeeper.py 665-667
+  - LF, CRLF e CR sozinho (Mac antigo) são aceitos, porque open(newline='') com readline separa nos três. Medido: 'Produto;Qtde\rCafe;2\r' vira 2 linhas. A cópia da Baia sempre usa LF.
+  - Testes: nenhum específico para CR sozinho
+- **ENT-F15** · EOF do DOS — `security_gatekeeper.py; etl_inputs.py` › `_CONTROLES_DE_TEXTO; _csv_input` › linhas security_gatekeeper.py 134; etl_inputs.py 148-187
+  - O byte 0x1A no fim é aceito pela Baia (\_CONTROLES_DE_TEXTO) e fica na última célula. Medido: o valor lido é '1\x1a', e \_parse_valor e converter_valor_monetario devolvem 1.0.
+  - Testes: tests/test_security_gatekeeper.py::AssinaturaTests.test_formatos_verdadeiros_passam_e_dizem_como_ler (265)
+- **ENT-F16** · nulos: CSV x XLSX — `etl_inputs.py` › `STR_NA_VALUES; _filled; _xlsx_input; _csv_input` › linhas 21; 520-527; 591; 183
+  - Os nulos são tratados de forma diferente. No CSV não há conversão: 'NA', 'NULL', 'None' e 'nan' continuam texto, o vazio é '' e só o preenchimento à direita é None. No XLSX valem os STR_NA_VALUES do pandas 3.0.3: '', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan', '1.#IND', '1.#QNAN', '&lt;NA>', 'N/A', 'NA', 'NULL', 'NaN', 'None', 'n/a', 'nan' e 'null' viram NaN. Um produto chamado 'NA' ou 'None' some no XLSX e fica no CSV.
+  - Testes: fixtures 'xlsx_cell_conversion' e 'csv_empty_string_padding' (tests/etl_equivalence_support.py 195-206) em test_raw_input_matrices_preserve_values_and_missing_cells (113-122)
+- **ENT-F17** · tipos de dado da matriz — `etl_inputs.py; security_gatekeeper.py` › `_csv_input; _xlsx_input; neutralizar_matriz` › linhas etl_inputs.py 184-186, 591-595; security_gatekeeper.py 376-378
+  - A matriz do CSV tem dtype object (texto, '' e None) e attrs {'format','separator','encoding','celulas_neutralizadas'}. A do XLSX tem dtype 'str' do pandas 3, com ausente = float NaN, e attrs só {'celulas_neutralizadas'}: sem formato, sem aba escolhida. Medido com read_raw.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_toda_leitura_do_motor_sai_neutralizada (attrs, 605-611)
+- **ENT-F18** · tipos de célula XLSX convertidos em texto — `etl_inputs.py` › `_xlsx_input (pd.read_excel dtype=str)` › linhas 591
+  - Medido com read_raw: inteiro 1234 vira '1234'; 1.0 vira '1'; 1234.5 vira '1234.5', mesmo com formato 'R$ #,##0.00' (formato de exibição ignorado); 0.15 formatado como % vira '0.15'; 1e20 vira '100000000000000000000'; uma data vira '2026-01-02 00:00:00' e uma data-hora '2026-01-02 03:04:05'; booleano vira 'True' ou 'False'; o texto '007' fica '007'; 12.125 numérico vira '12.1250' (ENT-R12); erro vira NaN; '' vira NaN. Datas saem em ISO, não dd/mm/aaaa.
+  - Testes: fixture 'xlsx_cell_conversion' (tests/etl_equivalence_support.py 195-201)
+- **ENT-F19** · fórmulas XLSX — `etl_inputs.py` › `_xlsx_input` › linhas 550; 591
+  - Vale o valor em cache gravado pelo Excel (data_only=True). Fórmula sem cache vira NaN. A Baia nunca libera o original com fórmula: a cópia leva o valor (ENT-C12, ENT-C14).
+  - Testes: tests/test_etl_financial_equivalence.py::test_xlsx_cached_formulas_and_na_strings (102-103); tests/test_security_gatekeeper.py::TriagemTests.test_formula_do_xlsx_sai_e_fica_o_valor (380-394)
+- **ENT-F20** · várias abas, capa e abas ocultas — `etl_inputs.py` › `_xlsx_input` › linhas 551-582; 389-392
+  - Só uma aba é lida: a de mais células preenchidas, oculta inclusive, com empate para a primeira. Um XLSX de 3 anos com uma aba por ano ou por mês perde todas as outras abas sem aviso. Medido: com '2022', '2023' e '2024', só '2023' foi lida. O orçamento de células, porém, soma todas as abas (1.000.000 por arquivo).
+  - Testes: tests/test_etl_resource_limits.py::test_xlsx_cover_and_tie_select_first_maximum_sheet (192-194), test_xlsx_cumulative_cells_include_all_sheets (223-225)
+- **ENT-F21** · conteúdo ativo XLSX — `security_gatekeeper.py` › `inventariar_xlsx; _escrever_xlsx` › linhas 480-510; 626-658
+  - Macros VBA ou XLM, ActiveX, OLE, vínculos externos e DDE, conexões, customUI, controles, complementos web, nomes definidos e qualquer parte fora da lista passiva fazem a Baia gravar a cópia só com valores: uma aba 'Dados' e 6 partes. O motor em si nunca executa nada (keep_links=False, data_only=True).
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests (396-465)
+- **ENT-F22** · ZIP malformado ou perigoso — `etl_inputs.py` › `_zip_preflight; _stream_member; _MaybeXML; _XMLCheck` › linhas 190-517
+  - São recusados: XLSX criptografado, compressão BZIP2 ou LZMA, entradas duplicadas, caminhos com '..' ou absolutos, links simbólicos, bomba de compressão (razão acima de 200 ou mais de 32 MiB expandidos), CRC ou tamanhos forjados, truncamento e DTD ou entidades (também em parte renomeada ou em UTF-16 com BOM dividido). Os códigos são 'xlsx_zip', 'zip_entries', 'zip_ratio', 'uncompressed_bytes' e 'xlsx_xml'.
+  - Testes: tests/test_etl_resource_limits.py 232-372, 393-405
+- **ENT-F23** · nome do arquivo — `blueprints/cliente.py; raio_x_servico.py` › `upload; processar_envio` › linhas cliente.py 657-658; raio_x_servico.py 86-91
+  - secure_filename (Werkzeug 3.1.9) define a extensão. Medido: 'relatório março.CSV' vira 'relatorio_marco.CSV' (ext 'csv'); '../../etc/passwd.csv' vira 'etc_passwd.csv'; um nome só com caracteres não ASCII perde a extensão ('关系.csv' vira 'csv', ext '') e é recusado; 'vendas.csv.exe' fica com ext 'exe'. No Raio-X, um nome vazio vira 'arquivo-N', e o arquivo em disco sempre se chama 'arquivo.&lt;ext>' ou 'arquivo_NN.&lt;ext>'.
+  - Testes: tests/test_etl_upload_security.py::test_invalid_extension_does_not_persist_for_either_role (181)
+- **ENT-F24** · tipos de relatório — `blueprints/cliente.py; security_gatekeeper.py` › `upload; exigir_estrutura_minima` › linhas cliente.py 649-652; security_gatekeeper.py 522-533
+  - O portal recebe VENDAS ou COMPRAS, um de cada por análise (UNIQUE em models.py 391), e o cálculo exige os dois. O Raio-X recebe só relatórios de vendas por produto, até 36. A camada de entrada não interpreta cabeçalhos: o mapeamento de colunas (ALIAS_VENDAS e ALIAS_COMPRAS em etl_processor.py 359-414, \_detectar_cabecalho em 437-490) é de outro recorte e só é tocado aqui pela estrutura mínima da Baia.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_estrutura_minima_de_relatorio_de_pdv (558-571)
+
+### Desempenho e limites (A.1)
+
+- **ENT-D01** · orçamentos padrão — `etl_limits.py` › `ETLLimits; _HARD_CAPS` › linhas 9-52
+  - Valem por arquivo e por chamada ao leitor: 20 MiB, 16 abas, 256 entradas ZIP, 32 MiB expandidos, razão 200, 100.000 linhas, 128 colunas, 500.000 células por aba (no CSV também é o teto do arquivo), 1.000.000 por XLSX somando todas as abas, campo de 16.384 e registro de 131.072 caracteres. Os tetos configuráveis estão em \_HARD_CAPS.
+  - Testes: tests/test_etl_runtime_limits.py::ETLLimitConfigurationTests (23-86)
+- **ENT-D02** · teto por requisição x por arquivo — `security_gatekeeper.py; config.py` › `teto_bytes; Config.MAX_CONTENT_LENGTH` › linhas security_gatekeeper.py 61, 104-106; config.py 227-229
+  - O teto por arquivo é min(max_file_bytes, 50 MiB) = 20 MiB, mas o MAX_CONTENT_LENGTH de 20 MiB vale para a requisição inteira. No Raio-X, os 36 meses precisam somar menos de 20 MiB, cerca de 555 KB por mês em média. Medido aqui: um CSV cp1252 de 180 mil células tem 1,39 MB; um XLSX de 180 mil células, 0,82 MB.
+  - Testes: tests/test_security_gatekeeper.py::TetoTests.test_teto_e_o_menor_entre_o_etl_e_cinquenta_mib (618-621)
+- **ENT-D03** · concorrência — `etl_uploads.py; etl_runtime.py; render.yaml` › `_UPLOAD_ADMISSION; _ADMISSION; startCommand` › linhas etl_uploads.py 19; etl_runtime.py 17; render.yaml 21
+  - Há uma vaga de upload, processamento ou Raio-X por processo e um filho por processo, e o servidor roda com gunicorn -w 1 --threads 50 --timeout 180. Na prática, um envio ou cálculo por vez no servidor inteiro: um Raio-X de até 120 s bloqueia uploads e processamentos de todos os clientes nesse intervalo. O multipart é interpretado (e o CSRF lido) antes da vaga, conforme Docs/RELATORIO_NEXO_SEC005_ETL_SEGURO.md 149-150 e 369-370.
+  - Testes: tests/test_etl_upload_security.py::test_busy_admission_rejects_post_without_validation_but_keeps_get_available (231)
+- **ENT-D04** · prazos — `etl_runtime.py; etl_worker.py` › `run_validation; run_raio_x; run_calculation; main` › linhas etl_runtime.py 106-146; etl_worker.py 26-27
+  - 'calculate' tem 60 s; 'validate' e 'raio_x' têm min(120, 2 x 60) = 120 s. O RLIMIT_CPU do filho é igual ao prazo, e o gunicorn tem 180 s. No Raio-X, os 120 s valem para os até 36 arquivos juntos.
+  - Testes: tests/test_etl_runtime_limits.py::test_timeout_terminates_and_reaps_the_owned_child_before_returning (128-134)
+- **ENT-D05** · memória e plataforma — `etl_worker.py` › `main` › linhas 24-33
+  - O filho tem RLIMIT_AS de 384 MiB (espaço virtual, não RSS; só os imports ocupam cerca de 176 MiB, segundo Docs/RELATORIO_NEXO_SEC005_ETL_SEGURO.md 88-89), RLIMIT_CORE 0 e RLIMIT_FSIZE limitado. Sem o módulo resource, como neste Windows, o worker devolve 'platform' e nenhuma operação isolada roda. Por isso os testes do portal emulam o worker no próprio processo.
+  - Testes: tests/test_etl_runtime_limits.py::test_reduced_real_address_space_budget_fails_closed_without_large_fixture (236-245, POSIX)
+- **ENT-D06** · passagens no CSV — `etl_inputs.py` › `_csv_input; _csv_pass` › linhas 104-187
+  - Cada chamada (validate_input ou read_raw) faz até 4 passagens completas para detectar o separador e mais 1 final. Medido com um espião em open(): UTF-8 dá 6 aberturas (1 binária de assinatura + 5 de texto); latin1, com 3 codificações falhando cedo, dá 9. Tempo medido neste PC, CSV cp1252 de 6 colunas: com 180 mil células (1,39 MB), validate_input 0,53 s e read_raw 0,87 s; com 500 mil células (3,88 MB), 1,55 s e 2,40 s; com 500 mil células e um byte 0x81 na última linha (cai para latin1), 1,77 s e 2,52 s.
+  - Testes: tests/test_etl_resource_limits.py::test_csv_validation_does_not_allocate_dataframe (173-176)
+- **ENT-D07** · interpretações no XLSX — `etl_inputs.py` › `_zip_preflight; _xlsx_input; _disambiguate_numbers` › linhas 479-598
+  - Cada read_raw interpreta o XLSX 3 vezes (expat no preflight, varredura openpyxl de todas as abas e pd.read_excel da vencedora), ou 4 quando há número com cara de milhar (segundo read_excel com dtype=object). Medido neste PC com 30.001 x 6 = 180 mil células (0,82 MB): validate_input 5,31 s; read_raw 8,70 s, dos quais 3,09 s no pandas; com 30 mil valores 12.125, read_raw 13,86 s, com dois read_excel de 3,24 s e 3,06 s. Medições anteriores informadas no pedido, XLSX de 450 mil células: validação antiga 16,8 s, read_raw 31 s, triagem com cópia cerca de 63 s.
+  - Testes: tests/test_etl_resource_limits.py::test_xlsx_only_winner_is_materialized_by_pandas (196-202); tests/test_etl_regras_financeiras.py::test_excel_sem_valor_ambiguo_e_lido_uma_vez_so (149-154)
+- **ENT-D08** · Raio-X: entrada em dobro — `etl_worker.py; raio_x.py` › `main (op raio_x); _ler_arquivo` › linhas etl_worker.py 61-69; raio_x.py 154-165
+  - O worker 'raio_x' roda validate_input em todos os arquivos e depois read_raw em cada um, via \_ler_bruto, então cada arquivo passa duas vezes pela validação completa. Estimativa a partir das medições locais, só para a entrada (sem o cálculo do Raio-X): um XLSX de 180 mil células custa cerca de 14 a 19 s, o que dá no máximo 6 a 8 arquivos desse porte em 120 s, ou cerca de 1,5 milhão de células de XLSX por envio (perto de 40 mil por mês em 36 meses). Um CSV de 180 mil células custa cerca de 1,4 s, e aí o limite que pesa é o de 20 MiB por requisição (ENT-D02). A CPU do Render é outra.
+  - Testes: nenhum de desempenho
+- **ENT-D09** · cálculo: releitura — `etl_processor.py` › `_calcular_kpis_local; _detectar_periodo_arquivo` › linhas 773-778; 899-900; 941
+  - \_calcular_kpis_local lê vendas e compras e, para achar o período, relê o arquivo de vendas inteiro (e o de compras, se vendas não tiver período). O Raio-X reaproveita a matriz.
+  - Testes: nenhum
+- **ENT-D10** · triagem do upload — `security_gatekeeper.py; etl_runtime.py` › `triar; _liberar_copia; run_validation` › linhas security_gatekeeper.py 690-758; etl_runtime.py 106-114
+  - triar roda read_raw, o inventário (expat sobre todas as partes do XLSX) e, se houver cópia, grava a cópia e roda read_raw dela de novo, com até 16 tentativas no CSV. Por isso o prazo é dobrado. Medições já feitas, informadas no pedido: CSV no limite de 500 mil células, read_raw + neutralização 1,5 s e triagem 4,5 s; XLSX de 450 mil células, cerca de 63 s.
+  - Testes: tests/test_security_gatekeeper.py::TriagemTests.test_copia_csv_perto_do_teto_cresce_so_pelos_apostrofos (497-509)
+- **ENT-D11** · memória do leitor — `etl_inputs.py; security_gatekeeper.py` › `_csv_input; neutralizar_matriz` › linhas etl_inputs.py 128-129, 183-186; security_gatekeeper.py 366-376
+  - O \_csv_input mantém ao mesmo tempo a lista de linhas, o retângulo e o DataFrame object, e o \_trim e o neutralizar_matriz (tolist por coluna) criam cópias. Medido com tracemalloc: CSV de 500 mil células, 26,5 MiB retidos e pico de 49,4 MiB; XLSX de 180 mil células, 10,3 MiB e 24,6 MiB. No Raio-X a matriz de cada arquivo é liberada depois de agregada, e o que acumula entre arquivos são só os agregados por produto (pd.concat em raio_x.py 409).
+  - Testes: nenhum de memória fora do worker POSIX
+- **ENT-D12** · protocolo do filho — `etl_runtime.py; etl_worker.py` › `_run_job; main` › linhas etl_runtime.py 57-77; etl_worker.py 10-11, 93-97
+  - O pedido JSON tem até 16 KiB (os caminhos dos 36 arquivos cabem). O resultado tem até 4 MiB (max_output_bytes) e é recusado inteiro se passar disso ('output'). Não há pickle.
+  - Testes: tests/test_etl_runtime_limits.py::test_oversized_result_is_rejected_before_unbounded_materialization (171-174)
+- **ENT-D13** · orçamento distorcido — `etl_inputs.py` › `_csv_pass` › linhas 115-123
+  - No UTF-16 com CRLF, as linhas e células contadas dobram (ENT-F11): o teto efetivo cai para cerca de 50 mil linhas lógicas e 250 mil células. Linhas em branco e o preenchimento do retângulo também contam no orçamento de células do CSV (rows x maior número de colunas).
+  - Testes: tests/test_etl_resource_limits.py::test_csv_padding_is_included_in_cell_budget (113-115); UTF-16: nenhum
+- **ENT-D14** · memória do processo pai — `etl_uploads.py; storage.py` › `ler_upload_validado; materializar_para_etl` › linhas etl_uploads.py 79-95; storage.py 175-214
+  - O upload fica inteiro na memória (bytearray de até 20 MiB, mais os bytes da cópia) e entra no banco como BYTEA na transação. No processamento, o BYTEA é carregado inteiro (até 20 MiB) antes de ir para o arquivo temporário e é solto antes do cálculo.
+  - Testes: tests/test_etl_upload_security.py::ETLStorageMaterializationTests (316-417)
+- **ENT-D15** · sem processamento em lote — `etl_inputs.py; etl_runtime.py` › `read_raw; _run_job` › linhas etl_inputs.py 625-633; etl_runtime.py 44-103
+  - Não há leitura em blocos para o cálculo (o read_raw materializa a aba ou o CSV inteiro, dentro dos limites), nem fila, assíncrono ou paralelismo: cada operação roda síncrona na requisição, com um filho por vez. O único lote é o Raio-X, com até 36 arquivos em sequência no mesmo filho.
+  - Testes: nenhum
+- **ENT-D16** · limites de taxa — `blueprints/cliente.py; blueprints/onboarding.py` › `upload; limite_raio_x` › linhas cliente.py 612; onboarding.py 39
+  - O cliente tem 30 POST/hora por usuário no upload, e o Raio-X 10 envios/hora por usuário, somando página e API. O upload do consultor não tem limite de taxa.
+  - Testes: tests/test_planos_raio_x.py::RaioXPortalTests (577-744)
+- **ENT-D17** · dependência frágil — `etl_inputs.py` › `STR_NA_VALUES` › linhas 21
+  - STR_NA_VALUES é importado de um módulo privado do pandas (pandas.io.parsers.base_parser), com pandas fixado em 3.0.3 e openpyxl em 3.1.5 no requirements.txt (13-14). Uma atualização do pandas pode quebrar o import ou mudar a contagem da escolha de aba.
+  - Testes: tests/test_etl_financial_equivalence.py (fixture 'xlsx_na_count_selection')
+
+## A.2 Cálculo da análise (KPIs, Curva ABC e trava do PDV)
+
+`etl_processor.py` e consumidores: cabeçalho, limpeza, números, situação, período, KPIs, alertas, persistência e trava do total do PDV.
+
+### Componentes (A.2)
+
+- **CMP-01** · contrato do motor — `etl_processor.py` › `docstring do módulo (Motor ETL UNIVERSAL v3)` › linhas 1-40
+  - Declara as 4 camadas: leitura crua, detecção de cabeçalho, DataFrame canônico e filtro de lixo. Também declara as regras inegociáveis (linhas 22-35): (1) DataFrames só em memória e só os KPIs finais são persistidos; (2) o descasamento se chama 'Indicador de Pressão de Estoque'; (3) 'Lucro' e 'Total Custo' são detectados e descartados dos KPIs, e o custo só gera o alerta 'venda abaixo do custo informado pelo PDV'; (4) a margem do Raio-X é outro produto e não entra em KPI, PDF nem devolutiva; (5) falha nunca vira dado falso; (6) o motor nunca grava CONCLUIDO. Assinatura declarada imutável: processar_arquivos_analise(caminho_vendas, caminho_compras, id_analise, db_session) -> ResultadoETL (linhas 37-39). Divergência interna: a linha 13 diz 'varre as primeiras 60 linhas', mas \_detectar_cabecalho usa janela=100 (linha 438).
+  - Testes: tests/test_etl_financial_equivalence.py 25-122 (22 pares sintéticos comparados ao golden tests/fixtures/sec005_financial_expected.json) · Origem: fc63708 (2026-10-19), o snapshot mais antigo com o motor; o histórico anterior não está no git. As linhas 31-32 vieram em ec4ba95 e a 35 em bba0971.
+- **CMP-02** · contrato de saída — `etl_processor.py` › `ResultadoETL` › linhas 63-65
+  - namedtuple(sucesso, mensagem, kpis, telemetria, alertas). O worker serializa esse envelope com \_asdict (etl_worker.py 59-60). O processo pai o revalida em etl_runtime.run_calculation (131-146): exige o conjunto exato de campos, sucesso True, kpis e telemetria como dict, alertas como list, e reconverte periodo_base_inicio/fim com date.fromisoformat. Exemplo: ResultadoETL(True, 'Cálculo concluído em memória.', {12 chaves}, {telemetria}, [alertas]).
+  - Testes: tests/test_etl_runtime_limits.py 247-262 (test_calculation_restores_dates_and_rejects_incomplete_payloads) · Origem: fc63708; validação no pai em 2da719b
+- **CMP-03** · erros — `etl_processor.py` › `ETLValidationError` › linhas 80-84
+  - Subclasse de etl_inputs.ETLInputError (etl_inputs.py 33-39), com code='data' por padrão. É usada em todas as recusas de dado: cabeçalho não encontrado (481-486), arquivo vazio (633, 693), cabeçalho sem dados abaixo (513), coluna-chave ausente (530), todas as linhas canceladas (589-591), nenhum produto válido (674-676), nenhuma coluna de valor (657-659, 718-721) e nada para agregar (913). Em produção, o worker troca toda mensagem de code 'data' por 'Não foi possível identificar os dados essenciais. Revise as colunas de vendas e compras.' (etl_worker.py 79-80). O diagnóstico 'Colunas reconhecidas: ...' nunca chega ao consultor.
+  - Testes: tests/test_etl_regras_financeiras.py 230-232 (todas canceladas) · Origem: Tipo em fc63708; herança de ETLInputError em 2da719b
+- **CMP-04** · leitura (ponte para outro recorte) — `etl_processor.py` › `_ler_bruto` › linhas 342-347
+  - Chama etl_inputs.read_raw(caminho, get_limits()) (etl_inputs.py 625-633) e converte ETLInputError em ETLValidationError com o mesmo code. A matriz que chega ao cálculo é um DataFrame sem cabeçalho, com estas características: (a) células str ou None no CSV (etl_inputs 183-184); (b) str ou NaN no XLSX, lido com pd.read_excel dtype=str (591); (c) linhas e colunas 100% vazias removidas por \_trim (74-78); (d) número do Excel com cara de milhar ganha um zero, por exemplo 12.125 vira '12.1250' (\_disambiguate_numbers 530-545); (e) células neutralizadas contra fórmula, por exemplo '-2 un(s)' vira apóstrofo + '-2 un(s)' (security_gatekeeper.neutralizar_matriz 359+).
+  - Testes: tests/test_etl_financial_equivalence.py 113-122; tests/test_etl_regras_financeiras.py 139-154 · Origem: 2da719b (SEC-005), que substituiu o leitor próprio de fc63708
+- **CMP-05** · isolamento de execução — `etl_processor.py; etl_runtime.py; etl_worker.py` › `calcular_kpis_em_memoria -> run_calculation -> _run_job -> main('calculate')` › linhas etl_processor 887-893; etl_runtime 44-103 e 131-146; etl_worker 8-100 (calculate 57-60)
+  - O cálculo roda num subprocesso 'python -I -B etl_worker.py request.json result.json', sem banco e sem rede. O worker aplica RLIMIT_AS=memory_mb, RLIMIT_CPU=timeout_seconds, RLIMIT_FSIZE e RLIMIT_CORE=0 (24-33). Um audit hook recusa socket, subprocess, exec, spawn e fork (38-47). O resultado sai em JSON com allow_nan=False e datas em ISO (88-97). Só há 1 job por processo (etl_runtime.\_ADMISSION, linhas 17 e 49-50). A operação 'calculate' exige exatamente 2 caminhos (etl_worker 57). No Windows não existe o módulo resource, e o worker responde code 'platform' (30-33). Por isso os testes de regra chamam \_calcular_kpis_local direto.
+  - Testes: tests/test_etl_runtime_limits.py 128-290; tests/test_etl_regras_financeiras.py 3-4 (motivo de chamar o local) · Origem: 2da719b
+- **CMP-06** · núcleo de cálculo — `etl_processor.py` › `_calcular_kpis_local` › linhas 896-1058
+  - Carrega VENDAS (899) e COMPRAS (900) e agrega por produto (903-913). Calcula faturamento (914), mais vendido (916-919), maior faturamento (921-935), Curva ABC (938), período (941-943), total comprado (946), Pressão de Estoque (949) e saldo parado (953-983). Monta a telemetria (985-1032) e os alertas (951-1033) e devolve ResultadoETL (1052-1058) sem tocar no banco.
+  - Testes: tests/test_etl_regras_financeiras.py (todas as classes); tests/test_etl_financial_equivalence.py · Origem: fc63708; telemetria de situação e qualidade em 0ac01c8
+- **CMP-07** · limpeza de VENDAS — `etl_processor.py` › `carregar_vendas / _vendas_do_bruto` › linhas 625-626 / 629-681
+  - Pipeline de VENDAS a partir da matriz crua, nesta ordem: detecção de cabeçalho (635); títulos normalizados de cada canônico em df.attrs['cabecalhos'] (638-639, 680); DataFrame canônico (640); texto de situação da linha (641-643); filtro de lixo pela coluna produto (644); quantidade (648); valor (649-659); custo (660-661); estoque (662-663); descarte de 'lucro' (666-667); chave \_prod_norm e descarte de não-produtos (669-676); cancelamentos e devoluções (677-678); contadores de qualidade em df.attrs['qualidade'] (679). \_vendas_do_bruto recebe a matriz já lida, e por isso o Raio-X a reaproveita (raio_x.py 57-60 e 157-160). É hoje o principal ponto de reuso do motor.
+  - Testes: tests/test_etl_regras_financeiras.py 97-247; golden · Origem: carregar_vendas em fc63708; divisão em \_vendas_do_bruto e attrs['cabecalhos'] em ec4ba95
+- **CMP-08** · limpeza de COMPRAS — `etl_processor.py` › `carregar_compras` › linhas 684-729
+  - Lê o arquivo internamente: não existe versão '\_do_bruto' para compras. Passos: detecção com ALIAS_COMPRAS e \_validar_compras (695); DataFrame canônico (696); filtro pela chave 'fornecedor' ou, se não houver, 'produto' (697-700); coluna de valor com prioridade produtos_total > valor_nf > qtde_comprada x custo_unitario (702-721); descarte de linhas com valor <= 0 (722); quantidade comprada (724-725); chave de produto (726-727). Devolve (df, coluna_valor), com coluna_valor em {produtos_total, valor_nf, valor_total_compra}. Não aplica situação (cancelamento/devolução) nem \_NAO_PRODUTOS.
+  - Testes: tests/test_etl_regras_financeiras.py 134-137; golden c1, c2, c3, c4 e purchase_products_total_priority · Origem: fc63708; conversão monetária em 0ac01c8
+- **CMP-09** · Curva ABC — `etl_processor.py` › `_classificar_curva_abc (+ ABC_LIMITE_A/ABC_LIMITE_B)` › linhas 784-845 (+67-72)
+  - Recebe o agrupado por produto (\_prod_norm, qtde, fat, nome) e devolve {'produtos': [posicao, nome, faturamento, quantidade, perc_individual, perc_acumulado, classe], 'resumo': [por classe]} com TODOS os produtos. As regras detalhadas estão em R-34 a R-38.
+  - Testes: tests/test_etl_regras_financeiras.py 250-340 (CurvaAbcTests) e 343-402 (GravacaoDaCurvaTests) · Origem: Em fc63708 era top 20 só com positivos; reescrita em 0ac01c8
+- **CMP-10** · alertas — `etl_processor.py` › `_alertas_de_valores` › linhas 848-881
+  - Gera os alertas de revisão humana: valores inválidos, lidos como milhar, lidos como decimal, linhas canceladas e devolvidas, ABC com negativos e ABC não calculada. Os alertas de estoque negativo, venda abaixo do custo e limitação de compras NF ficam em \_calcular_kpis_local (977-1022). Os textos estão em R-39 a R-42.
+  - Testes: tests/test_etl_regras_financeiras.py 102-127, 160-180, 296-312 · Origem: 0ac01c8 (os três alertas antigos vêm de fc63708)
+- **CMP-11** · trava do total do PDV (regra pura) — `etl_processor.py` › `TOLERANCIA_PDV, STATUS_PDV_CONCLUIDO, STATUS_PDV_DIVERGENTE, em_centavos, validar_total_pdv, faturamento_bruto, conferir_total_pdv` › linhas 74-77, 1064-1102
+  - Comparação em Decimal, ao centavo, do faturamento bruto calculado com o total digitado. Roda no processo pai, depois do worker: o valor digitado nunca entra no subprocesso (1096-1099). Detalhes em R-45 a R-47.
+  - Testes: tests/test_trava_pdv.py 39-78 (RegraDaConferenciaTests) · Origem: bba0971 (2026-11-02)
+- **CMP-12** · persistência e orquestração — `etl_processor.py` › `_persistir_indicadores, _persistir_curva_abc, processar_arquivos_analise` › linhas 1108-1131, 1134-1159, 1162-1187
+  - Grava só KPIs finais (indicador_analise) e a Curva ABC inteira (produto_curva_abc) num SAVEPOINT. Não faz commit (quem controla a transação é a rota) e não grava linhas processadas. Detalhes em R-52 a R-54.
+  - Testes: tests/test_etl_regras_financeiras.py 343-390; tests/postgresql_etl_resource_security.py 190-265 · Origem: fc63708; SAVEPOINT em 2da719b; inserção em lote em 0ac01c8
+- **CMP-13** · trava do total do PDV (banco) — `validacao_pdv.py` › `módulo inteiro (interpretar_valor_digitado, registrar_valor_informado, conferir_e_registrar, motivo_bloqueio_publicacao, conferencia_em_aberto, esquema_validacao_pdv_disponivel, divergentes, por_analise, obter, referencia, informado_pelo_cliente)` › linhas 1-200
+  - Camada que lê o total digitado, grava a tabela validacao_pdv e decide os bloqueios de publicação e da geração por IA. Importa os modelos, por isso nunca é carregada no subprocesso do ETL (docstring 3-5). Detalhes em R-48 a R-51.
+  - Testes: tests/test_trava_pdv.py (39-805); tests/test_trava_pdv_postgresql.py 78+ · Origem: bba0971
+- **CMP-14** · rota de processamento — `blueprints/admin.py` › `processar_analise (POST /admin/analise/<id>/processar)` › linhas 1389-1478
+  - Rota com @admin_required e @limitar_processamento. Trava a Analise com FOR UPDATE, materializa os dois arquivos, chama processar_arquivos_analise, marca os uploads, roda a conferência do PDV na mesma transação, faz commit, notifica o cliente e renderiza admin/processar_resultado.html. É a única rota que dispara o cálculo de produção. Passos em FLUXO 3-16.
+  - Testes: tests/postgresql_etl_resource_security.py 190-380; tests/test_etl_upload_security.py 253, 344, 392; tests/test_trava_pdv.py 250-490 · Origem: fc63708; lock e SAVEPOINT em 2da719b; conferência em bba0971
+- **CMP-15** · captura do total do PDV — `blueprints/admin.py; blueprints/cliente.py` › `admin.analise_upload, admin.corrigir_total_pdv, cliente.upload` › linhas admin 971-1062 (total em 1007-1010 e 1046-1047), admin 1070-1103; cliente 609-731 (total em 664-667 e 705-706)
+  - Só o envio de VENDAS pede e valida o total, antes de ler o arquivo (interpretar_valor_digitado), e o grava como PENDENTE. A correção do total pelo consultor (POST /admin/analise/&lt;id>/total-pdv) exige VENDAS enviada e análise não publicada. COMPRAS não mexe na conferência.
+  - Testes: tests/test_trava_pdv.py 492-629 · Origem: bba0971
+- **CMP-16** · publicação — `blueprints/admin.py` › `analise_relatorio` › linhas 1138-1306 (gerar_ia 1176-1184; trava 1232-1249; CONCLUIDO 1276-1306)
+  - Único ponto que grava status_analise='CONCLUIDO' (1306). Antes, relê motivo_bloqueio_publicacao sob o lock da análise (1232-1249). A geração por IA é recusada enquanto conferencia_em_aberto (1180-1184), porque os números sob suspeita não saem para o provedor.
+  - Testes: tests/test_trava_pdv.py 316-376 e 412-416 · Origem: fc63708 (publicação); trava em bba0971
+- **CMP-17** · tela do resultado — `templates/admin/processar_resultado.html` › `template` › linhas 1-121
+  - Única tela que mostra o resultado completo do cálculo: card de divergência ou conferência (20-46), 6 KPIs (48-78), parte da telemetria (linhas de vendas e compras, saldo PDV negativo e taxa; 80-99) e a lista de alertas num alert com data-auto-dismiss-ms='9000' (105-115), que some em 9 s. Telemetria e alertas não ficam gravados em lugar nenhum.
+  - Testes: tests/test_trava_pdv.py 339-358 (aviso sem conferência) · Origem: fc63708
+- **CMP-18** · consumo: semáforos — `insights.py` › `PRESSAO_CRITICA, PRESSAO_ATENCAO, _f, gerar_semaforos` › linhas 27-28, 31-36, 39-114
+  - Transforma IndicadorAnalise e ProdutoCurvaABC em até 3 cards (critico, atencao ou oportunidade) com 'o que fazer' e 'por que'. Não usa telemetria nem alertas. Regras em R-58.
+  - Testes: Indiretos: tests/test_pdf_export_security.py 359 e tests/test_pdf_export_horario.py 344 fazem patch dele; nenhum teste unitário dos limiares encontrado · Origem: fc63708
+- **CMP-19** · consumo: PDF — `pdf_export.py` › `TOP_N_PDF, _kpis_flowable, _abc_flowable, calcular_distribuicao, gerar_pdf_analise` › linhas 84, 398-423, 426-466, 489-567, 849-927
+  - O PDF usa só faturamento_total, total_comprado e saldo_estimado_compras_vendas (399-400), a Curva ABC Top 5 (84, 445, 507, 873) com pizza de participação, os semáforos e o texto publicado. O período impresso é o declarado da análise (874-876), e não periodo_base. Regras em R-59.
+  - Testes: tests/test_pdf_export_security.py; tests/test_pdf_export_layout.py; tests/test_pdf_export_horario.py; tests/test_etl_regras_financeiras.py 392-402 · Origem: fc63708 e ajustes posteriores
+- **CMP-20** · consumo: devolutiva por IA — `ai_devolutiva.py` › `_montar_contexto, _dados_para_ia, _numeros_permitidos, gerar_devolutiva_ia` › linhas 111-136, 148-169, 181-210, 353+
+  - Monta o contexto com faturamento, compras, pressão, mais vendido (com quantidade), maior faturamento (com valor), quantidade e percentual da classe A, total de produtos e líder ABC com percentual. Nomes viram marcadores; a resposta só pode citar números do contexto. Não usa saldo parado, telemetria nem alertas; o período é o declarado (120). Regras em R-60.
+  - Testes: tests/test_ai_devolutiva_security.py · Origem: fc63708 (SEC-006 posterior)
+- **CMP-21** · consumo: painel do cliente — `blueprints/cliente.py; templates/cliente/dashboard.html; templates/cliente/analise.html; templates/admin/upload.html` › `_abc_chart, _historico_temporal, _auditoria, dashboard, analise, analise_pdf` › linhas cliente.py 119-134, 137-154, 157-177, 201-258, 512-552, 555-596; dashboard.html 102-131, 169, 412-413; analise.html 44-113, 134-139, 173-185; admin/upload.html 145-165
+  - O painel mostra os 9 KPIs escalares, o gráfico Compras x Vendas, o Pareto Top 10 (\_abc_chart limite=10), o histórico Vendas x Compras entre análises (só com 2 ou mais) e a auditoria de origem: período do cabeçalho, ou o declarado se o cabeçalho não tiver período. A tela da análise lista a Curva ABC inteira (analise.html 105). O cliente só vê análise CONCLUIDO publicada.
+  - Testes: tests/test_etl_regras_financeiras.py 392-402; tests/test_trava_pdv.py 631-756 · Origem: fc63708
+- **CMP-22** · consumo: contrato e exportação LGPD — `contract_policy.py; configuracoes_conta.py` › `periodo_analise; _analise_exportada` › linhas contract_policy 252-266; configuracoes_conta 346-383
+  - O período lido do cabeçalho (periodo_base_\*) amplia a janela que precisa estar paga para o cliente ver a análise (R-62). A exportação LGPD inclui todos os KPIs de indicador_analise e todas as linhas da Curva ABC.
+  - Testes: tests/test_contratos_prazos.py 152+ (test_periodo_real_da_base_amplia_o_exigido); tests/test_trava_pdv.py 751 (exportação sem a conferência) · Origem: fluxo contratual posterior a fc63708
+- **CMP-23** · modelos persistidos — `models.py` › `Analise, UploadRelatorio, IndicadorAnalise, ProdutoCurvaABC, ValidacaoPdv` › linhas 291-355, 361-398, 404-429, 540-577, 1141-1187
+  - Tabelas gravadas pelo fluxo de cálculo: indicador_analise (1:1, KPIs em Numeric sem precisão), produto_curva_abc (1:N, CHECK classe A/B/C, UNIQUE (id_analise, posicao_ranking)), validacao_pdv (1:1, CHECKs de status e de coerência) e, na rota, upload_relatorio.status_processamento e analise.status_analise. Os campos estão em R-52, R-53 e R-63.
+  - Testes: tests/test_trava_pdv.py 458-490 (restrições); tests/test_etl_regras_financeiras.py 343-390 · Origem: fc63708 (validacao_pdv em bba0971)
+- **CMP-24** · reuso do motor por outros módulos (ligação) — `security_gatekeeper.py; raio_x.py` › `exigir_estrutura_minima (_minimo_vendas, _minimo_compras); raio_x._ler_arquivo` › linhas security_gatekeeper 513-532; raio_x 57-60 e 154-195
+  - A Baia usa ALIAS_VENDAS, ALIAS_COMPRAS e \_detectar_cabecalho com validadores mais brandos: vendas = produto + (quantidade ou valor_venda ou preco_unitario). Um arquivo pode passar no envio e ser recusado no processamento, por exemplo 'Produto;Valor Total' sem quantidade. O Raio-X lê uma vez (\_ler_bruto) e tira da mesma matriz o período (\_extrair_periodo_base) e a limpeza (\_vendas_do_bruto). Também usa \_converter_serie_monetaria no preço de tabela, \_nome_exibivel, df.attrs['cabecalhos'] e a coluna \_devolucao.
+  - Testes: tests/test_security_gatekeeper.py; tests/test_planos_raio_x.py 132-138 · Origem: ec4ba95 (Raio-X) e 91e5fb0 (Baia)
+- **CMP-25** · concorrência — `etl_uploads.py; etl_runtime.py` › `_UPLOAD_ADMISSION, _limitar_entrada, limitar_processamento; _ADMISSION` › linhas etl_uploads 19, 22-37, 56-58; etl_runtime 17, 49-50
+  - São dois semáforos de vaga única por processo. O primeiro cobre upload e processamento HTTP; ocupado, mostra 'Há outro upload ou processamento em andamento' e volta ao admin.dashboard. O segundo cobre o job do worker; ocupado, gera ETLInputError 'busy'. Com gunicorn -w 1, o servidor inteiro processa um arquivo por vez.
+  - Testes: tests/test_etl_upload_security.py 253; tests/test_etl_runtime_limits.py 218 · Origem: 2da719b
+- **CMP-26** · código morto/legado — `etl_processor.py` › `import csv, import io, ENCODINGS, SEPARADORES, _trim_vazios` › linhas 44-45, 88-89, 328-339
+  - Nada disso é usado no módulo nem fora dele (grep confirma). São restos do leitor removido em 2da719b. A leitura real usa etl_inputs.ENCODINGS/SEPARATORS (26-27) e etl_inputs.\_trim (74-78). Docs/RELATORIO_COBERTURA_ETL.md 25-26 ainda cita \_trim_vazios como defesa ativa.
+  - Testes: nenhum · Origem: fc63708; ficou órfão em 2da719b
+- **CMP-27** · ferramentas manuais — `test_etl.py; tools/measure_etl_resources.py` › `rodar_teste; script de medição` › linhas test_etl.py 1-90; tools/measure_etl_resources.py 1-60
+  - test_etl.py (raiz) não é teste automatizado. É um script de linha de comando que chama calcular_kpis_em_memoria e imprime colunas, linhas e alertas. tools/measure_etl_resources.py mede leitura e cálculo em processo novo; importa resource, então só roda em Linux.
+  - Testes: não se aplica · Origem: fc63708 / 2da719b
+- **CMP-28** · testes que fixam o cálculo — `tests/` › `test_etl_regras_financeiras, test_etl_financial_equivalence + etl_equivalence_support + fixtures/sec005_financial_expected.json, test_trava_pdv(+_postgresql), postgresql_etl_resource_security, test_complementary_hardening_security, test_security_gatekeeper, test_etl_runtime_limits, test_contratos_prazos` › linhas regras 53-402; equivalência 25-122; suporte 74-188; trava 39-805
+  - O golden foi capturado do motor em ff14879 (2026-10-23, antes do SEC-005), com 22 pares sintéticos. Ele foi revisto uma vez, em sales_derived_mixed_money, para as regras de 11/2026 (docstring 7-9). Os testes de equivalência passam por calcular_kpis_em_memoria, que exige o worker: rodam no Linux e na CI. test_etl_regras_financeiras chama \_calcular_kpis_local e roda em qualquer sistema. Sem teste: \_CABECALHOS_REPETIDOS; palavras de \_PADRAO_LIXO além de 'total geral'; limiares de insights.
+  - Testes: (é a própria lista) · Origem: 2da719b, 0ac01c8, bba0971
+- **CMP-29** · documentação e base do chatbot — `Docs/RELATORIO_COBERTURA_ETL.md; Docs/TRAVA_TOTAL_PDV.md; nexobot/saber/indicadores.py; nexobot/saber/processamento.py; nexobot/saber/uploads.py` › `textos` › linhas RELATORIO_COBERTURA_ETL 1-113; TRAVA_TOTAL_PDV 1-58; indicadores.py 63 e 358-360; processamento.py 41
+  - Descrevem as regras para pessoas e para o NexoBot. TRAVA_TOTAL_PDV.md confere com o código. Há trechos desatualizados: RELATORIO_COBERTURA_ETL.md 25-26, 31 e 33; nexobot/saber/indicadores.py 63; pdf_export.py 560-563; Docs/REESTRUTURACAO_COMERCIAL/00_01_BASELINE_GITHUB.md 247, 411 e 657. Lista em observacoes.
+  - Testes: nenhum · Origem: vários
+
+### Regras (A.2)
+
+- **R-01** · normalização de cabeçalho — `etl_processor.py` › `_norm_chave` › linhas 102-117
+  - Remove BOM (U+FEFF), troca NBSP, quebras e TAB por espaço, tira acentos, põe em minúsculas, troca tudo fora de [a-z0-9 ] por espaço e colapsa espaços. É a base do casamento 'fragmento in chave'. Medido: 'Descrição do Produto' -> 'descricao do produto'; 'Qtde.' -> 'qtde'; 'Vr. Total' -> 'vr total'; 'id_produto' -> 'id produto'; 'Cód.' -> 'cod'. Como o espaço final é cortado, o fragmento 'cod ' nunca casa com um título só 'Cód.'.
+  - Testes: indiretos (golden); tests/test_planos_raio_x.py 132-138 · Origem: fc63708
+- **R-02** · normalização — `etl_processor.py` › `_strip_acentos` › linhas 95-99
+  - Decomposição NFKD e remoção dos diacríticos. Usada em \_norm_chave (114), \_normalizar_produto (122) e na busca de 'periodo' (761). Exemplo: 'Período' -> 'Periodo'.
+  - Testes: indiretos · Origem: fc63708
+- **R-03** · chave de agrupamento do produto — `etl_processor.py` › `_normalizar_produto` › linhas 120-125
+  - Produz MAIÚSCULAS sem acento; pontuação vira espaço; espaços colapsados. O groupby dos KPIs e da ABC usa só essa chave (904), nunca o código. Medido: 'Café Pilão 500g' e 'CAFE PILAO 500G' viram o mesmo produto ('CAFE PILAO 500G'), mas 'Café-Pilão 500 g' fica separado ('CAFE PILAO 500 G').
+  - Testes: golden explicit_total_normalization_alerts (Café sintético x Cafe sintetico); tests/test_security_gatekeeper.py 337-349 · Origem: fc63708
+- **R-04** · nome exibível — `etl_processor.py` › `LIMITE_NOME_PRODUTO, _nome_exibivel` › linhas 130, 133-139 (aplicado em 911 e 967)
+  - O nome mostrado é o PRIMEIRO nome original do grupo (agg 'first', 907), cortado em 200 caracteres e sem NUL. Não é a chave de agrupamento. Exemplo: 'Produto ' + NUL + 'X'\*400 + ' fim' -> 'Produto XXX...' com 200 caracteres. Coincide com descricao_produto String(200) de brainstorming_dados_pdv (models 1377).
+  - Testes: tests/test_complementary_hardening_security.py 71-82 · Origem: bd8cace (2026-10-29)
+- **R-05** · não-produtos — `etl_processor.py` › `_NAO_PRODUTOS (filtro em _vendas_do_bruto)` › linhas 146-150; 669-676
+  - Igualdade EXATA com o nome já normalizado: DESCONTO, DESCONTOS, ACRESCIMO, ACRESCIMOS, FRETE, TROCO, TAXA, TAXAS, JUROS, TOTAL, SUBTOTAL, TOTAL GERAL, ARREDONDAMENTO, ENTRADA, SANGRIA, SUPRIMENTO. Medido: 'Descontos:', 'Frete', 'Troco' e 'Acréscimo' saem; 'Taxa de entrega' e 'Serviço' ficam e entram no faturamento. Se não sobrar nenhum produto, gera ETLValidationError. Só vale para VENDAS.
+  - Testes: golden explicit_total_normalization_alerts (linha DESCONTOS) · Origem: fc63708
+- **R-06** · linhas-lixo / rodapé / marca d'água — `etl_processor.py` › `_PADRAO_LIXO, _filtrar_linhas_validas` › linhas 493-497; 524-535
+  - Na coluna-chave (produto em vendas; fornecedor ou, sem ele, produto em compras), descarta valor vazio, 'nan' ou 'none'. Também descarta texto que contenha, como palavra inteira (regex com \b, IGNORECASE, aplicada ao texto CRU, com acento), total geral, totais, subtotal, movimenta, labsofti, software, resumo, periodo, usuario, filtro, impresso ou pagina. Medido, com efeito colateral: produtos reais 'Filtro de Café 103', 'Software Antivírus', 'Papel Impresso A4' e 'Resumo de Ópera (livro)' SOMEM do faturamento. Rodapés acentuados 'Página 1 de 2', 'Usuário: fulano', 'Período: ...' e 'Movimentação do dia' NÃO casam e entram como produtos de R$ 0,00 no fim da Curva ABC. 'Pagina 2 de 2' e 'Usuario: x', sem acento, saem.
+  - Testes: Só 'TOTAL GERAL' (golden c1_hemorragia_nf e header_shifted_footer); nenhum teste para as outras palavras · Origem: fc63708
+- **R-07** · cabeçalho repetido (quebra de página) — `etl_processor.py` › `_CABECALHOS_REPETIDOS (uso em _filtrar_linhas_validas)` › linhas 501-505; 534
+  - Descarta a linha cuja coluna-chave, normalizada, é igual a um destes: codigo, produto, nome do produto, descricao, data, data emissao, data nf, fornecedor, valor nf, vr total, total nf. Medido: um 'Produto' repetido sai; 'Descrição do Produto' repetido NÃO sai ('descricao do produto' não está no conjunto), vira o produto 'Descrição do Produto' com R$ 0,00 e soma 1 ao contador 'invalidos'.
+  - Testes: nenhum · Origem: fc63708
+- **R-08** · mapeamento de colunas — `etl_processor.py` › `_mapear_cabecalho` › linhas 415-434
+  - Percorre as colunas da ESQUERDA para a DIREITA. Em cada coluna, testa os canônicos na ordem do dicionário, pulando os já atribuídos; o primeiro cujo fragmento seja substring da chave fica com a coluna. Cada canônico fica com no máximo 1 coluna, e cada coluna com no máximo 1 canônico. A precedência 'total explícito vence unitário' vale DENTRO de uma coluna; entre colunas, ganha a da esquerda. Medido: ['Valor Total','Faturamento','Produto','Qtde'] -> valor_venda=coluna 0, e 'Faturamento' é ignorado. ['Descrição do Grupo','Descrição do Produto',...] -> produto=coluna 0, e o agrupamento passa a ser por grupo.
+  - Testes: golden (todos os pares); tests/test_etl_regras_financeiras.py 199-205 · Origem: fc63708
+- **R-09** · detecção de cabeçalho — `etl_processor.py` › `_detectar_cabecalho` › linhas 437-486
+  - Janela = min(100, linhas da matriz já aparada). Primeiro tenta cabeçalho de UMA linha: entre as que passam em valida_fn, escolhe a que mapeia MAIS canônicos; no empate, a primeira (comparação '>' estrita, 461). Só se nenhuma passar, tenta cabeçalho COMPOSTO de 2 linhas adjacentes, concatenando 'l1 l2' por coluna (466-478). Se falhar, gera ETLValidationError com 'Colunas reconhecidas: ...' (480-486), mensagem que o worker mascara. Medido: 99 linhas decorativas antes do cabeçalho -> acha; 100 -> recusa. Composto ['Nome','Qtde','Valor'] + ['Produto','Vendida','Total Venda'] -> (1, {produto, quantidade, valor_venda}, 2).
+  - Testes: golden csv_late_delimiter_header (70 linhas decorativas), header_compound, header_shifted_footer · Origem: fc63708
+- **R-10** · estrutura mínima de VENDAS — `etl_processor.py` › `_validar_vendas` › linhas 607-612
+  - Exige produto, quantidade e (valor_venda ou preco_unitario). Um relatório 'Produto; Valor Total' sem quantidade é recusado no processamento, embora passe na Baia (security_gatekeeper.\_minimo_vendas 513-514).
+  - Testes: golden; tests/test_etl_regras_financeiras.py 194-197 · Origem: fc63708
+- **R-11** · estrutura mínima de COMPRAS — `etl_processor.py` › `_validar_compras` › linhas 615-622
+  - Exige (fornecedor ou produto) e um valor: valor_nf, produtos_total, ou o par custo_unitario + qtde_comprada. Aceita relatório por nota (NF-level) ou por item (item-level).
+  - Testes: golden c1 (NF), c2 (derivado), c4 (item sem fornecedor) · Origem: fc63708
+- **R-12** · recorte canônico — `etl_processor.py` › `_construir_df_canonico` › linhas 508-521
+  - Os dados começam em idx_cabecalho + linhas_do_cabecalho. Monta um DataFrame só com as colunas reconhecidas, já com os nomes canônicos; as demais são ignoradas, inclusive Desconto, Margem e CFOP. Se não houver linha após o cabeçalho, gera ETLValidationError.
+  - Testes: golden · Origem: fc63708
+- **R-13** · parsing de quantidade e estoque — `etl_processor.py` › `_parse_valor` › linhas 156-202
+  - Regras: (1) tira o apóstrofo inicial da neutralização (170-171); (2) '', 'nan', 'none', '-' e '--' -> None (172-173); (3) remove NBSP, espaços e 'R$' (175-176); (4) é negativo se começa com '-' ou '(' (177); (5) apaga tudo fora de [0-9.,] (178); (6) se tem vírgula e ponto, o separador mais à direita é o decimal (184-189); só vírgula = decimal BR (190-192); mais de um ponto = milhar (193-195); um ponto só = DECIMAL (196). Medido: '1.500' -> 1.5; '12.000' -> 12.0; '1.234.567' -> 1234567; '1.234,5' -> 1234.5; '(2)' -> -2; apóstrofo + '-2 un(s)' -> -2. Sinal no fim, '−' unicode e notação científica NÃO são tratados, e lixo vira número: '2-' -> +2; '−2' -> +2; '1e3' -> 13; '1,5E+03' -> 1.503; '12abc' -> 12; '1/2' -> 12; '2026-01-02' -> 20260102; uma célula neutralizada '=1+1' -> 11; 401 dígitos -> inf.
+  - Testes: tests/test_etl_regras_financeiras.py 91-94 e 129-132; tests/test_security_gatekeeper.py 337-349 · Origem: fc63708; apóstrofo em 91e5fb0 (2026-11-08)
+- **R-14** · nulos em quantidade — `etl_processor.py` › `_converter_serie (+ fillna(0.0))` › linhas 205-206; 648, 663, 712, 725
+  - Aplica \_parse_valor célula a célula numa Series float64. Nulo ou irrecuperável vira NaN e depois 0.0, para quantidade de vendas, estoque e quantidade comprada. Uma linha sem quantidade entra com 0 un.
+  - Testes: golden · Origem: fc63708
+- **R-15** · dinheiro: limpeza — `etl_processor.py` › `_limpar_monetario (+ _RE_MOEDA, _SINAIS_DE_MENOS)` › linhas 222-226 (217-218)
+  - Troca '−', '–', '﹣' e '－' por '-'. Remove os caracteres das categorias Unicode C\* e Z\* (controle, formato, espaços, NBSP, zero-width). Tira aspas e apóstrofos das pontas e remove 'r$', 'us$', 'brl', 'usd' e '$' sem diferenciar maiúsculas. Exemplos: ' R$ 12.500,50\t' -> '12.500,50'; 'BRL 5,00' -> '5,00'.
+  - Testes: tests/test_etl_regras_financeiras.py 54-71 · Origem: 0ac01c8 (2026-11-02)
+  - Nota da revisão (regra legada): até `0ac01c8` (02/11/2026), o dinheiro (venda, custo e compras) era lido por `_parse_valor`, com ponto único decimal e sem sinal no fim: "12.500" valia 12,5 e "10,00-" valia +10. Hoje valem 12.500,00 e −10. Análises processadas antes dessa mudança podem mudar ao reprocessar.
+- **R-16** · dinheiro: sinal — `etl_processor.py` › `_separar_sinal` › linhas 229-238
+  - Negativo para '(x)', '-x' e 'x-' (sinal contábil de PDV); '+' inicial é removido. Exemplos: '(10,00)' -> -10; '10,00-' -> -10; '(-10)' -> -10; 'R$-10' -> -10; '10 -' -> -10. Formas inválidas, que viram 0 e são contadas como inválidas: '-(10)', apóstrofo depois do sinal, '+-10'.
+  - Testes: tests/test_etl_regras_financeiras.py 64-66 · Origem: 0ac01c8
+- **R-17** · dinheiro: separadores — `etl_processor.py` › `_normalizar_separadores (+ _RE_MILHAR_PONTO, _RE_MILHAR_VIRGULA, _RE_DECIMAL, _RE_CASAS_DECIMAIS, _RE_CIENTIFICO)` › linhas 241-260 (210-214)
+  - Regras: (1) notação científica '1E+05' ou '1,5e3' é aceita (243-244); (2) com vírgula e ponto, o mais à direita é o decimal, e o outro só vale se formar grupos de milhar válidos, com início de 1 a 3 dígitos sem zero à esquerda (246-253); (3) várias vírgulas ou vários pontos só se forem milhar válido (254-257); (4) um ponto com exatamente 3 casas depois de 1 a 3 dígitos sem zero inicial = MILHAR, salvo coluna com ponto decimal (258-259); (5) caso contrário, decimal com '.' ou ',' (260). Exemplos: '12.500' -> 12500; '0.125' -> 0.125 (zero à esquerda nunca é milhar); '12,500' -> 12.5; '1,234,567' -> 1234567; '1.2.3' -> inválido; '12.34.567' -> inválido.
+  - Testes: tests/test_etl_regras_financeiras.py 54-90 · Origem: 0ac01c8
+- **R-18** · dinheiro: conversão — `etl_processor.py` › `_interpretar_monetario, converter_valor_monetario` › linhas 263-277, 280-293
+  - None e bool -> inválido. Números (numbers.Real ou Decimal) passam direto se forem finitos (267-269); na prática chegam só NaN, porque read_raw entrega strings. O resultado precisa ser finito: '1e999' -> inválido. Não existe -0.0. converter_valor_monetario troca inválido por 0.0 sem interromper. Exemplos: 'R$ 12.500,50' -> 12500.5; '1,234.56' -> 1234.56; 'abc' -> 0.0; '12%' -> 0.0; '12,50 UN' -> 0.0. validacao_pdv reaproveita esta função para o total digitado.
+  - Testes: tests/test_etl_regras_financeiras.py 53-90 · Origem: 0ac01c8
+- **R-19** · dinheiro: decisão por coluna — `etl_processor.py` › `_coluna_usa_ponto_decimal (+ _RE_PONTO_DECIMAL, _RE_VIRGULA_DECIMAL)` › linhas 296-305 (215-216)
+  - Se a coluna tem algum valor com ponto que não pode ser milhar ('12.50', '1,234.56', '1500.000') e nenhum com vírgula decimal, a coluna inteira usa ponto decimal, e '12.500' passa a ser 12.5. Medido: ['12.500','3.75'] -> [12.5, 3.75]; ['12.500','1.234,50'] -> [12500, 1234.5]; ['1,234.56','12,500'] -> [1234.56, 12.5], ou seja, o milhar en-US '12,500' é lido como 12,5 sem alerta.
+  - Testes: tests/test_etl_regras_financeiras.py 108-121 · Origem: 0ac01c8
+- **R-20** · dinheiro: qualidade — `etl_processor.py` › `_converter_serie_monetaria (+ _VALORES_EM_BRANCO)` › linhas 308-322 (219)
+  - Converte a coluna e conta: 'invalidos' (não interpretável e diferente de '', '-', '--', 'nan', 'none', 'null', 'na', 'n/a', 'nd', 'n/d'); 'lidos_como_milhar' ou 'lidos_como_decimal' (exatamente um ponto em formato de milhar). Inválido entra como 0.0. A contagem vale para valor_venda, preco_unitario, valor_custo, produtos_total, valor_nf e custo_unitario, e acontece ANTES de tirar não-produtos e cancelados. Medido: ['12.500','abc','','-','N/A'] -> [12500, 0, 0, 0, 0], com {'lidos_como_milhar': 1, 'invalidos': 1}.
+  - Testes: tests/test_etl_regras_financeiras.py 102-127 · Origem: 0ac01c8
+- **R-21** · valor da venda — `etl_processor.py` › `_vendas_do_bruto` › linhas 649-659
+  - Com coluna de total (valor_venda), usa o total. Sem ela, deriva quantidade x preco_unitario e registra em log. Sem nenhuma das duas, gera ETLValidationError. O preço unitário nunca é somado como faturamento. Exemplo: Qtde '1.500' (1,5) x '10,00' -> 15,00.
+  - Testes: tests/test_etl_regras_financeiras.py 129-132 e 194-197; golden sales_derived_mixed_money · Origem: fc63708; conversão em 0ac01c8
+- **R-22** · custo e lucro em VENDAS — `etl_processor.py` › `_vendas_do_bruto` › linhas 660-667
+  - valor_custo é convertido como dinheiro e usado só no alerta R-40, nunca em KPI. A coluna 'lucro' é detectada (reserva a coluna para que não roube outro canônico) e removida (666-667). Não existe cálculo de margem.
+  - Testes: golden explicit_total_normalization_alerts (lucro e total_custo) · Origem: fc63708
+- **R-23** · colunas de situação — `etl_processor.py` › `_RE_COLUNA_SITUACAO, _RE_COLUNA_DE_OUTRO_ASSUNTO, _situacao_das_linhas` › linhas 544-550; 557-572
+  - Fora de ALIAS_VENDAS de propósito: não disputa canônico nem muda a escolha do cabeçalho. Pega as colunas NÃO mapeadas cujo título (1 ou 2 linhas) contenha status, situacao, operacao, natureza, movimento ou movimentacao, ou seja exatamente 'tipo', ou 'tipo (de) venda/nota/documento/doc/registro/lancamento'. Exclui títulos que falem de pagamento, entrega, cliente, produto, estoque, financeiro/a, titulo ou cadastro. Junta o texto normalizado em MAIÚSCULAS de todas essas colunas por linha. Exemplos aceitos: 'Status', 'Situação do Pedido', 'Tipo de Operação', 'Natureza da Operação', 'Tipo'. Recusados: 'Status Pagamento', 'Situação do Cliente', 'Status do Produto'. Só existe em VENDAS.
+  - Testes: tests/test_etl_regras_financeiras.py 199-218 · Origem: 0ac01c8
+- **R-24** · cancelamento, devolução e troca — `etl_processor.py` › `_RE_LINHA_CANCELADA, _RE_LINHA_DEVOLUCAO, _aplicar_situacao_das_vendas` › linhas 553-554; 575-601; chamada em 677-678
+  - Cancelada = palavra que COMEÇA com CANC, ESTORN ou INUTILIZ e não vem logo depois de 'NAO ' ou 'SEM '. Devolução = palavra que começa com DEVOL ou TROCA, com a mesma negação. Canceladas saem do cálculo, inclusive 'DEVOLUCAO CANCELADA', que conta como cancelada. Devolução e troca têm valor e quantidade forçados para NEGATIVO (-abs), venham com o sinal que vierem, e o faturamento já sai LÍQUIDO. Se todas as linhas estiverem canceladas, gera ETLValidationError. df.attrs['situacao'] = {linhas_canceladas, valor_cancelado (soma de abs), linhas_devolucao, valor_devolucoes}. Exemplo do teste: 1000 + devolução 100 + 5 canceladas + 'NÃO CANCELADA' 250 + troca -80 -> faturamento 1070; valor_cancelado 2399; valor_devolucoes 180; vendas_validas 1250. 'MERCANCIA', 'ENTROCADO' e 'SEM DEVOLUCAO' não contam. O nome do produto nunca decide ('Troca de óleo' é venda).
+  - Testes: tests/test_etl_regras_financeiras.py 157-247 · Origem: 0ac01c8
+- **R-25** · compras: chave de linha — `etl_processor.py` › `carregar_compras` › linhas 697-700
+  - A validade da linha (R-06 e R-07) usa 'fornecedor' se mapeado; senão, 'produto'. Exemplo: o rodapé 'TOTAL GERAL' na coluna fornecedor sai.
+  - Testes: golden c1, c3, c4 · Origem: fc63708
+- **R-26** · compras: valor — `etl_processor.py` › `carregar_compras` › linhas 702-722
+  - Prioridade: produtos_total (valor 'puro' dos itens) > valor_nf (inclui frete e imposto) > derivado qtde_comprada x custo_unitario (coluna 'valor_total_compra'). Depois, descarta linhas com valor <= 0 (722): bonificação a R$ 0,00 e devolução a fornecedor (valor negativo) somem. Medido: NF 'CANCELADA' de R$ 500 SOMA no total_comprado (1.500 = 1.000 + 500), e a linha 'DEVOLUCAO' de -200 é descartada.
+  - Testes: golden purchase_products_total_priority, c2_refem_unitario, c3 (total 0 filtrado); tests/test_etl_regras_financeiras.py 134-137 · Origem: fc63708
+- **R-27** · compras: quantidade e produto — `etl_processor.py` › `carregar_compras` › linhas 724-727
+  - qtde_comprada passa por \_parse_valor e fillna(0.0). Com coluna produto, gera \_prod_norm para cruzar com vendas no saldo parado. Compras não passa por \_NAO_PRODUTOS.
+  - Testes: golden c2, c3, c4 · Origem: fc63708
+- **R-28** · período do relatório — `etl_processor.py` › `_RE_DATA_BR, _parse_data_br, _extrair_periodo_base, _detectar_periodo_arquivo` › linhas 738, 741-748, 751-770, 773-778; prioridade em 941-943
+  - Varre as primeiras 30 linhas da matriz aparada. Na primeira CÉLULA cujo texto sem acento e em minúsculas contenha 'periodo', pega datas d/m/a com barra (ano de 2 dígitos + 2000; data inválida é ignorada). Com 2 ou mais datas, usa as duas primeiras ordenadas; com 1, usa (d, d). Prioridade: VENDAS, depois COMPRAS; falha -> None (nulo no banco). Medido: 'Período de : 01/01/26 á 31/03/26' -> (2026-01-01, 2026-03-31); datas invertidas são ordenadas. Retorna None para: datas em células separadas; '2026-01-01' (ISO); '01-01-2026'; 'De 01/01/2026 até 31/01/2026' (sem a palavra); '01/2026'; período após a linha 30. Erros: '31/02/2026 a 15/03/2026' -> (15/03, 15/03); 'Emissão: 05/02/2026 Período 01/01/26' -> (01/01/2026, 05/02/2026), estendendo o fim com a data de emissão.
+  - Testes: golden c1, header_shifted_footer, reversed_period_dates, purchase_period_fallback (tests/test_etl_financial_equivalence.py 105-108) · Origem: fc63708
+- **R-29** · KPI faturamento total — `etl_processor.py` › `_calcular_kpis_local` › linhas 903-914
+  - groupby por \_prod_norm: qtde=soma(quantidade), fat=soma(valor_venda), nome=primeiro. faturamento_total = soma de fat. É LÍQUIDO: sem canceladas, com devoluções e trocas deduzidas e com linhas negativas do relatório somadas. Sem coluna de situação, linha negativa simplesmente soma (exemplo: 100 e -10 -> 90).
+  - Testes: tests/test_etl_regras_financeiras.py 98-100, 160-180, 234-237 · Origem: fc63708
+- **R-30** · KPI produto mais vendido — `etl_processor.py` › `_calcular_kpis_local` › linhas 916-919
+  - idxmax da quantidade LÍQUIDA agregada. No empate, fica o primeiro na ordem do groupby, ou seja, a ordem alfabética da chave normalizada. Grava nome exibível e quantidade.
+  - Testes: tests/test_etl_regras_financeiras.py 189-192; golden · Origem: fc63708
+- **R-31** · KPI produto de maior faturamento — `etl_processor.py` › `_calcular_kpis_local` › linhas 921-935
+  - Regra de apresentação embutida no KPI: se o produto de maior faturamento for o MESMO mais vendido, grava o 2º colocado com fat > 0. Só aceita a coincidência quando não há outro candidato. A ordenação usa sort_values padrão, que não é estável; a ABC usa ordenação estável com desempate por nome. Medido: Arroz (100 un, R$ 1.000) é o mais vendido e lidera a ABC, mas o KPI 'maior faturamento' grava Feijão (R$ 10).
+  - Testes: golden one_product_rankings e demais pares · Origem: fc63708
+- **R-32** · KPI total comprado e Pressão de Estoque — `etl_processor.py` › `_calcular_kpis_local` › linhas 946, 949
+  - total_comprado = soma da coluna de valor de compras (R-26). saldo_estimado_compras_vendas = total_comprado - faturamento_total: é o 'Indicador de Pressão de Estoque', em R$, positivo quando comprou mais do que vendeu.
+  - Testes: golden c1 a c4 · Origem: fc63708
+- **R-33** · KPI produto com maior saldo parado — `etl_processor.py` › `_calcular_kpis_local` › linhas 953-983
+  - Só quando COMPRAS tem produto e qtde_comprada. Agrupa as compras por \_prod_norm, faz left join com a quantidade vendida (ausente = 0) e calcula saldo = comprada - vendida; fica o maior saldo positivo (nome e unidades). Sem produto e quantidade nas compras, o KPI fica None e entra o alerta 'Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal...' (977-983).
+  - Testes: golden c1 (alerta), c2, c3, c4 · Origem: fc63708
+- **R-34** · Curva ABC: limiares e ordem — `etl_processor.py` › `ABC_LIMITE_A, ABC_LIMITE_B, _classificar_curva_abc` › linhas 67-72; 800
+  - A: acumulado <= 80; B: <= 95; C: acima. Ordem por faturamento decrescente com desempate pela chave normalizada crescente (mergesort estável). Exemplo: 3 produtos de R$ 10 ('C', 'A', 'B') -> ordem A, B, C.
+  - Testes: tests/test_etl_regras_financeiras.py 273-282 e 314-316 · Origem: limiares em fc63708; ordem estável em 0ac01c8
+- **R-35** · Curva ABC: base e ausência — `etl_processor.py` › `_classificar_curva_abc` › linhas 801-805
+  - A base é a RECEITA LÍQUIDA de TODOS os itens, zerados e negativos incluídos, igual ao faturamento_total. Se round(total, 2) <= 0, a curva fica vazia ({'produtos': [], 'resumo': []}) e entra o alerta 'Curva ABC não calculada'. Exemplos: ['50,00','-50,00'], ['0,00'] e ['0,10','0,20','-0,30'] -> sem curva.
+  - Testes: tests/test_etl_regras_financeiras.py 296-312 · Origem: 0ac01c8; antes era só positivos e top 20
+- **R-36** · Curva ABC: percentuais em centésimos — `etl_processor.py` › `_classificar_curva_abc` › linhas 807-813
+  - acumulado_em_centésimos = round(acumulado / total x 10000), inteiro. O pandas arredonda meio para o par. O individual é a diferença entre acumulados arredondados, e a soma fecha em exatamente 100,00. A classe segue o acumulado JÁ arredondado. Com 20 mil itens iguais, o item 16.001 acumula 80,005%, grava 80,00 e é A. Com negativos, o acumulado pode passar de 100 e voltar: [100, 0, -20] -> individuais [125, 0, -25] e acumulados [125, 125, 100].
+  - Testes: tests/test_etl_regras_financeiras.py 251-271, 296-305, 323-335 · Origem: 0ac01c8
+- **R-37** · Curva ABC: proteção do líder — `etl_processor.py` › `_classificar_curva_abc` › linhas 814-815
+  - np.select das faixas e depois classes[0]='A': o líder é sempre A, mesmo sozinho acima de 80% ou de 95%. Os demais seguem as faixas. Exemplos: [85,10,5] -> ABC; [97,3] -> AC; [60] -> A.
+  - Testes: tests/test_etl_regras_financeiras.py 283-294 · Origem: fc63708 (classes[0]); ajuste do resumo em 0ac01c8
+- **R-38** · Curva ABC: saída — `etl_processor.py` › `_classificar_curva_abc` › linhas 817-845
+  - 'produtos': posicao (1..n), nome, faturamento, quantidade (líquida), perc_individual, perc_acumulado e classe, para TODOS os produtos. 'resumo': por classe, qtd_produtos, faturamento (2 casas) e perc_faturamento. O resumo NÃO é gravado nem exibido: os consumidores recalculam a partir de produto_curva_abc.
+  - Testes: tests/test_etl_regras_financeiras.py 318-321 · Origem: 0ac01c8
+- **R-39** · alerta de estoque negativo — `etl_processor.py` › `_calcular_kpis_local` › linhas 996-1007
+  - Com coluna de estoque: n_neg = LINHAS com estoque < 0; taxa = n_neg / linhas de vendas. Telemetria produtos_estoque_pdv_negativo e taxa_estoque_pdv_negativo. Se taxa > 10%, alerta 'Atenção: N produto(s) (x%) apresentam saldo de estoque NEGATIVO informado pelo PDV'. O alerta conta linhas, embora diga 'produtos'.
+  - Testes: golden c1 e explicit (1 de 3 linhas) · Origem: fc63708
+- **R-40** · alerta de venda abaixo do custo — `etl_processor.py` › `_calcular_kpis_local` › linhas 1009-1022
+  - Com valor_custo: conta LINHAS com valor_custo > 0 e valor_venda < valor_custo, sem as linhas de devolução. Telemetria itens_venda_abaixo_custo_pdv; o alerta diz que é sinal bruto, NÃO margem. Não sabe se o custo é unitário ou total: compara sempre com o total da linha. Custo zero nunca conta. Medido com a coluna 'Custo Unitário' (Arroz 10 un, R$ 50 total, custo 8/un; Óleo 2 un, R$ 10, custo 12): conta 1 linha, quando o real é 2. Feijão com custo 0 não é sinalizado.
+  - Testes: golden c1 e explicit; tests/test_etl_regras_financeiras.py 243-247 (devolução não conta) · Origem: fc63708; exclusão de devolução em 0ac01c8
+- **R-41** · alerta de limitação técnica — `etl_processor.py` › `_calcular_kpis_local` › linhas 977-983
+  - COMPRAS sem produto e quantidade (nível de NF) -> saldo parado nulo e alerta explicando que o nulo é deliberado ('sem gerar dado enganoso').
+  - Testes: golden c1_hemorragia_nf · Origem: fc63708
+- **R-42** · alertas de qualidade, situação e ABC — `etl_processor.py` › `_alertas_de_valores (montagem em _calcular_kpis_local)` › linhas 848-881; 1026-1033
+  - A qualidade de vendas e compras é somada (1030). Textos: (1) 'N valor(es) em dinheiro não puderam ser interpretados e entraram como R$ 0,00'; (2) 'lidos como milhar ... ficaram mil vezes maiores' se o relatório usa ponto decimal; (3) 'lidos como decimal ... porque a mesma coluna usa ponto decimal'; (4) 'Faturamento líquido: N linha(s) canceladas ... e M devolução(ões) ou troca(s) foram deduzidas'; (5) 'Curva ABC: N produto(s) têm receita líquida negativa...'; (6) 'Curva ABC não calculada...'.
+  - Testes: tests/test_etl_regras_financeiras.py 102-127, 180, 305, 312 · Origem: 0ac01c8
+- **R-43** · telemetria (não persistida) — `etl_processor.py` › `_calcular_kpis_local` › linhas 985-994, 1000-1001, 1015, 1026-1032
+  - Chaves: coluna_valor_compras, colunas_vendas e colunas_compras (sem as internas com '_'), linhas_vendas, linhas_compras, produtos_estoque_pdv_negativo, taxa_estoque_pdv_negativo, itens_venda_abaixo_custo_pdv, linhas_canceladas, valor_cancelado, linhas_devolucao, valor_devolucoes, vendas_validas (faturamento + devoluções) e valores_monetarios (contadores). conferir_total_pdv acrescenta conferencia_pdv no pai. Só valor_devolucoes e valor_cancelado chegam ao banco, via validacao_pdv.
+  - Testes: tests/test_etl_regras_financeiras.py 172-179 e 239-241 · Origem: fc63708; situação e qualidade em 0ac01c8
+- **R-44** · dicionário de KPIs — `etl_processor.py` › `_calcular_kpis_local (kpis)` › linhas 1035-1051
+  - 12 chaves: faturamento_total, total_comprado, saldo_estimado_compras_vendas, produto_mais_vendido_nome, produto_mais_vendido_quantidade, produto_maior_faturamento_nome, produto_maior_faturamento_valor, produto_maior_saldo_parado_nome, saldo_estimado_parado, curva_abc ({produtos, resumo}), periodo_base_inicio e periodo_base_fim.
+  - Testes: golden (comparação campo a campo) · Origem: fc63708 (curva_abc e período já existiam)
+- **R-45** · trava: arredondamento — `etl_processor.py` › `em_centavos` › linhas 1064-1069
+  - Decimal(str(valor)).quantize(0.01, ROUND_HALF_UP) com precisão 400, para caber qualquer float finito. Evita o erro de float na fronteira: 131072.70 - 131071.70 = 1.0000000000145519 em float, e em centavos a diferença é exatamente 1,00. Exemplos: 1484.995 -> 1485.00; 1e300 -> expoente -2.
+  - Testes: tests/test_trava_pdv.py 47-68 · Origem: bba0971
+- **R-46** · trava: comparação — `etl_processor.py` › `TOLERANCIA_PDV, STATUS_PDV_*, validar_total_pdv` › linhas 75-77; 1072-1087
+  - diferenca = |calculado - informado| em centavos. Se for maior que R$ 1,00, DIVERGENTE_PDV; senão, CONCLUIDO. Esse CONCLUIDO é o resultado da conferência, não da análise. Exemplos: 150000 x 150000,50 -> CONCLUIDO; 150000 x 150015 -> DIVERGENTE; 100 x 101,00 -> CONCLUIDO; 100 x 101,01 -> DIVERGENTE.
+  - Testes: tests/test_trava_pdv.py 42-62 e 207-258 · Origem: bba0971
+- **R-47** · trava: faturamento bruto — `etl_processor.py` › `faturamento_bruto, conferir_total_pdv` › linhas 1090-1092, 1095-1102
+  - bruto = faturamento_total (líquido) + valor_devolucoes: é a soma das vendas válidas sem as canceladas e antes de deduzir devoluções. Sem coluna de situação, bruto = líquido. conferir_total_pdv só acrescenta telemetria['conferencia_pdv'] (status, valor_pdv_informado, faturamento_bruto_calculado, diferenca) e não muda os KPIs. Exemplo: líquido 900 + devoluções 100, informado 1015 -> diferença 15,00 -> DIVERGENTE.
+  - Testes: tests/test_trava_pdv.py 70-78 e 258-272 · Origem: bba0971
+- **R-48** · trava: valor digitado — `validacao_pdv.py` › `STATUS_PDV_PENDENTE, TAMANHO_MAXIMO_DIGITADO, VALOR_MAXIMO, _FORMATO_BR, _FORMATO_PONTO, _PREFIXO_REAIS, ValorPdvInvalido, interpretar_valor_digitado` › linhas 27-45, 70-83
+  - Regras: no máximo 32 caracteres; 'R$' opcional; formato BR '1.234,56' (milhar só em grupos válidos, até 2 casas) ou ponto com 1 a 2 casas ('1500.50'); de 0 a 999.999.999.999,99 (teto de Numeric(14,2)); zero é aceito. Resultado em centavos (em_centavos). Recusa o que o conversor de planilha aceitaria em silêncio: '150,000', '1,234.56', '1234.567', '0.500', '-100,00', '(10,00)', '10,00-', '+10,00', '1e3', '12%', algarismos não ASCII, número não string. O erro é ETLInputError('pdv_valor').
+  - Testes: tests/test_trava_pdv.py 81-98 e 570-629 · Origem: bba0971
+- **R-49** · trava: registro do valor — `validacao_pdv.py` › `registrar_valor_informado` › linhas 92-107
+  - Upsert sem commit: status PENDENTE, zera calculado, diferença, devoluções, cancelado e validado_em, e grava informante e horário. Reenviar VENDAS ou corrigir o total invalida a conferência anterior até um novo processamento.
+  - Testes: tests/test_trava_pdv.py 273-297 e 501-514 · Origem: bba0971
+- **R-50** · trava: conferência no processamento — `validacao_pdv.py` › `conferir_e_registrar` › linhas 110-129
+  - Sem a tabela ou sem linha (análise anterior à trava), não confere nada e devolve o resultado como veio. Com linha, grava status, faturamento_bruto_calculado, diferenca, valor_devolucoes e valor_cancelado (em centavos, ou None sem coluna de situação) e validado_em, na mesma transação dos KPIs. Falha do ETL não grava conferência (a rota só chama em sucesso).
+  - Testes: tests/test_trava_pdv.py 298-315 e 339-358 · Origem: bba0971
+- **R-51** · trava: bloqueios — `validacao_pdv.py` › `esquema_validacao_pdv_disponivel, conferencia_em_aberto, motivo_bloqueio_publicacao` › linhas 48-67, 174-178, 181-200
+  - Presença da tabela: confirmada uma vez por engine; a ausência é rechecada a cada 30 s (31). Sem a tabela, TODA publicação nova é recusada ('Aplique a migração e2f7a94c1d35'). Sem linha, publica (análise anterior à trava). DIVERGENTE_PDV ou PENDENTE bloqueiam a publicação e a geração por IA; o rascunho segue liberado.
+  - Testes: tests/test_trava_pdv.py 360-416 e 758-805 · Origem: bba0971
+- **R-52** · persistência: indicador analise — `etl_processor.py` › `_persistir_indicadores` › linhas 1108-1131
+  - Upsert por id_analise: cria com versao_processamento=1 ou soma +1. Grava faturamento_total, total_comprado, saldo_estimado_compras_vendas, produto_mais_vendido_nome, produto_mais_vendido_quantidade, produto_maior_faturamento_nome, produto_maior_faturamento_valor, produto_maior_saldo_parado_nome, saldo_estimado_parado, periodo_base_inicio, periodo_base_fim e data_geracao=agora UTC. As colunas são Numeric SEM precisão (models 411-419), para que valor absurdo não estoure a coluna.
+  - Testes: tests/test_etl_regras_financeiras.py 374-390; tests/postgresql_etl_resource_security.py 190-232 · Origem: fc63708
+- **R-53** · persistência: produto curva abc — `etl_processor.py` › `_persistir_curva_abc` › linhas 1134-1159
+  - DELETE de todas as linhas da análise, depois INSERT em lote de TODOS os produtos: id_analise, posicao_ranking, produto_nome, faturamento, quantidade, percentual_individual, percentual_acumulado, classe_abc. data_geracao vem do server_default. Curva vazia apaga a anterior. Reprocessar substitui tudo.
+  - Testes: tests/test_etl_regras_financeiras.py 355-372 · Origem: 0ac01c8 (antes: top 20, linha a linha)
+- **R-54** · orquestração e falha segura — `etl_processor.py` › `processar_arquivos_analise` › linhas 1162-1187
+  - O cálculo acontece fora do banco. A gravação ocorre dentro de db_session.begin_nested() (SAVEPOINT) com flush, sem commit. ETLInputError vira sucesso=False com safe_message; qualquer outra exceção vira 'Não foi possível concluir o processamento com segurança...'. O log registra só o code ou o tipo, sem SQL, caminho ou conteúdo. KPIs e curva anteriores ficam intactos em falha.
+  - Testes: tests/postgresql_etl_resource_security.py 207-265 · Origem: fc63708; SAVEPOINT e mensagens seguras em 2da719b
+- **R-55** · status na rota — `blueprints/admin.py` › `processar_analise` › linhas 1416, 1430-1452
+  - Antes do cálculo: Analise EM_ANALISE. Sucesso: uploads PROCESSADO, data_processamento, mensagem_erro=None e conferência do PDV. Falha: Analise RELATORIO_RECEBIDO e uploads ERRO com a mensagem segura. ValueError de configuração: 'Configuração de processamento inválida.' Sessão inativa: SQLAlchemyError e rollback completo.
+  - Testes: tests/postgresql_etl_resource_security.py 190-365 · Origem: fc63708; 2da719b
+- **R-56** · CONCLUIDO só por decisão humana — `blueprints/admin.py; etl_processor.py` › `analise_relatorio; docstring` › linhas admin 1276-1306; etl_processor 34-35
+  - O ETL nunca grava CONCLUIDO na análise. Publicar exige EM_ANALISE ou CONCLUIDO, resumo executivo e confirmação de revisão quando o texto veio de IA. Só então grava publicado=True, status_analise='CONCLUIDO' e data_conclusao.
+  - Testes: tests/test_trava_pdv.py 208-220; tests/postgresql_etl_resource_security.py 190 · Origem: fc63708
+- **R-57** · mensagens de erro em produção — `etl_worker.py` › `main (except)` › linhas 73-81
+  - MemoryError -> code 'memory' ('Arquivo excede o orçamento de memória'). Qualquer erro com code 'data' tem a mensagem trocada por 'Não foi possível identificar os dados essenciais. Revise as colunas de vendas e compras.' Assim, as mensagens específicas do etl_processor (colunas reconhecidas, todas canceladas, sem produto válido, sem valor) só aparecem quando o cálculo roda localmente, como nos testes.
+  - Testes: tests/test_etl_runtime_limits.py 156-188 · Origem: 2da719b
+- **R-58** · semáforos (consumo) — `insights.py` › `PRESSAO_CRITICA, PRESSAO_ATENCAO, gerar_semaforos` › linhas 27-28, 39-114
+  - ratio = saldo / faturamento (0 se faturamento <= 0) (57). Acima de 0,15: critico 'Capital imobilizado em estoque'; acima de 0,05: atencao 'Descompasso entre compras e vendas'; senão: oportunidade 'Giro de estoque saudável' (56-84). Card 2 (86-97): atencao 'Estoque parado concentrado' se houver nome e saldo parado > 0. Card 3 (99-112): oportunidade 'Produtos estratégicos (Classe A)', com quantidade e soma de percentual_individual da classe A. Efeito colateral: faturamento zero ou negativo com compras altas gera o card 'Giro de estoque saudável'.
+  - Testes: nenhum teste unitário dos limiares encontrado · Origem: fc63708
+- **R-59** · PDF (consumo) — `pdf_export.py` › `TOP_N_PDF, _kpis_flowable, _abc_flowable, calcular_distribuicao` › linhas 84, 398-423, 426-466, 489-567
+  - Os KPIs do PDF são 3: faturamento, comprado e Pressão de Estoque. A tabela ABC e a pizza mostram o Top 5. A pizza usa como base o faturamento_total, com fatia 'Outros produtos' se a diferença aparecer em centavos. Usa a soma dos exibidos se o total faltar, for <= 0 ou for menor que a soma, ou se algum exibido for <= 0. Avisa 'base_abc_divergente' quando a participação calculada difere do percentual_individual gravado por mais de 0,01. Não mostra mais vendido, maior faturamento nem saldo parado.
+  - Testes: tests/test_pdf_export_security.py; tests/test_pdf_export_layout.py · Origem: fc63708 e ajustes de PDF
+- **R-60** · devolutiva por IA (consumo) — `ai_devolutiva.py` › `_montar_contexto, _dados_para_ia, _numeros_permitidos` › linhas 111-136, 148-169, 181-210
+  - Usa faturamento_total, total_comprado, saldo (pressão; sinal negativo = 'vendeu mais do que comprou'), mais vendido e quantidade, maior faturamento e valor, classe A (quantidade e % somado), total de produtos da curva, e líder e % individual. Nomes vão como marcadores. A resposta só pode conter números do contexto (várias grafias). Não usa saldo parado, telemetria nem alertas.
+  - Testes: tests/test_ai_devolutiva_security.py · Origem: fc63708 (SEC-006 posterior)
+- **R-61** · painel do cliente (consumo) — `blueprints/cliente.py; templates/cliente/analise.html` › `_abc_chart, _historico_temporal, _auditoria; tabela ABC` › linhas cliente 119-134, 137-154, 157-177; analise.html 85-113
+  - Pareto com os 10 primeiros (limite=10) e o acumulado do total geral. Histórico Vendas x Compras por análise, só com 2 ou mais análises, ordenado por ano, mês e id; o rótulo MM/AAAA repete nas quinzenas. A auditoria mostra periodo_base, ou o período declarado. A tela da análise lista TODOS os produtos da curva, com filtro A/B/C.
+  - Testes: tests/test_etl_regras_financeiras.py 392-402 · Origem: fc63708
+- **R-62** · cobertura contratual — `contract_policy.py` › `periodo_analise` › linhas 252-266
+  - Janela exigida = mínimo do início e máximo do fim entre o período declarado e o lido do cabeçalho. Um período mal extraído (por exemplo, a data de emissão virando fim, R-28) amplia a janela exigida e pode esconder a análise do cliente.
+  - Testes: tests/test_contratos_prazos.py 152+ · Origem: posterior a fc63708
+- **R-63** · restrições no banco — `models.py` › `IndicadorAnalise, ProdutoCurvaABC, ValidacaoPdv, UploadRelatorio, Analise` › linhas 404-429, 573-577, 1176-1187, 387-392, 342-355
+  - indicador_analise: id_analise único; KPIs em Numeric sem precisão. produto_curva_abc: CHECK classe_abc IN ('A','B','C'), UNIQUE (id_analise, posicao_ranking), índice ix_abc_analise. validacao_pdv: valor_pdv_informado >= 0; status em (PENDENTE, CONCLUIDO, DIVERGENTE_PDV); coerência PENDENTE <-> nulos; diferença >= 0. upload_relatorio: tipo VENDAS ou COMPRAS; extensão CSV, XLSX ou XLS; único por (análise, tipo). analise: status em 4 valores; MENSAL sem quinzena; QUINZENAL com 1 ou 2.
+  - Testes: tests/test_trava_pdv.py 458-490 · Origem: fc63708; validacao_pdv em bba0971
+
+### Formatos e variações (A.2)
+
+- **F-01** · aliases de VENDAS (todos os fragmentos, na ordem de prioridade) — `etl_processor.py` › `ALIAS_VENDAS` › linhas 359-387
+  - Fragmentos já normalizados, casados por substring, na ordem: 1) codigo (363-364): 'id produto', 'id do produto', 'codigo produto', 'codigo', 'cod produto', 'cod barras', 'ean', 'sku', 'ref', 'cod '. 2) produto (365-366): 'nome do produto', 'descricao do produto', 'descricao produto', 'nome produto', 'produto', 'mercadoria', 'descricao do item', 'descricao'. 3) estoque (368): 'estoque atual', 'saldo estoque', 'saldo atual', 'estoque'. 4) valor_custo (370-371): 'total custo', 'vr custo', 'vlr custo', 'valor custo', 'custo total', 'custo'. 5) valor_venda (375-377): 'faturamento', 'arrecadado', 'total venda', 'total vendas', 'vr venda', 'vlr venda', 'valor total venda', 'total liquido', 'valor venda', 'vr total', 'valor total'. 6) preco_unitario (380-381): 'preco unitario', 'preco unit', 'valor unitario', 'vlr unitario', 'preco venda', 'preco'. 7) quantidade (382-383): 'qtde vend', 'qtde vendida', 'quantidade vendida', 'qtd vendida', 'qtde total', 'qtd vend', 'qtde', 'quantidade', 'qtd'. 8) lucro (386): 'lucro'. A ordem é intencional: codigo antes de produto, para 'id_produto' não roubar o nome; estoque antes de quantidade, para 'Qtde Estoque'; valor_venda antes de preco_unitario, para o total vencer.
+  - Testes: golden; tests/test_etl_regras_financeiras.py 199-205 · Origem: fc63708, sem mudança até o HEAD
+- **F-02** · aliases de COMPRAS (todos os fragmentos, na ordem de prioridade) — `etl_processor.py` › `ALIAS_COMPRAS` › linhas 389-412
+  - 1) codigo (391-392): 'id produto', 'id do produto', 'codigo produto', 'codigo', 'cod produto', 'cod barras'. 2) data (393): 'data emissao', 'data nf', 'data entrada', 'data compra', 'data'. 3) fornecedor (394-395): 'razao social fornecedor', 'nome fornecedor', 'fornecedor', 'razao social', 'emitente'. 4) produtos_total (397-398): 'total produtos', 'vr total produtos', 'vr produtos', 'total mercadorias', 'valor produtos'. 5) valor_nf (401-402): 'valor nf', 'total compra', 'total custo', 'vr total', 'total nf', 'total da nota', 'valor total', 'valor nota', 'vr nf', 'vr nota'. 6) custo_unitario (405-406): 'custo unitario', 'custo unit', 'vr unitario', 'vlr unitario', 'preco unitario', 'valor unitario'. 7) produto (408-409): 'nome do produto', 'descricao do produto', 'descricao produto', 'nome produto', 'descricao', 'mercadoria', 'produto'. 8) qtde_comprada (410-411): 'qtde comprada', 'quantidade comprada', 'qtd comprada', 'qtde compra', 'qtd compra', 'qtde'. produtos_total vem antes de valor_nf para 'Vr Total Produtos' não cair em valor_nf.
+  - Testes: golden c1 a c4, purchase_products_total_priority · Origem: fc63708, sem mudança até o HEAD
+- **F-03** · cabeçalhos de VENDAS reconhecidos (medido) — `etl_processor.py` › `_norm_chave + _mapear_cabecalho + ALIAS_VENDAS` › linhas 102-117, 415-434, 359-387
+  - Medido com a cópia do HEAD: 'Descrição do Produto', 'Descrição', 'Produto' -> produto. 'Código', 'Cod. Barras', 'EAN', 'Referência', 'SKU' -> codigo. 'Qtde.', 'Qtd', 'Quantidade', 'Qtde Vendida' -> quantidade. 'Qtde Estoque', 'Estoque Atual' -> estoque. 'Valor Total', 'Vr. Total', 'Faturamento', 'Total Líquido', 'Total Venda' -> valor_venda. 'Preço', 'Preço Unitário', 'Valor Unitário', 'Preço de Venda' -> preco_unitario. 'Total Custo', 'Custo Total' -> valor_custo. 'Lucro' -> lucro.
+  - Testes: parcial (golden) · Origem: medição deste diagnóstico (exp1_aliases.py)
+- **F-04** · cabeçalhos de VENDAS NÃO reconhecidos e falsos positivos (medido) — `etl_processor.py` › `ALIAS_VENDAS` › linhas 359-387
+  - Ignorados, sem canônico: 'Cód.', 'Cód', 'ID', 'Quant.', 'Un', 'Vlr. Total', 'Vlr Total', 'Vl. Total', 'Total', 'Total R$', 'Valor', 'Valor Líquido', 'Vr. Unit.', 'Vlr. Unit.', 'Vendas', 'Receita', 'Valor Bruto', 'Total Bruto', 'Margem', 'Desconto', 'Grupo', 'Data', 'Status', 'Operação'. Status e Operação são lidos à parte como situação. Falsos positivos por substring: 'Preferência' -> codigo ('ref'); 'Oceano' -> codigo ('ean'); 'Descrição do Grupo' -> produto. Mudança de sentido: 'Custo Unitário', 'Custo Médio' e 'Preço de Custo' -> valor_custo, tratado como custo TOTAL da linha no alerta.
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp1_aliases.py)
+- **F-05** · cabeçalhos de COMPRAS reconhecidos e não reconhecidos (medido) — `etl_processor.py` › `ALIAS_COMPRAS` › linhas 389-412
+  - Reconhecidos: 'Fornecedor', 'Razão Social', 'Emitente' -> fornecedor. 'Data', 'Data Emissão' -> data. 'Valor NF', 'Valor Total', 'Vr. Total', 'Total NF', 'Total da Nota', 'Total Compra', 'Total Custo' -> valor_nf. 'Total Produtos', 'Vr. Total Produtos', 'Valor Produtos' -> produtos_total. 'Custo Unitário', 'Custo Unit.', 'Valor Unitário', 'Preço Unitário' -> custo_unitario. 'Qtde', 'Qtde. Comprada', 'Quantidade Comprada' -> qtde_comprada. 'Produto', 'Descrição', 'Mercadoria' -> produto. 'Código' -> codigo. NÃO reconhecidos: 'Quantidade' e 'Qtd' (sem quantidade, o saldo parado e o total derivado ficam indisponíveis); 'Custo Total', que em VENDAS é reconhecido; 'Vlr Total'; 'Vlr. Unit.'; 'Preço'; 'EAN'; 'Cód.'; 'Nome Fantasia'; 'Status'; 'Situação NF'; 'CFOP'.
+  - Testes: parcial (golden) · Origem: medição deste diagnóstico (exp1_aliases.py)
+- **F-06** · cabeçalho de 1 ou 2 linhas — `etl_processor.py` › `_detectar_cabecalho; _construir_df_canonico; _vendas_do_bruto (cabecalhos)` › linhas 455-478; 511; 638-639
+  - Cabeçalho de 1 linha, ou composto por 2 linhas adjacentes concatenadas por coluna ('nome' + 'produto' = 'nome produto'). Os dados começam depois das linhas do cabeçalho. O título normalizado completo de cada canônico, com 1 ou 2 linhas, vai para df.attrs['cabecalhos'], usado só pelo Raio-X para saber se o custo é unitário. Cabeçalho de 3 ou mais linhas não é suportado.
+  - Testes: golden header_compound · Origem: fc63708; attrs em ec4ba95
+- **F-07** · títulos de coluna de situação — `etl_processor.py` › `_RE_COLUNA_SITUACAO, _RE_COLUNA_DE_OUTRO_ASSUNTO` › linhas 544-550
+  - Aceitos (teste): 'Status', 'Situação', 'Status da Venda', 'Situação do Pedido', 'Status NF', 'Operação', 'Tipo de Operação', 'Natureza da Operação', 'Tipo Movimento', 'Tipo'. Duas colunas são lidas juntas ('Status Venda' + 'Situação NF'). Recusados por tratarem de outro assunto: 'Status Pagamento', 'Situação do Cliente', 'Status de Entrega', 'Tipo de Pagamento', 'Status do Produto'.
+  - Testes: tests/test_etl_regras_financeiras.py 199-218 · Origem: 0ac01c8
+- **F-08** · marcas de cancelamento e devolução no texto — `etl_processor.py` › `_RE_LINHA_CANCELADA, _RE_LINHA_DEVOLUCAO` › linhas 553-554
+  - Cancelamento: palavras que começam com CANC, ESTORN ou INUTILIZ ('Cancelada', 'CANC', 'ESTORNADO', 'Inutilizada', 'CANCELADO'). Devolução: DEVOL ou TROCA ('Devolução', 'DEVOLUCAO', 'TROCA'). Negação imediata 'NAO ' ou 'SEM ' anula ('NÃO CANCELADA', 'SEM DEVOLUCAO'). Exige início de palavra ('MERCANCIA' e 'ENTROCADO' não contam). Cancelamento parcial ('CANCELAMENTO PARCIAL', 'ESTORNO PARCIAL') remove a linha inteira.
+  - Testes: tests/test_etl_regras_financeiras.py 160-228 · Origem: 0ac01c8
+- **F-09** · formatos de dinheiro — `etl_processor.py` › `converter_valor_monetario e auxiliares` › linhas 210-322
+  - Aceitos (teste 54-71): '12.500,50', 'R$ 12.500,50', 'R$'+NBSP, 'r$12.500,50', zero-width e BOM, espaços e TAB, '12 500,50', apóstrofo inicial, '1.234.567,89', '12.500', '1.000', '999.999', '1234,56', '12,5', '12,500' (= 12,5), '0,50', ',5', '1,234.56', '1,234,567', '1,234,567.89', '1234.56', '12.5', '1234.567', '12.5000', '.5', '(1.234,56)', '(R$ 10,00)', '-12.500', '- 10,00', '-R$ 10,00', 'R$ -10,00', '10,00-', '−10,00', '+10,00', '1E+05', '1,5e3', e números e Decimal. Viram 0 e contam como inválidos (79-86): ' ' só espaços, 'R$' sozinho, 'abc', '12abc', '12,50 UN', '1.2.3', '1,2,3', '12.34.567', '1.234,56,78', '1,234,56.78', '--10', '1-2', '2026-01-02', '12%', '()', '.', ',', bool, NaN, inf, '1e999'. Viram 0 sem contar: '', '-', '--', 'nan', 'NaN', 'None', 'null', 'N/A' (\_VALORES_EM_BRANCO).
+  - Testes: tests/test_etl_regras_financeiras.py 53-90 · Origem: 0ac01c8
+- **F-10** · formatos de quantidade e estoque — `etl_processor.py` › `_parse_valor` › linhas 156-202
+  - Ponto único é DECIMAL ('1.500' = 1,5 kg). Vírgula é decimal. Ponto e vírgula juntos: o da direita é o decimal. Vários pontos = milhar. Unidades e texto são descartados ('3 kg' -> 3; '2 un(s)' -> 2). '(2)' e '-2' são negativos. Diferenças em relação ao dinheiro, todas medidas: '2-' -> +2; '−2' -> +2; '1e3' -> 13; '12.000' -> 12. Em XLSX, o número 12000 chega como '12000' e não é afetado.
+  - Testes: tests/test_etl_regras_financeiras.py 91-94 · Origem: fc63708; apóstrofo em 91e5fb0
+- **F-11** · formatos de período — `etl_processor.py` › `_extrair_periodo_base` › linhas 738-770
+  - Reconhecido: uma célula com a palavra 'período' (com ou sem acento) e datas dd/mm/aa ou dd/mm/aaaa separadas por '/', nas primeiras 30 linhas. Ex.: 'Período de : 01/01/26 á 31/03/26'. Não reconhecido (medido): datas em células separadas, ISO, separador '-' ou '.', período sem a palavra 'período', mês/ano, período depois da linha 30.
+  - Testes: golden (4 pares com período) · Origem: fc63708
+- **F-12** · layouts de relatório cobertos pelos pares golden — `tests/etl_equivalence_support.py` › `fixture_pairs` › linhas 74-188
+  - C1 'hemorragia': vendas com período, id_produto, descricao_produto, estoque negativo, total_custo e rodapé TOTAL GERAL; compras NF com fornecedor e data. C2 'refém': XLSX com aba de capa; compras só com custo_unitario (total derivado). C3 'ruptura': títulos verbosos ('Valor_Arrecadado_Total_Vendas', 'qtde_vendida'); compra com total 0 filtrada. C4: limiares ABC exatos. CSV com ; , TAB e | em utf-8-sig, latin1, cp1252 e utf-8, com fallback latin1. Aspas multilinha, NUL, cabeçalho depois de 70 linhas, cabeçalho composto, deslocado com rodapé, normalização de nomes com DESCONTOS e lucro, venda derivada com dinheiro misto ('1,234.56', 'R$ 10,50', '(2,50)'), prioridade de produtos_total, empate de abas XLSX, fórmulas com cache e strings NA, período invertido, período só em compras, produto único.
+  - Testes: tests/test_etl_financial_equivalence.py 62-122 · Origem: 2da719b (golden capturado de ff14879, 2026-10-23)
+- **F-13** · número x texto no XLSX — `etl_inputs.py` › `_disambiguate_numbers (ligação com o recorte de entrada)` › linhas 530-545
+  - Com dtype=str, o número 12.125 e o texto '12.125' ficam iguais. O leitor relê a aba com dtype=object e acrescenta '0' aos números ('12.1250'), que o conversor monetário então lê como decimal 12,125. O texto '12.500' segue a regra de milhar (12500). Só há a segunda leitura quando existe algum valor ambíguo.
+  - Testes: tests/test_etl_regras_financeiras.py 139-154 · Origem: 0ac01c8
+- **F-14** · relatório de compras NF-level x item-level — `etl_processor.py` › `_validar_compras; carregar_compras; _calcular_kpis_local` › linhas 615-622; 697-729; 953-983
+  - NF-level (fornecedor + valor): calcula total_comprado e pressão; o saldo parado fica None e entra o alerta de limitação. Item-level (produto + qtde + total ou custo unitário): calcula também o saldo parado por produto. Coluna de valor escolhida: produtos_total, depois valor_nf, depois derivado.
+  - Testes: golden c1 (NF), c2 a c4 (item) · Origem: fc63708
+- **F-15** · extensões aceitas no cálculo — `config.py; etl_inputs.py; models.py` › `ALLOWED_EXTENSIONS; _run; UploadRelatorio CHECK` › linhas config 277; etl_inputs 606-613; models 389
+  - O portal aceita só 'csv' e 'xlsx'. O leitor recusa '.xls' ('Converta para .xlsx ou .csv') e qualquer outra extensão, TXT inclusive. O CHECK do modelo ainda admite 'XLS'. O leitor anterior a 2da719b lia .xls com xlrd e tratava qualquer outra extensão como CSV, com último recurso errors='ignore'.
+  - Testes: tests/test_etl_resource_limits.py 91-97 · Origem: 2da719b
+- **F-16** · valores que chegam ao cálculo — `etl_inputs.py; etl_processor.py` › `read_raw; _interpretar_monetario` › linhas etl_inputs 183-184 e 591; etl_processor 265-269
+  - CSV: células str, com None no preenchimento de linhas curtas. XLSX: str, ou NaN para vazio, booleanos e datas como texto do pandas, fórmulas pelo valor em cache. O ramo numérico de \_interpretar_monetario só é usado por NaN ou por chamadas diretas (validacao_pdv passa str).
+  - Testes: tests/test_etl_financial_equivalence.py 113-122 (reader_fixtures) · Origem: 2da719b
+
+### Desempenho e limites (A.2)
+
+- **D-01** · leitura duplicada — `etl_processor.py` › `_calcular_kpis_local -> carregar_vendas + _detectar_periodo_arquivo` › linhas 899, 941, 773-778
+  - O arquivo de VENDAS é lido INTEIRO duas vezes: uma para limpar (899) e outra só para achar o período (941, via \_ler_bruto). Sem período em vendas, COMPRAS também é lido duas vezes. Medido com patch de read_raw: CSV de 500 mil células -> leituras [vendas 2,83 s, compras 0,02 s, vendas 2,62 s]; sem período -> [vendas, compras, vendas, compras]. Sobre a matriz já lida, \_extrair_periodo_base custa 0,0001 s. O Raio-X já evita isso (raio_x.py 157-160).
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp5_desempenho.py, exp9_custo_limpeza.py)
+- **D-02** · prazo do worker estoura no XLSX grande — `etl_runtime.py; etl_limits.py` › `run_calculation (sem dobra de prazo); ETLLimits.timeout_seconds` › linhas etl_runtime 131-134 (comparar com 113 e 124); etl_limits 22
+  - 'calculate' usa o prazo padrão de 60 s, que também vira RLIMIT_CPU (etl_worker 27). Validação e Raio-X dobram para 120 s; o cálculo não. Medido neste PC: vendas XLSX de 450 mil células (90 mil linhas x 5 colunas) -> cálculo completo em 67,8 s, com leituras de 29,9 s e 31,5 s. Passaria de 60 s, e o processamento de produção cairia por timeout. O XLSX de 100 mil células leva 15,0 s (6,86 + 6,82 s de leitura).
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp8_xlsx_450k.py, exp5_desempenho.py)
+- **D-03** · limpeza linha a linha em Python — `etl_processor.py` › `_vendas_do_bruto (_converter_serie_monetaria, _filtrar_linhas_validas, _normalizar_produto, _converter_serie, _situacao_das_linhas)` › linhas 629-681 (map/compreensões em 206, 310-321, 531-534, 571-572, 582-583, 669)
+  - Cada célula passa por função Python, sem vetorização. Medido: \_vendas_do_bruto = 6,65 s para 99.990 linhas, sem contar a leitura de 2,60 s; groupby + Curva ABC = 0,13 s. Perfil (cProfile, com sobrecarga): \_converter_serie_monetaria 11,5 s acumulados em 3 colunas; \_filtrar_linhas_validas 4,9 s (norm por linha); \_normalizar_produto 3,8 s (NFKD por caractere); segunda leitura 6,3 s. Extrapolação: 36 arquivos de 100 mil linhas dariam cerca de 4 min só de limpeza neste PC.
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp6_perfil.py, exp9_custo_limpeza.py)
+- **D-04** · trabalho repetido no dinheiro — `etl_processor.py` › `_converter_serie_monetaria` › linhas 310, 314 (-> 270)
+  - \_limpar_monetario e \_separar_sinal rodam duas vezes por valor: uma para decidir a coluna (310) e outra dentro de \_interpretar_monetario (270). O perfil registrou 399.962 chamadas para cerca de 200 mil valores.
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp6_perfil.py)
+- **D-05** · teto de saída e catálogo máximo — `etl_limits.py; etl_worker.py; etl_runtime.py` › `ETLLimits.max_output_bytes` › linhas etl_limits 24-25; etl_worker 94-96; etl_runtime 72-77
+  - O resultado JSON tem teto de 4 MiB, e a Curva ABC leva TODOS os produtos. Medido: 159 B por produto com nomes de 23 caracteres (teto de cerca de 26,4 mil produtos); 228 B com nomes de 60 caracteres e 6 acentos (cerca de 18,4 mil), porque ensure_ascii escapa acentos; 336 B com nomes de 200 caracteres (cerca de 12,5 mil). Um catálogo acima disso dá erro 'output', sem resultado parcial. Com 20 mil produtos sintéticos, a saída medida foi de 3.296.677 bytes.
+  - Testes: tests/test_etl_regras_financeiras.py 323-335; tests/test_etl_runtime_limits.py 171-175 · Origem: 0ac01c8 (curva completa); medição deste diagnóstico (exp7_saida.py)
+- **D-06** · memória e estruturas — `etl_worker.py; etl_limits.py; etl_processor.py` › `RLIMIT_AS; memory_mb; DataFrames` › linhas etl_worker 26; etl_limits 23; etl_processor 23 (regra) e 629-729
+  - Tudo fica em memória, como pandas DataFrame de objetos str: a matriz crua inteira, o DataFrame canônico, o agrupado e as listas de dicts da curva. O limite de espaço de endereçamento é 384 MB (teto rígido 512), só no Linux. Não há leitura em blocos, streaming, async nem paralelismo (grep sem chunksize, asyncio, concurrent ou multiprocessing). Os threads de BLAS ficam fixos em 1 (etl_runtime 26-27).
+  - Testes: tests/test_etl_runtime_limits.py 237-245 · Origem: 2da719b
+- **D-07** · limites de entrada que alcançam o cálculo — `etl_limits.py` › `ETLLimits` › linhas 11-25, 44-52
+  - max_file_bytes 20 MB; max_rows 100 mil; max_columns 128; 500 mil células por aba; 1 milhão por arquivo; campo de até 16.384 caracteres; registro CSV de até 131.072. São configuráveis por ETL_\* até os tetos de \_HARD_CAPS. Três anos de vendas linha a linha não cabem num arquivo; o modelo atual é um par de arquivos por análise mensal ou quinzenal (models 342-355).
+  - Testes: tests/test_etl_runtime_limits.py 24-76; tests/test_etl_resource_limits.py · Origem: 2da719b
+- **D-08** · valor não finito — `etl_processor.py; etl_worker.py` › `_parse_valor; json.dumps(allow_nan=False)` › linhas etl_processor 198-202; etl_worker 94
+  - Quantidade de 401 dígitos (permitida pelo limite de 16.384 caracteres) vira inf em \_parse_valor. O KPI fica inf, e o JSON do worker com allow_nan=False falha, terminando em erro genérico 'worker'. Medido: produto_mais_vendido_quantidade = inf e 'Out of range float values are not JSON compliant'. Não há guarda np.isfinite no cálculo de produção; o Raio-X tem (raio_x.py 180-182).
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp7_saida.py)
+- **D-09** · concorrência — `etl_uploads.py; etl_runtime.py` › `_UPLOAD_ADMISSION; _ADMISSION` › linhas etl_uploads 19-37; etl_runtime 17, 49-50
+  - Uma vaga por processo. Com gunicorn -w 1, um único processamento ou upload por vez no servidor; enquanto o cálculo roda, até 60 s, os demais envios e processamentos recebem 'tente novamente'.
+  - Testes: tests/test_etl_runtime_limits.py 218 e 290 · Origem: 2da719b
+- **D-10** · pontos fortes — `etl_processor.py` › `_classificar_curva_abc; _persistir_curva_abc; processar_arquivos_analise` › linhas 800-845; 1145-1159; 1173-1176
+  - A Curva ABC é vetorizada (cumsum, round e np.select) e exata em centésimos, inclusive com 20 mil produtos. A gravação usa um insert em lote. O SAVEPOINT preserva o resultado anterior em falha. O isolamento por processo protege o servidor web. Erros não vazam caminho nem conteúdo. A Curva ABC e o groupby custam 0,13 s para 100 mil linhas.
+  - Testes: tests/test_etl_regras_financeiras.py 323-335 e 343-390 · Origem: 0ac01c8; 2da719b
+- **D-11** · exibição de catálogos grandes — `templates/cliente/analise.html; blueprints/cliente.py; pdf_export.py` › `tabela ABC; _abc_chart; TOP_N_PDF` › linhas analise.html 105-113; cliente 119-134; pdf_export 84
+  - A tela da análise renderiza TODAS as linhas de produto_curva_abc, o que dá dezenas de milhares de linhas de tabela num catálogo grande. O gráfico do painel usa o Top 10 e o PDF, o Top 5.
+  - Testes: tests/test_etl_regras_financeiras.py 392-402 (26 linhas) · Origem: 0ac01c8
+- **D-12** · Windows — `etl_worker.py` › `main` › linhas 24-33
+  - Sem o módulo resource, o worker responde 'platform', e calcular_kpis_em_memoria e processar_arquivos_analise não funcionam no Windows. As medições acima usaram \_calcular_kpis_local direto, sem limites de SO.
+  - Testes: tests/test_etl_regras_financeiras.py 3-4 · Origem: 2da719b
+
+## A.3 Raio-X do PDV
+
+`raio_x.py` (regras), `raio_x_servico.py` (orquestração e gravação), rotas do onboarding e visão por plano.
+
+### Componentes (A.3)
+
+- **RX-C01** · motor de regras — `raio_x.py` › `módulo raio_x (docstring de definições e imports)` › linhas 1-60
+  - Motor de regras do Raio-X do PDV. Roda no processo isolado do ETL (etl_worker, operação 'raio_x'); importa só numpy, pandas, etl_inputs.ETLInputError e, de etl_processor, ETLValidationError, \_converter_serie_monetaria, \_extrair_periodo_base, \_ler_bruto, \_nome_exibivel e \_vendas_do_bruto (L56-60). Não importa banco, Flask nem config. A docstring (L9-43) é a especificação: venda analisada, custo informado, índice de saúde, inconsistências, preço de referência, scanner de omissão, potencial recuperável, margem bruta estimada, vendas abaixo do custo e precificação desatualizada. Entrada: lista de caminhos; saída: dict JSON com as chaves de CHAVES_RESULTADO.
+  - Testes: tests/test_planos_raio_x.py::MotorRaioXTests.test_motor_nao_carrega_banco_nem_configuracao (L248-254) · Origem: commit ec4ba95 (2026-11-08)
+- **RX-C02** · constantes — `raio_x.py` › `VERSAO_REGRAS, MAX_ARQUIVOS, LIMITE_ITENS_LISTA, TOLERANCIA_PRECO_MINIMA, TOLERANCIA_PRECO_RELATIVA, _EPSILON, LIMIAR_SEM_CUSTO, LIMIAR_RECUPERAVEL, LIMIAR_ALTA_CUSTO, FOLGA_REPASSE, CHAVES_RESULTADO, _SOMAS` › linhas 62-75; 93-94
+  - Parâmetros de todas as regras: versão 'raio-x-2026-11.3'; 36 arquivos; listas com até 50 itens; tolerância de preço max(R$ 0,01; 0,5%) mais 1e-9; 10% do faturamento sem custo e 1% recuperável (recomendação); alta de custo de 5% com folga de 2 pontos (precificação). CHAVES_RESULTADO = {versao, arquivos, fatias, saude, scanner, auditoria, recuperavel, periodo, avisos}, conferido em etl_runtime.run_raio_x (L126-127) e raio_x_servico.ultimo (L148). \_SOMAS lista as 12 colunas somadas por produto (linhas, quantidade, faturamento, quantidade_com_custo, faturamento_com_custo, custo_total, perda, vazamento, recuperavel, quantidade_abaixo, faturamento_abaixo, custo_abaixo).
+  - Testes: test_saude_scanner_recuperavel_e_precificacao_conferidos_a_mao (L58-86, confere CHAVES_RESULTADO); test_quantidade_de_arquivos_fora_do_limite (L243-246). LIMITE_ITENS_LISTA: nenhum · Origem: ec4ba95
+- **RX-C03** · leitura por arquivo — `raio_x.py` › `_ler_arquivo` › linhas 154-271
+  - Lê um relatório de vendas UMA vez (\_ler_bruto), tira o período do cabeçalho (\_extrair_periodo_base) e passa a matriz por \_vendas_do_bruto (toda a limpeza é do etl_processor). Depois aplica as regras próprias por linha (venda analisada, custo unitário x total, preço de tabela, centavos, referência, tolerância, variação, vazamento, perda, recuperável), agrega por produto (\_prod_norm) e devolve (produtos do arquivo, resumo do arquivo, produtos em conflito). O DataFrame de linhas é descartado ao sair: só o agregado por produto segue.
+  - Testes: MotorRaioXTests inteiro (tests/test_planos_raio_x.py L42-260) · Origem: ec4ba95
+- **RX-C04** · combinacao de arquivos — `raio_x.py` › `diagnosticar` › linhas 397-506
+  - Ponto de entrada do motor (chamado pelo worker). Confere 1 a 36 caminhos, chama \_ler_arquivo na ordem recebida, concatena os agregados por produto de cada arquivo (por_arquivo, L409), ordena cronologicamente, soma por produto, calcula índice de saúde, margem, listas (scanner, abaixo do custo, margem por item), precificação, período e avisos, e monta o dict de saída.
+  - Testes: todos os testes de MotorRaioXTests passam por ele via tests/raio_x_support.py::executar_como_o_worker (L39-49) · Origem: ec4ba95
+- **RX-C05** · classificacao de coluna — `raio_x.py` › `custo_e_unitario, _RE_UNITARIO_FORTE, _RE_UNITARIO_FRACO, _RE_MULTIPLICADO, _RE_TOTAL` › linhas 76-91
+  - Decide pelo título normalizado (etl_processor.\_norm_chave) se a coluna de custo é por unidade (multiplicar pela quantidade) ou custo da linha. Ver regra RX-R04.
+  - Testes: test_titulos_de_custo_por_unidade_e_de_custo_da_linha (L131-142); test_coluna_de_custo_unitario_vira_custo_da_linha (L121-129) · Origem: ec4ba95
+- **RX-C06** · cadastro — `raio_x.py` › `_codigos, _conflitos` › linhas 132-151
+  - \_codigos: código como texto (espaços colapsados, até 60 caracteres; '', nan, none, null viram ausente). \_conflitos: pares (código, \_prod_norm) sem repetição do arquivo; devolve códigos com mais de um nome, nomes com mais de um código e o conjunto de produtos envolvidos (excluídos do índice de saúde).
+  - Testes: test_inconsistencias_contam_cada_codigo_e_produto_uma_vez (L112-119); test_saude_scanner... (L71-73) · Origem: ec4ba95
+- **RX-C07** · alerta — `raio_x.py` › `_precificacao` › linhas 338-372
+  - Alerta de precificação desatualizada (único mecanismo de 'defasagem de margem' do código). Ver regra RX-R27.
+  - Testes: test_saude_scanner_recuperavel_e_precificacao_conferidos_a_mao (L82-84); test_prata_ve_margem_e_a_auditoria (L616). precificacao_visivel: nenhum · Origem: ec4ba95
+- **RX-C08** · avisos — `raio_x.py` › `_avisos` › linhas 375-394
+  - Avisos textuais do envio: períodos sobrepostos, arquivo sem período e arquivo sem coluna de custo. Ver RX-R28.
+  - Testes: test_sobreposicao_com_relatorio_anual_avisa_cada_mensal (L172-179); test_periodos_sobrepostos_geram_aviso (L231-233); test_uma_linha_por_produto_sem_preco_unitario_nao_mostra_variacao (L199); test_sem_coluna_de_custo_recomenda_prata_e_avisa (L215) · Origem: ec4ba95
+- **RX-C09** · saida — `raio_x.py` › `_rotulo, _fatia, _item` › linhas 277-335
+  - \_rotulo: 'MM/AAAA' quando início e fim estão no mesmo mês, 'dd/mm/aaaa a dd/mm/aaaa' quando não, 'Arquivo N' sem período. \_fatia: resumo de UM arquivo (faturamento, itens, sem custo, custo, margem, perda, vazamento, recuperável, devoluções). \_item: linha de produto das listas, só com os campos pedidos.
+  - Testes: test_saude_scanner... (L61, L63-67); test_faixa_do_historico_oculto_sai_das_datas (L150-158) · Origem: ec4ba95
+- **RX-C10** · formatacao numerica — `raio_x.py` › `_dinheiro, _fracao, _variacao, _texto_curto, _brl` › linhas 100-126
+  - \_dinheiro: round(2), não finito vira 0.0. \_fracao: parte/todo com 4 casas, None se todo <= 0. \_variacao: final/inicial - 1 com 4 casas, None se inicial <= 0. \_texto_curto: colapsa espaços e corta. \_brl: '1.234,56' (usado só nos motivos da recomendação). O worker serializa com allow_nan=False (etl_worker L94).
+  - Testes: indiretos (valores conferidos em MotorRaioXTests) · Origem: ec4ba95
+- **RX-C11** · recomendacao — `raio_x.py` › `recomendar` › linhas 509-544
+  - Plano sugerido com motivos em texto. Roda no processo pai (depende do catálogo do banco para meses_prata), chamado por blueprints/onboarding.py::\_executar_raio_x (L123-124). Ver RX-R32.
+  - Testes: test_sem_coluna_de_custo_recomenda_prata_e_avisa (L211-218); test_cadastro_saudavel_fica_no_bronze_e_historico_longo_com_problema_vai_ao_ouro (L220-229); test_diferenca_dentro_da_tolerancia_nao_vira_vazamento (L101) · Origem: ec4ba95
+- **RX-C12** · orquestracao envio — `raio_x_servico.py` › `processar_envio, _gravar_limitado, _BLOCO` › linhas 37; 47-110
+  - ORQUESTRADOR, não motor: recebe os FileStorage, grava cada um com teto num diretório temporário, aplica a primeira triagem da Baia, recusa duplicados por SHA-256 e chama etl_runtime.run_raio_x. Não faz nenhuma higienização de dado. Ver RX-R34.
+  - Testes: test_erros_de_envio_nao_gravam_e_explicam (L636-651); tests/test_security_gatekeeper.py::BaiaNoRaioXTests (L753-764) · Origem: ec4ba95; Baia em 91e5fb0
+- **RX-C13** · persistencia — `raio_x_servico.py` › `salvar, ultimo` › linhas 116-150
+  - salvar: upsert sem commit da linha da empresa em diagnostico_entrada (SELECT ... FOR UPDATE). ultimo: lê a linha, faz json.loads e exige CHAVES_RESULTADO; JSON ilegível vira None com log. Ver RX-R36.
+  - Testes: test_envio_grava_o_resultado_e_o_bronze_nao_recebe_custo_nem_margem (L578-584); test_novo_envio_substitui_o_anterior (L699-703); test_cada_empresa_ve_so_o_proprio_raio_x (L692-697) · Origem: ec4ba95
+- **RX-C14** · visao por plano — `raio_x_servico.py` › `visao, _corte_historico, mostra_todas_as_fatias, CAMPOS_MARGEM` › linhas 38; 156-216
+  - Cópia do resultado só com o que o plano libera (valores protegidos viram None antes do template e do JSON) e com as fatias além do histórico do plano ocultas. Ver RX-R37 e RX-R38.
+  - Testes: test_envio_grava_o_resultado_e_o_bronze_nao_recebe_custo_nem_margem (L578-601); test_prata_ve_margem_e_a_auditoria (L603-618); test_historico_do_bronze_mostra_os_ultimos_seis_meses (L705-718); test_faixa_do_historico_oculto_sai_das_datas (L150-158) · Origem: ec4ba95
+- **RX-C15** · codigo morto — `raio_x_servico.py` › `CAMPOS_FATIA` › linhas 39-41
+  - Tupla com os campos de fatia definida e não usada em nenhum lugar do repositório (grep: só a definição). A ocultação real dos campos de fatia está escrita à mão em visao L182-184.
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-C16** · rotas — `blueprints/onboarding.py` › `onboarding_bp: diagnostico, diagnostico_enviar, auditoria, api_diagnostico, api_diagnostico_enviar, api_auditoria, _executar_raio_x, _contexto_raio_x, _json_raio_x, _cabecalhos_api, limite_raio_x` › linhas 36-244
+  - Páginas e API do Raio-X: GET/POST /onboarding/diagnostico (L133-162), GET /onboarding/diagnostico/auditoria (L165-170), GET/POST /api/onboarding/diagnostico (L202-229), GET /api/onboarding/diagnostico/auditoria (L232-244). \_executar_raio_x (L114-127) chama processar_envio, reconfere a assinatura, recomenda, grava e comita. \_contexto_raio_x (L64-98) monta visão, recomendação, upgrade e plano_historico. /api/ sai com Cache-Control no-store e nosniff (L44-50).
+  - Testes: RaioXPortalTests (tests/test_planos_raio_x.py L577-740); EntitlementsTests (L431-571) · Origem: ec4ba95
+- **RX-C17** · controle de acesso — `entitlements.py` › `requer_funcionalidade, funcionalidades_da_empresa, empresa_tem_acesso, catalogo, Catalogo.plano_necessario, nivel_da_empresa, limite_historico_meses, FUNCIONALIDADES_NO_PORTAL, MENU_CLIENTE` › linhas 49-58; 149-193; 252-296; 378-399; 414-425
+  - Decide quais funcionalidades a empresa tem (plano.nome_plano = plano_nivel.codigo, assinatura ATIVA via contract_policy). requer_funcionalidade('raio_x_entrada') protege envio e leitura; 'auditoria_abaixo_custo' protege a auditoria. As chaves liberadas alimentam raio_x_servico.visao. Falha fechada sem esquema ou com erro de banco (403/503).
+  - Testes: EntitlementsTests (L431-571); MigracaoPlanosTests (L319-425) · Origem: ec4ba95
+- **RX-C18** · isolamento — `etl_runtime.py` › `run_raio_x, _run_job, _ADMISSION, _worker_environment` › linhas 17-29; 44-103; 117-128
+  - run_raio_x dobra o prazo (min(120, 2 x 60)), chama \_run_job('raio_x', caminhos) e recusa resultado cujas chaves não sejam exatamente CHAVES_RESULTADO. \_run_job: semáforo de 1 vaga, pedido JSON até 16.384 bytes, subprocesso 'python -I -B etl_worker.py' com ambiente filtrado e threads numéricas = 1, prazo, saída até max_output_bytes, envelope validado.
+  - Testes: substituído por executar_como_o_worker nos testes (tests/test_planos_raio_x.py L272); worker real só no Linux (tests/test_security_gatekeeper.py) · Origem: SEC-005 (2da719b); run_raio_x em ec4ba95
+- **RX-C19** · isolamento — `etl_worker.py` › `main (ramo request['operation'] == 'raio_x')` › linhas 8-100 (ramo 61-69)
+  - Aplica RLIMIT_AS (384 MB), RLIMIT_CPU (prazo), RLIMIT_FSIZE e RLIMIT_CORE antes de importar pandas (L24-33), instala audit hook que recusa rede e criação de processo (L38-47), confere len(paths) <= MAX_ARQUIVOS, roda validate_input em cada arquivo (L67-68) e depois raio_x.diagnosticar (L69). MemoryError vira código 'memory' (L73-75).
+  - Testes: test_worker_tem_a_operacao_e_o_teto_de_arquivos (L256-260) · Origem: ec4ba95
+- **RX-C20** · reuso do etl — `etl_processor.py` › `_ler_bruto, _vendas_do_bruto (com df.attrs['cabecalhos']), _extrair_periodo_base, _converter_serie_monetaria, _nome_exibivel, ETLValidationError` › linhas 80-84; 133-139; 308-322; 342-347; 629-681; 751-770
+  - Funções do motor ETL reaproveitadas pelo Raio-X. Para isso o commit ec4ba95 extraiu \_vendas_do_bruto de carregar_vendas (carregar_vendas L625-626 virou um invólucro) e passou a guardar o título normalizado de cada coluna reconhecida em df.attrs['cabecalhos'] (L636-639, L680), usado só pelo Raio-X (custo unitário e total derivado).
+  - Testes: golden do ETL (tests/etl_equivalence_support.py) cobre carregar_vendas; os títulos em attrs só são exercitados por MotorRaioXTests · Origem: \_ler_bruto, \_extrair_periodo_base e \_NAO_PRODUTOS em fc63708 (2026-10-19); \_nome_exibivel em bd8cace (2026-10-29); \_converter_serie_monetaria e \_aplicar_situacao_das_vendas em 0ac01c8 (2026-11-02); \_vendas_do_bruto/cabecalhos em ec4ba95
+- **RX-C21** · reuso da leitura — `etl_inputs.py` › `read_raw, validate_input, _run` › linhas 601-638
+  - validate_input (sem materializar) é chamada pelo worker em cada arquivo antes do cálculo; read_raw (via \_ler_bruto) materializa a matriz como texto e aplica security_gatekeeper.neutralizar_matriz. Ambas usam o mesmo \_run (CSV ou XLSX).
+  - Testes: tests/test_etl_\*.py (outro recorte); executar_como_o_worker repete a validação · Origem: SEC-005; neutralização em 91e5fb0
+- **RX-C22** · baia de seguranca — `security_gatekeeper.py` › `teto_bytes, inspecionar_arquivo, registrar_recusa, neutralizar_matriz` › linhas 104-106; 217-237; 265-272; 327-379
+  - Partes da Baia que o Raio-X usa: teto de bytes na cópia em blocos, assinatura dos primeiros bytes no processo pai (com rótulo 'Arquivo N'), log de quarentena com origem='raio_x' e a neutralização de fórmula feita em toda leitura. NÃO usa triar, inventariar_xlsx, exigir_estrutura_minima, \_liberar_copia nem ler_liberado (grep sem ocorrência em raio_x.py, raio_x_servico.py e onboarding.py): os arquivos do Raio-X não são gravados (comentário em raio_x_servico L93-95).
+  - Testes: tests/test_security_gatekeeper.py::BaiaNoRaioXTests.test_raio_x_recusa_o_arquivo_disfarcado_antes_do_processo_isolado (L753-764) · Origem: 91e5fb0
+- **RX-C23** · modelo de dados — `models.py` › `DiagnosticoEntrada (tabela diagnostico_entrada)` › linhas 1257-1296
+  - Uma linha por empresa (PK id_empresa, FK CASCADE), id_usuario (SET NULL), gerado_em, versao_regras, arquivos (>=1), periodo_inicio/fim, indice_saude Numeric(5,2) 0-100, valor_recuperavel Numeric sem precisão (>=0), plano_recomendado (FK plano_nivel) e resultado (Text com o JSON). Criada pela migração b3e9d6c1f7a2 (L169-195), com RLS no PostgreSQL (L224-227).
+  - Testes: test_envio_grava... (L581-584); test_exclusao_permanente_da_empresa_leva_o_raio_x (L720-732); tests/test_planos_postgresql.py (raio_x_saved) · Origem: ec4ba95
+- **RX-C24** · catalogo de planos — `migrations/versions/b3e9d6c1f7a2_planos_funcionalidades_raio_x.py` › `_NIVEIS, _FUNCIONALIDADES, _matriz` › linhas 49-100
+  - Valores congelados que o Raio-X consome: BRONZE (6 meses), PRATA (24), OURO e CUSTOM (sem limite); raio_x_entrada a partir do BRONZE; auditoria_abaixo_custo, margem_bruta, diagnostico_cmv e alerta_precificacao a partir do PRATA; matriz cumulativa (38 pares).
+  - Testes: test_niveis_funcionalidades_e_matriz_cumulativa (L336-355) · Origem: ec4ba95
+- **RX-C25** · apresentacao — `templates/onboarding/diagnostico.html` › `seções Saúde do cadastro, Scanner de omissão, Linha do tempo; templates/onboarding/auditoria.html; templates/_planos.html::dado_protegido, secao_bloqueada, recomendacao_plano` › linhas diagnostico.html 50-98 e 149-178; auditoria.html 38-44 e 142-146; _planos.html 45-90
+  - Só desenha o que visao entrega. Tem limiares só de apresentação: cor do índice verde >= 80, âmbar >= 50, vermelho abaixo (diagnostico.html L52) e 'Sem custo informado' vermelho >= 10% (L62). A nota de variação invisível está em L93-98. O marcador desfocado é texto fixo (\_planos.html L45-53), sem o número verdadeiro.
+  - Testes: test_envio_grava... (L585-592); tests/test_planos_navegador.py (opcional) · Origem: ec4ba95
+- **RX-C26** · admissao — `etl_uploads.py` › `vaga_de_entrada, _UPLOAD_ADMISSION` › linhas 19; 44-53
+  - A mesma vaga única de upload/processamento das análises; o Raio-X a toma antes de ler os arquivos (onboarding L147 e L217). Ocupada: flash ou 503 com MENSAGEM_OCUPADO.
+  - Testes: test_envio_ocupado_nao_processa (L671-679) · Origem: ec4ba95
+- **RX-C27** · limite http — `app.py` › `_grande_demais (errorhandler 413); config.MAX_CONTENT_LENGTH` › linhas app.py 470-481; config.py 227-229
+  - O corpo inteiro do envio (todos os arquivos somados) é limitado por MAX_CONTENT_LENGTH (padrão 20 MB, MAX_CONTENT_LENGTH_MB). Nos endpoints do Raio-X a mensagem diz 'envie menos meses por vez'.
+  - Testes: test_envio_acima_do_limite_somado_responde_413_em_portugues (L653-669) · Origem: ec4ba95
+- **RX-C28** · apoio de testes — `tests/raio_x_support.py` › `JANEIRO, FEVEREIRO, relatorio_do_mes, executar_como_o_worker` › linhas 12-49
+  - Relatórios fictícios usados como 'golden' manual das regras (contas conferidas à mão) e o executor que faz o mesmo que o worker (validate_input + diagnosticar + ida e volta em JSON) sem o módulo resource.
+  - Testes: usado por tests/test_planos_raio_x.py e tests/test_planos_postgresql.py · Origem: ec4ba95
+- **RX-C29** · leads sem ligacao — `models.py` › `LeadAvaliacao, BrainstormingDadosPdv; leads_avaliacao.expurgar_dados_pdv` › linhas models.py 1306-1402; leads_avaliacao.py 37-79
+  - Tabelas da Avaliação de Cenário (migração f4c2a8e1d9b6). Nenhuma ligação com o Raio-X: raio_x_servico importa só DiagnosticoEntrada (L31), raio_x.py não importa models, e o único código que toca essas tabelas é o expurgo de 30 dias. Docs/BAIA_DE_SEGURANCA_E_LEADS.md L150: 'Ainda não existe formulário, rota ou processamento que grave nessas tabelas'.
+  - Testes: tests/test_leads_avaliacao.py (8, SQLite); tests/test_leads_postgresql.py (20 verificações) · Origem: 91e5fb0
+
+### Regras (A.3)
+
+- **RX-R01** · selecao de linhas — `raio_x.py` › `_ler_arquivo (validas, venda)` › linhas 168-170
+  - Venda analisada = linha não marcada como devolução/troca (df['\_devolucao']; sem coluna de situação, todas valem) com quantidade > 0 E valor > 0. Exemplo: 'Cafe;10;...;200,00;Concluida' entra; 'Cafe;1;...;20,00;Devolucao' sai das contas de preço e custo. Linha com quantidade 0 e valor R$ 50 (sem situação) some sem contagem nenhuma; linha com quantidade -2 e valor -2 também (experimento 4).
+  - Testes: test_canceladas_e_devolucoes_ficam_fora_das_contas_de_preco_e_custo (L201-209); test_relatorio_sem_venda_valida_e_recusado (L165-170) · Origem: ec4ba95
+- **RX-R02** · erro de dados — `raio_x.py` › `_ler_arquivo (except ETLValidationError)` › linhas 157-165
+  - Todo ETLValidationError de código 'data' vindo de \_vendas_do_bruto vira ETLInputError('raio_x_dados', 'Arquivo N: não foi possível identificar produto, quantidade e valor de venda...'); erros de limite (código diferente de 'data') sobem com a mensagem do etl_inputs. Consequência: arquivo com TODAS as linhas canceladas recebe a mesma mensagem genérica, enquanto o ETL diria 'sem vendas válidas: todas as linhas estão canceladas' (etl_processor L589-591) — confirmado no experimento 3; a lista de colunas reconhecidas de \_detectar_cabecalho (L480-486) também se perde.
+  - Testes: test_arquivo_sem_colunas_de_vendas_tem_mensagem_segura (L235-241); test_erros_de_envio_nao_gravam_e_explicam (L642) · Origem: ec4ba95
+- **RX-R03** · numeros finitos — `raio_x.py` › `_ler_arquivo` › linhas 181-184
+  - Quantidade, valor e custo das vendas analisadas precisam ser finitos; senão 'raio_x_dados: há quantidade, valor ou custo fora do intervalo aceito'. Ex.: quantidade com 400 dígitos (float -> inf, possível porque o campo vai até 16.384 caracteres).
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-R04** · custo unitario x total — `raio_x.py` › `custo_e_unitario; _RE_MULTIPLICADO; _RE_UNITARIO_FORTE; _RE_UNITARIO_FRACO; _RE_TOTAL; _ler_arquivo` › linhas 79-91; 171-174
+  - Título normalizado da coluna valor_custo (df.attrs['cabecalhos']). Ordem: (1) multiplicação explícita \bx\b|\bqtde?\b|\bquant => custo da LINHA; (2) sinal forte \bunit|\bunid|\bund?\b|custo por => UNITÁRIO (vence até 'total'); (3) sinal fraco \bmedio\b|\bmedia\b|preco de custo|preco custo => unitário só sem \btot(al|ais)?\b; (4) demais => custo da linha. Unitário é multiplicado pela quantidade. Exemplos (teste L133-136): unitários 'Custo Unitario', 'Custo Unit.', 'Custo Un.', 'Custo Und', 'Custo Unid.', 'Custo p/ Unidade', 'Custo por Unidade', 'Custo Médio', 'Preço de Custo', 'Preço Custo'; totais 'Total Custo', 'Custo Total', 'Vlr Custo', 'Custo', 'Total Custo Médio', 'Tot. Custo Médio', 'Qtde x Custo Médio', 'Custo Unit x Qtde'. Experimento: 'Custo Unitario Total' e 'Custo Und Total' => unitário; 'Custo Medio Totais' => total; 'Custo Reposicao', 'Custo Ultima Compra' e 'Custo (R$)' => total (risco: custos de reposição/última compra costumam ser unitários). Efeito: 'Custo Unitario' 6,00 em 4 un. vendidas por R$ 20 => custo 24, perda 4.
+  - Testes: test_titulos_de_custo_por_unidade_e_de_custo_da_linha (L131-142); test_coluna_de_custo_unitario_vira_custo_da_linha (L121-129) · Origem: ec4ba95
+- **RX-R05** · centavos — `raio_x.py` › `_ler_arquivo (DataFrame v)` › linhas 190-201
+  - Faturamento e custo de cada venda são arredondados ao centavo por linha (valor.round(2); custo.where(custo > 0, 0).round(2)), como o PDV registra; custo negativo vira 0 (sem custo). Ex.: granel 1,115 kg a R$ 9,90 = 11,04 vendido; custo 9,95/kg = 11,09; perda 0,05 (fecha com 'custo dessas vendas - vendido por').
+  - Testes: test_perda_da_auditoria_fecha_em_centavos (L144-148) · Origem: ec4ba95
+- **RX-R06** · venda sem custo — `raio_x.py` › `_ler_arquivo (com_custo); diagnosticar (sem_custo, saude)` › linhas 171-172; 204; 427-429; 453-459
+  - Linha com custo: custo arredondado > 0. Custo vazio, inválido (convertido para 0 pelo ETL), zero ou negativo = 'sem custo informado'; arquivo sem coluna de custo => todas as vendas sem custo. Produto sem custo = custo_total <= 0 somando TODOS os arquivos (itens_sem_custo, pct_itens_sem_custo). faturamento_sem_custo = faturamento - faturamento_com_custo (também por fatia, L296-297). Não há teste de plausibilidade: R$ 0,01 conta como custo (experimento 11: índice 20,0 e margem 49,99 em R$ 50 vendidos), e custo negativo some como 'sem custo' sem aviso.
+  - Testes: test_sem_coluna_de_custo_recomenda_prata_e_avisa (L211-214); test_saude_scanner... (L64, L69-70). pct_itens_sem_custo: nenhum · Origem: ec4ba95
+- **RX-R07** · preco praticado — `raio_x.py` › `_ler_arquivo (preco_real, preco)` › linhas 202-203
+  - preco_real = faturamento (centavos) / quantidade, sem arredondar, usado em todas as comparações; preco = round(preco_real, 2) só para agrupar candidatos e mostrar mínimo e máximo. Ex.: 29.847,00 / 30.000 un = 0,9949.
+  - Testes: test_diferenca_dentro_da_tolerancia_nao_vira_vazamento (L97-104) · Origem: ec4ba95
+- **RX-R08** · preco de tabela — `raio_x.py` › `_ler_arquivo (preco_tabela, tabela)` › linhas 175-180; 200
+  - Quando a coluna preco_unitario existe (aliases 'preco unitario', 'preco unit', 'valor unitario', 'vlr unitario', 'preco venda', 'preco'), ela é convertida de novo com \_converter_serie_monetaria e um Counter() descartável, e vale como 'preço de tabela' da linha quando > 0.
+  - Testes: test_referencia_e_vendas_abaixo_do_custo_detalhadas_por_item (L88-91) · Origem: ec4ba95
+- **RX-R09** · preco de referencia — `raio_x.py` › `_ler_arquivo (tem_tabela, candidato, pesos, referencia)` › linhas 205-213; diagnosticar 419-420
+  - Por produto e POR ARQUIVO: se alguma linha do produto tem preço de tabela, os candidatos são só os preços de tabela (round 2; linhas sem tabela saem pelo dropna); senão, os preços praticados. Referência = candidato com maior quantidade somada (soma arredondada a 6 casas), empate => o menor preço. Na tela vale a referência do arquivo mais recente. Exemplos: Pão 1 un a 2,00 + 1 un a 2,00 + 1 un a 1,50 => 2,00 (vazamento 0,50); Bolo 2 un a 10 e 2 un a 12 => empate, 10 (vazamento 0); Queijo 1,1 kg + 2,2 kg a 50 contra 3,3 kg a 45 => empate, 45.
+  - Testes: test_linha_por_venda_usa_o_preco_mais_praticado_e_o_menor_no_empate (L186-192); test_empate_em_quantidade_fracionada_fica_com_o_menor_preco (L106-110) · Origem: ec4ba95
+- **RX-R10** · tolerancia de preco — `raio_x.py` › `_ler_arquivo (limite); TOLERANCIA_PRECO_MINIMA; TOLERANCIA_PRECO_RELATIVA; _EPSILON` › linhas 65-68; 214
+  - limite = max(0,01; 0,005 x referência) + 1e-9 (a folga evita que 1,00 - 0,99 = 0,010000000000000009 passe). Ex.: tabela 1,00 e preço médio 0,9949 (diferença 0,0051) não conta; tabela 10,00 e preço 9,946 (diferença 0,054 > 0,05) conta, vazamento R$ 540 em 10.000 un.
+  - Testes: test_diferenca_dentro_da_tolerancia_nao_vira_vazamento (L97-104) · Origem: ec4ba95
+- **RX-R11** · variacao de preco — `raio_x.py` › `_ler_arquivo (abaixo_referencia, fora_da_referencia, amplitude, variacao)` › linhas 215-220
+  - Produto 'com variação' no arquivo quando (amplitude max-min do preço praticado > limite OU alguma linha fora da referência por mais que o limite) E a quantidade somada do produto NO ARQUIVO > 1. Ex.: Café 10 un, uma linha, R$ 180 com tabela 20 => fora da referência => variação. Item vendido 1 unidade a metade da tabela não é marcado (experimento 10); item com 1 un/mês por 36 meses nunca é marcado, porque a regra é por arquivo.
+  - Testes: test_saude_scanner... (L75-77); test_linha_por_venda... (L186-192) · Origem: ec4ba95
+- **RX-R12** · vazamento de preco — `raio_x.py` › `_ler_arquivo (vazamento)` › linhas 221-222
+  - Só nas linhas de produto com variação E abaixo da referência: vazamento = referência x quantidade - faturamento. Ex.: Café 10 un vendidos por 180 com tabela 20 => 20,00. Total do envio em scanner.vazamento_preco e recuperavel.variacao_preco (mesmo valor).
+  - Testes: test_saude_scanner... (L65, L78); test_recuperavel_conta_uma_vez... (L181-184) · Origem: ec4ba95
+- **RX-R13** · venda abaixo do custo — `raio_x.py` › `_ler_arquivo (perda, quantidade_abaixo, faturamento_abaixo, custo_abaixo); diagnosticar (abaixo, itens_abaixo_custo)` › linhas 223; 225-228; 435; 484-488
+  - Por linha com custo: perda = max(custo - faturamento, 0); quantidade, faturamento e custo só dessas linhas acumulam por produto. Lista itens_abaixo_custo = produtos com perda > 0 ordenados por perda e faturamento (top 50); itens_venda_abaixo_custo = quantos produtos. Ex.: Leite 1L em janeiro: 20 un, vendido 100, custo 110 => perda 10; fevereiro (100 x 90) não entra na linha da auditoria.
+  - Testes: test_referencia_e_vendas_abaixo_do_custo_detalhadas_por_item (L88-95); test_prata_ve_margem_e_a_auditoria (L617-618) · Origem: ec4ba95
+- **RX-R14** · potencial recuperavel — `raio_x.py` › `_ler_arquivo (recuperavel); diagnosticar (recuperavel)` › linhas 224; 495-499
+  - Por LINHA: recuperável = max(vazamento, perda) — a mesma diferença não conta duas vezes, então total <= abaixo_custo + variacao_preco. Ex.: 10 un a R$ 6 com tabela 10 e custo 8 => vazamento 40, perda 20, recuperável 40. Janeiro+fevereiro do teste: total 30 (abaixo do custo 10, variação 20). Vai para diagnostico_entrada.valor_recuperavel e para o motivo de recomendação de 1%.
+  - Testes: test_recuperavel_conta_uma_vez_a_venda_abaixo_do_custo_e_do_preco (L181-184); test_saude_scanner... (L78) · Origem: ec4ba95
+- **RX-R15** · relatorio consolidado — `raio_x.py` › `_ler_arquivo (valor_derivado, variacao_visivel); diagnosticar (variacao_visivel)` › linhas 176-178; 264-265; 438; 470
+  - Único sinal de relatório consolidado: variacao_visivel do arquivo = (tem preço unitário E o total veio de coluna própria) OU algum produto tem mais de uma linha de venda no arquivo; do envio = qualquer arquivo visível. Sem coluna de total, o ETL deriva o valor de preço x quantidade e o preço praticado é o próprio preço de tabela. Ex.: 'Codigo;Produto;Qtde;Preco Unitario;Total Custo' => False; 'Codigo;Produto;Qtde;Valor Total;Total Custo' com uma linha por produto => False. A tela mostra a nota em diagnostico.html L93-98; nada é bloqueado nem gravado como marca.
+  - Testes: test_total_calculado_pelo_preco_unitario_nao_mostra_variacao (L160-163); test_uma_linha_por_produto_sem_preco_unitario_nao_mostra_variacao (L194-198); test_linha_por_venda... (L192) · Origem: ec4ba95
+- **RX-R16** · codigo do produto — `raio_x.py` › `_codigos; _texto_curto` › linhas 119-121; 132-136
+  - Código = texto com espaços colapsados, até 60 caracteres; '', 'nan', 'none', 'null' => ausente. Não normaliza zeros à esquerda ('001' e '1' são códigos diferentes) e mantém o apóstrofo da neutralização de fórmula (experimento: código '-1-2' sai como "'-1-2").
+  - Testes: indireto em test_inconsistencias... (L112-116) · Origem: ec4ba95
+- **RX-R17** · conflito cadastral — `raio_x.py` › `_conflitos; diagnosticar (envolvidos, inconsistencias)` › linhas 139-151; 186; 401-406; 430; 462-463
+  - Por ARQUIVO, sobre todas as linhas do df (inclusive devoluções e quantidade 0): código com mais de um nome normalizado e nome com mais de um código; os produtos envolvidos saem do faturamento auditável. Contagem final = união dos conjuntos (cada código/nome uma vez). Ex.: código 3 = 'Leite 1L' e 'Leite Integral' no mesmo arquivo => 1 conflito e índice cai; os mesmos nomes em arquivos DIFERENTES => 0 conflitos (experimento 2: índice 100,0).
+  - Testes: test_inconsistencias_contam_cada_codigo_e_produto_uma_vez (L112-116); test_saude_scanner... (L71-73). nome_com_varios_codigos: nenhum · Origem: ec4ba95
+- **RX-R18** · estoque negativo — `raio_x.py` › `_ler_arquivo (estoque_negativo); diagnosticar` › linhas 187-188; 464
+  - Produtos (por \_prod_norm) cujo MENOR estoque no arquivo é < 0, em todas as linhas; união entre arquivos; sem limiar. Estoque vazio vira 0 (etl_processor L662-663). Ex.: mesmo produto com estoque -3 em 3 arquivos => 1.
+  - Testes: test_inconsistencias_contam_cada_codigo_e_produto_uma_vez (L117-119); test_saude_scanner... (L74) · Origem: ec4ba95
+- **RX-R19** · venda sem valor — `raio_x.py` › `_ler_arquivo (venda_sem_valor); diagnosticar` › linhas 263; 465
+  - Linhas não-devolução com quantidade > 0 e valor <= 0, contadas por linha e somadas entre arquivos. Ex.: valor 'abc' (o ETL converte para 0) com quantidade 5 => 1 (experimento 8); linha de quantidade 2 e valor -40 sem coluna de situação => 1 (experimento 4).
+  - Testes: nenhum (grep: nenhuma asserção de venda_sem_valor) · Origem: ec4ba95
+- **RX-R20** · margem negativa — `raio_x.py` › `diagnosticar (margem_negativa)` › linhas 432; 466; 486
+  - Produto com custo cujo faturamento_com_custo somado no envio < custo_total: margem negativa no período inteiro. Diferente de itens_venda_abaixo_custo (algum dia vendeu abaixo). Aparece duas vezes na saída (saude.inconsistencias e auditoria) e é motivo de PRATA.
+  - Testes: nenhum direto (grep: itens_margem_negativa sem asserção) · Origem: ec4ba95
+- **RX-R21** · indice de saude — `raio_x.py` › `diagnosticar (auditavel, saude.indice)` › linhas 430; 452
+  - indice = round(100 x faturamento_com_custo dos produtos fora de conflito de código/nome / faturamento analisado, 2). Não pesa estoque negativo, venda sem valor nem margem negativa. Ex.: janeiro+fevereiro do teste: 100 x 410 / 650 = 63,08 (Café 380 + Açúcar com custo 30; Leite 1L e Leite Integral dividem o código 3). Gravado em diagnostico_entrada.indice_saude (Numeric 5,2). Cores só no template: >= 80 verde, >= 50 âmbar.
+  - Testes: test_saude_scanner... (L72); test_envio_grava... (L582-583: Decimal('63.08')) · Origem: ec4ba95
+  - Nota da revisão: as faixas de cor ficam em `templates/onboarding/diagnostico.html` 52 (verde a partir de 80, âmbar a partir de 50, vermelho abaixo). A mesma tela repete, na linha 62, o limiar de 10% de faturamento sem custo que `raio_x.LIMIAR_SEM_CUSTO` (linha 69) já define.
+- **RX-R22** · margem bruta estimada — `raio_x.py` › `diagnosticar (margem); _fatia; _item` › linhas 431; 480-483; 288; 298-300; 310-311; 327-328
+  - margem = faturamento_com_custo - custo_total, só nas vendas com custo; margem % = margem / faturamento_com_custo (sobre a receita, não markup); None sem custo. Calculada no envio, por fatia e por item. Ex.: janeiro custo 269 e margem 21; envio 559 e 61. Não é lucro nem CMV contábil (docstring L35-39); a regra 'sem margem' do etl_processor (L22-32) continua nos KPIs, PDF e devolutiva.
+  - Testes: test_saude_scanner... (L67, L81); test_coluna_de_custo_unitario... (L126-127); test_prata_ve_margem_e_a_auditoria (L607-608) · Origem: ec4ba95
+- **RX-R23** · custo medio — `raio_x.py` › `_item (custo_medio)` › linhas 325-326
+  - custo_medio = custo_total / quantidade_com_custo, arredondado a 2 casas por \_dinheiro (a coluna custo_medio_registrado do lead é Numeric(14,4)). Ex.: Café 150 / 10 = 15,00; Café em jan+fev = 16,50.
+  - Testes: test_coluna_de_custo_unitario... (L126-127); test_envio_grava... (L590-595) · Origem: ec4ba95
+- **RX-R24** · devolucoes — `raio_x.py` › `_ler_arquivo (devolucoes); _fatia; diagnosticar` › linhas 247; 304; 460
+  - Soma do valor absoluto das linhas de devolução/troca (as que \_aplicar_situacao_das_vendas negativou), só quando o relatório tem coluna de situação; sem ela, linha negativa não conta como devolução. Ex.: 'Cafe;1;20,00;20,00;15,00;Devolucao' => devoluções 20,00 e fora do faturamento analisado (200,00).
+  - Testes: test_canceladas_e_devolucoes_ficam_fora_das_contas_de_preco_e_custo (L201-209) · Origem: ec4ba95
+- **RX-R25** · combinacao entre arquivos — `raio_x.py` › `diagnosticar (datas, por_arquivo, grupos)` › linhas 407-421
+  - Ordena os agregados por início do período (arquivo sem período = date.min, ou seja, o mais ANTIGO) e índice; soma \_SOMAS; nome, código, referência e referencia_tabela = last (mês mais recente); preço mín./máx. do envio; variação = any. Ex.: relatório sem período com 'CAFE NOVO NOME' e janeiro/2026 com 'Cafe Antigo' => a tela mostra 'Cafe Antigo' (experimento 12).
+  - Testes: indireto (test_saude_scanner... nomes 'Cafe 500g') · Origem: ec4ba95
+- **RX-R26** · sem vendas — `raio_x.py` › `diagnosticar` › linhas 423-426
+  - Faturamento analisado total <= 0 => ETLInputError('raio_x_sem_vendas') e nada é gravado. Ex.: só uma devolução e uma linha de quantidade 0.
+  - Testes: test_relatorio_sem_venda_valida_e_recusado (L165-170) · Origem: ec4ba95
+- **RX-R27** · precificacao desatualizada — `raio_x.py` › `_precificacao; LIMIAR_ALTA_CUSTO; FOLGA_REPASSE` › linhas 71-72; 338-372
+  - Só arquivos com período E coluna de custo; menos de 2 => precificacao_visivel False. Por produto, primeiro e último arquivo (cronológico) em que ele teve quantidade e custo; custo e preço unitários = custo_total e faturamento_com_custo / quantidade_com_custo. Alerta quando alta do custo >= 5% e alta do preço < alta do custo - 2 pontos (as variações são arredondadas a 4 casas antes: +4,996% vira 5% e dispara — experimento A). impacto = max(0, (custo_final - custo_inicial) - (preco_final - preco_inicial)) x quantidade do último arquivo; top 50 por impacto. Ex.: Café custo 15 -> 18 (+20%), preço 18 -> 20 (+11,1%) => impacto 10. Arquivo sem período fica fora (experimento C). É a única regra de 'defasagem de margem' do código.
+  - Testes: test_saude_scanner... (L82-84); test_prata_ve_margem_e_a_auditoria (L616). Limiar e visibilidade: nenhum · Origem: ec4ba95
+- **RX-R28** · avisos — `raio_x.py` › `_avisos` › linhas 375-394
+  - (a) sobreposição: cada arquivo datado comparado com o que chega mais longe entre os anteriores; anual 2026 + fev/mar/abr => três avisos 'Os arquivos 1 e N cobrem períodos que se sobrepõem: os totais somam os dois' (os totais NÃO são deduplicados); (b) arquivo sem período: entra nos totais, fora da linha do tempo; (c) arquivo sem coluna de custo. Não avisa lacuna de meses (jan/2024 + dez/2026 => nenhum aviso, experimento 6).
+  - Testes: test_sobreposicao_com_relatorio_anual_avisa_cada_mensal (L172-179); test_periodos_sobrepostos_geram_aviso (L231-233); L199; L215 · Origem: ec4ba95
+- **RX-R29** · fatias — `raio_x.py` › `_rotulo; _fatia; diagnosticar (fatias)` › linhas 277-305; 449-450
+  - Uma fatia por ARQUIVO (não por mês), ordenadas por início, com as sem período no fim. Relatório anual + mensal => 2 fatias: '01/01/2025 a 31/12/2025' (2.400) e '01/2026' (200) (experimento D).
+  - Testes: test_saude_scanner... (L61-67) · Origem: ec4ba95
+- **RX-R30** · periodo do envio — `raio_x.py` › `diagnosticar (periodo)` › linhas 440-442; 500-504
+  - inicio = menor início, fim = maior fim, meses = vão de calendário inclusivo (não o número de arquivos). Ex.: 2 arquivos, jan/2024 e dez/2026 => meses 36 e, com problema de cadastro, recomendação OURO (experimento 6).
+  - Testes: test_saude_scanner... (L85) · Origem: ec4ba95
+- **RX-R31** · listas resumidas — `raio_x.py` › `diagnosticar (com_variacao, abaixo, com_margem); _precificacao; LIMITE_ITENS_LISTA` › linhas 64; 434-436; 474-491; 371-372
+  - Scanner: produtos com variação por vazamento e faturamento desc.; auditoria: abaixo do custo por perda e faturamento desc.; margem por item por faturamento_com_custo desc.; precificação por impacto. Cada lista até 50 itens; os totais usam todos os produtos.
+  - Testes: nenhum para o corte de 50 · Origem: ec4ba95
+- **RX-R32** · recomendacao de plano — `raio_x.py` › `recomendar; LIMIAR_SEM_CUSTO; LIMIAR_RECUPERAVEL` › linhas 69-70; 512-544
+  - Motivos: nenhum arquivo com coluna de custo; ou faturamento sem custo >= 10%; itens com margem negativa; recuperável / faturamento >= 1%. Sem motivo => BRONZE (mesmo com 36 meses). Com motivo e meses do envio > limite do PRATA (24, lido do catálogo em onboarding L123-124) => OURO; senão PRATA. CUSTOM nunca é sugerido. Ex.: 24 meses com problema => PRATA; 36 => OURO.
+  - Testes: test_sem_coluna_de_custo_recomenda_prata_e_avisa (L216-218); test_cadastro_saudavel_fica_no_bronze_e_historico_longo_com_problema_vai_ao_ouro (L220-229) · Origem: ec4ba95
+- **RX-R33** · saida segura — `raio_x.py` › `_dinheiro; _fracao; _variacao` › linhas 100-116
+  - Números de saída finitos e nativos (dinheiro 2 casas, frações 4 casas, None quando o denominador <= 0); datas em ISO pelo encoder do worker (etl_worker L89-92); allow_nan=False (L94).
+  - Testes: executar_como_o_worker faz json.dumps(allow_nan=False) (tests/raio_x_support.py L49) · Origem: ec4ba95
+- **RX-R34** · envio e baia — `raio_x_servico.py` › `processar_envio; _gravar_limitado` › linhas 47-110
+  - Regras do envio: 1 a 36 arquivos ('raio_x_vazio', 'raio_x_arquivos'); só .csv e .xlsx ('unsupported_format'); cada arquivo até teto_bytes (20 MiB), vazio recusado; assinatura conferida pela Baia antes do processo isolado; SHA-256 igual a outro arquivo do envio => 'raio_x_repetido' (um byte a mais burla: o teste L118 usa 'estoque + b"\n"'); OSError => 'upload_io'.
+  - Testes: test_erros_de_envio_nao_gravam_e_explicam (L636-651); BaiaNoRaioXTests (tests/test_security_gatekeeper.py L753-764) · Origem: ec4ba95; 91e5fb0
+- **RX-R35** · reconferencia contratual — `blueprints/onboarding.py` › `_executar_raio_x` › linhas 119-122
+  - Depois da leitura (até 2 min), relê a situação contratual com atualizar=True; se não estiver ATIVA, 'assinatura_inativa' e o Raio-X não é gravado.
+  - Testes: test_assinatura_suspensa_durante_a_leitura_nao_grava (L681-690) · Origem: ec4ba95
+- **RX-R36** · gravacao — `raio_x_servico.py` › `salvar` › linhas 116-135
+  - diagnostico_entrada recebe: id_usuario, gerado_em (UTC), versao_regras, arquivos (quantidade), periodo_inicio/fim, indice_saude (Decimal 0,01), valor_recuperavel (Decimal(str(total))), plano_recomendado e resultado = JSON compacto (allow_nan=False) com TODO o dict do motor + 'recomendacao' {plano, motivos} + 'nomes_arquivos' (nomes seguros até 80 caracteres; não aparecem no HTML, mas saem no JSON da API porque visao copia o dict inteiro). Um registro por empresa: o novo substitui o anterior; nenhuma linha de venda é gravada.
+  - Testes: test_envio_grava... (L578-584); test_novo_envio_substitui_o_anterior (L699-703); test_api_envia_e_le_o_raio_x (L620-628) · Origem: ec4ba95
+- **RX-R37** · visao por plano — `raio_x_servico.py` › `visao; CAMPOS_MARGEM` › linhas 38; 173-195; 210-215
+  - Sem 'margem_bruta': custo_medio, margem_valor e margem_percentual dos itens do scanner, custo_total/margem das fatias, margem_por_item e a margem da auditoria viram None. Sem 'auditoria_abaixo_custo': itens_abaixo_custo = None. Sem 'diagnostico_cmv': auditoria.custo_total = None. Sem 'alerta_precificacao': precificacao = None. Ficam para todos: saude inteira, totais e itens do scanner (preços, referência, vazamento), recuperavel (inclusive abaixo_custo), auditoria.perda_abaixo_custo, itens_venda_abaixo_custo, itens_margem_negativa, faturamento_com_custo e precificacao_visivel. 'protegido' diz o que foi tirado. Bronze recebe 403 em /onboarding/diagnostico/auditoria.
+  - Testes: test_envio_grava_o_resultado_e_o_bronze_nao_recebe_custo_nem_margem (L585-601); test_prata_ve_margem_e_a_auditoria (L603-618); test_403_json... (L488-499) · Origem: ec4ba95
+- **RX-R38** · historico por plano — `raio_x_servico.py` › `_corte_historico; mostra_todas_as_fatias; visao (historico)` › linhas 156-170; 196-209
+  - Corte = 1º dia do mês (limite - 1) meses antes do mês do MAIOR fim entre as fatias; fatia com fim < corte fica oculta; fatia sem período nunca é oculta. Só esconde a linha do tempo: os totais continuam somando tudo. O critério é o FIM do arquivo: um anual 2025 com último fim 31/01/2026 e limite 6 (corte 01/08/2025) aparece inteiro (experimento E). Ex.: 8 meses de 2025 no Bronze => mostra 03-08/2025, ocultas 2 ('01/2025' a '02/2025'). plano_historico (onboarding L92-96) = menor plano acima do atual que mostra todas.
+  - Testes: test_historico_do_bronze_mostra_os_ultimos_seis_meses (L705-718); test_faixa_do_historico_oculto_sai_das_datas (L150-158) · Origem: ec4ba95
+- **RX-R39** · matriz de planos — `migrations/versions/b3e9d6c1f7a2_planos_funcionalidades_raio_x.py` › `_NIVEIS; _FUNCIONALIDADES; _matriz` › linhas 49-100
+  - Raio-X (raio_x_entrada) a partir do BRONZE; auditoria_abaixo_custo, margem_bruta, diagnostico_cmv e alerta_precificacao a partir do PRATA; histórico 6 / 24 / sem limite / sem limite; matriz cumulativa. A tela usa o limite do nível atual (ou o do menor nível, onboarding L69-71).
+  - Testes: test_niveis_funcionalidades_e_matriz_cumulativa (L336-355); test_acesso_por_nivel (L439-450) · Origem: ec4ba95
+- **RX-R40** · limite de uso — `blueprints/onboarding.py` › `limite_raio_x; vaga_de_entrada` › linhas 39; 147-150; 217-219
+  - 10 envios por hora por usuário somando página e API (Flask-Limiter shared_limit, escopo 'raio-x') e a vaga única de upload/processamento do processo.
+  - Testes: test_envio_ocupado_nao_processa (L671-679) · Origem: ec4ba95
+- **RX-R41** · herdada limpeza — `etl_processor.py` › `_vendas_do_bruto; _filtrar_linhas_validas; _PADRAO_LIXO; _CABECALHOS_REPETIDOS; _NAO_PRODUTOS` › linhas 629-681; 524-535; 493-505; 146-150
+  - Toda a higienização do Raio-X é a do ETL de vendas: linha sem produto, rodapé/marca d'água e cabeçalho repetido saem; 'Desconto', 'Frete', 'Troco', 'Total' etc. saem; 'lucro' é descartado. Risco herdado e silencioso: \_PADRAO_LIXO casa palavras inteiras como 'filtro', 'pagina', 'software', 'resumo', 'usuario' — 'Filtro de Cafe 103' e 'Pagina Dupla Caderno' somem do Raio-X sem aviso (experimento: 3 linhas válidas, 1 item, R$ 200).
+  - Testes: golden do ETL (outro recorte); nenhum teste do Raio-X para falso positivo de rodapé · Origem: fc63708 (2026-10-19) e posteriores
+- **RX-R42** · herdada situacao — `etl_processor.py` › `_situacao_das_linhas; _aplicar_situacao_das_vendas; _RE_LINHA_CANCELADA; _RE_LINHA_DEVOLUCAO` › linhas 544-601
+  - Canceladas/estornadas/inutilizadas saem; devoluções e trocas ficam com valor e quantidade negativos e \_devolucao=True (o Raio-X as tira das contas de preço/custo e soma o valor em 'devolucoes'). 'NAO CANCELADA' é válida; 'DEVOLUCAO CANCELADA' é cancelada.
+  - Testes: test_canceladas_e_devolucoes_ficam_fora... (L201-209) · Origem: 0ac01c8 (2026-11-02)
+- **RX-R43** · herdada periodo — `etl_processor.py` › `_extrair_periodo_base; _parse_data_br; _RE_DATA_BR` › linhas 738-770
+  - Primeiras 30 linhas; célula que contenha 'periodo' (sem acento, minúscula); datas dd/mm/aa(aa) (ano de 2 dígitos + 2000); 2 datas => (início, fim) em ordem; 1 data => início = fim; nada => None (arquivo fica sem período).
+  - Testes: test_saude_scanner... (L85); test_uma_linha_por_produto... (L199) · Origem: fc63708
+- **RX-R44** · herdada neutralizacao — `security_gatekeeper.py` › `neutralizar_celula; neutralizar_matriz (via etl_inputs.read_raw)` › linhas 327-379; etl_inputs.py 625-633
+  - Toda leitura do Raio-X sai com células de fórmula prefixadas por apóstrofo; números não mudam (\_parse_valor L170-171 e \_limpar_monetario L226 ignoram o apóstrofo) e a chave \_prod_norm ignora pontuação, mas código e nome exibidos mantêm o apóstrofo: '=HIPERLINK("x")' sai como "'=HIPERLINK(\"x\")" e o código '-1-2' como "'-1-2" (experimento de neutralização).
+  - Testes: tests/test_security_gatekeeper.py (neutralização sem mudar número nem chave de produto) · Origem: 91e5fb0
+- **RX-R45** · divergencia com etl — `raio_x.py` › `diagnosticar (faturamento) x etl_processor._calcular_kpis_local (faturamento_total)` › linhas raio_x.py 198, 246, 423; etl_processor.py 902-914
+  - FATURAMENTO DIVERGE. ETL: soma de valor_venda de todas as linhas limpas, líquida de devoluções (inclui valor de linha com quantidade 0 e linhas negativas sem situação), sem arredondar. Raio-X: só vendas analisadas (quantidade > 0 e valor > 0, fora devoluções), cada uma arredondada ao centavo. Experimento 4 (200 + -40 + 50 com qtde 0 + -2): ETL 208,00; Raio-X 200,00. Também difere de etl_processor.faturamento_bruto (L1090-1092), que soma devoluções de volta mas mantém as outras linhas.
+  - Testes: nenhum compara os dois · Origem: ec4ba95
+- **RX-R46** · divergencia com etl — `raio_x.py` › `_ler_arquivo (perda) x etl_processor._calcular_kpis_local (alerta 'venda abaixo do custo')` › linhas raio_x.py 171-174, 223; etl_processor.py 1009-1022
+  - VENDA ABAIXO DO CUSTO DIVERGE. ETL: por linha, valor_custo > 0 e valor_venda < valor_custo, sem distinguir custo unitário (compara custo unitário com total da linha), sem centavos, inclui linhas de valor 0; conta LINHAS e escreve 'item(ns)'. Raio-X: custo unitário multiplicado, centavos, só vendas analisadas, conta PRODUTOS e mede a perda. Experimento 5 (coluna 'Custo Unitario'): ETL conta 2 (as duas linhas do Leite) e não vê o Café vendido a 20 com custo 25; Raio-X conta 2 produtos (Café e Leite), perda R$ 52.
+  - Testes: nenhum compara os dois · Origem: ec4ba95
+- **RX-R47** · divergencia com etl — `raio_x.py` › `_ler_arquivo (estoque_negativo) x etl_processor._calcular_kpis_local (estoque)` › linhas raio_x.py 187-188; etl_processor.py 996-1007
+  - ESTOQUE NEGATIVO DIVERGE. ETL: conta LINHAS com estoque < 0 e só alerta acima de 10% das linhas ('produto(s)' no texto). Raio-X: conta PRODUTOS distintos com mínimo < 0, sem limiar, união entre arquivos. Experimento 5: ETL 3 (75%, alerta), Raio-X 2.
+  - Testes: nenhum compara os dois · Origem: ec4ba95
+- **RX-R48** · duplicacao com etl — `raio_x.py` › `_ler_arquivo (devolucoes) x etl_processor._aplicar_situacao_das_vendas (attrs['situacao']['valor_devolucoes'])` › linhas raio_x.py 247; etl_processor.py 595-600
+  - DUPLICA: o Raio-X recalcula -valor[\~validas].sum(), que é exatamente df.attrs['situacao']['valor_devolucoes'] já calculado pelo ETL. Também ignora linhas_canceladas e valor_cancelado do mesmo attrs.
+  - Testes: test_canceladas_e_devolucoes... (L208) · Origem: ec4ba95
+- **RX-R49** · duplicacao com etl — `raio_x.py` › `_ler_arquivo (preco_tabela) x etl_processor._vendas_do_bruto (total derivado)` › linhas raio_x.py 179-180; etl_processor.py 651-655
+  - DUPLICA: preco_unitario é convertido duas vezes por \_converter_serie_monetaria (o ETL converte para derivar o total quando não há coluna de total e não guarda a série; o Raio-X converte de novo) e a segunda conversão joga fora a contagem de qualidade (Counter() descartável).
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-R50** · divergencia com etl — `raio_x.py` › `_ler_arquivo / _avisos x etl_processor._alertas_de_valores` › linhas raio_x.py 375-394; etl_processor.py 848-881, 679
+  - QUALIDADE NÃO CHEGA AO RAIO-X: df.attrs['qualidade'] (valores inválidos que viraram R$ 0,00, '12.500' lido como milhar ou como decimal) e o resumo de canceladas/devoluções viram alertas na análise, mas o Raio-X não os lê (grep: 'qualidade' e 'situacao' ausentes de raio_x.py). Experimento 8: '12.500' entra como R$ 12.500,00 e 'abc' como R$ 0,00 sem nenhum aviso; o ETL registra {'lidos_como_milhar': 1, 'invalidos': 1}.
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-R51** · divergencia com etl — `raio_x.py` › `_ler_arquivo / diagnosticar (nome) x etl_processor._calcular_kpis_local (nome)` › linhas raio_x.py 195, 237, 415; etl_processor.py 903-911
+  - Mesma chave (\_prod_norm) e mesmo \_nome_exibivel, mas o ETL exibe o PRIMEIRO nome do arquivo e o Raio-X o primeiro do arquivo e o ÚLTIMO entre arquivos (mês mais recente).
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-R52** · divergencia com etl — `etl_processor.py` › `validar_total_pdv; conferir_total_pdv; em_centavos` › linhas 1064-1102
+  - A trava do total do PDV (tolerância R$ 1,00, DIVERGENTE_PDV) existe só no fluxo de análise com valor digitado pelo consultor; o Raio-X não confere total nenhum contra o PDV/ERP (grep sem ocorrência em raio_x.py, raio_x_servico.py e onboarding.py).
+  - Testes: tests do ETL (outro recorte); Raio-X: nenhum · Origem: bba0971 (2026-11-02)
+- **RX-R53** · duplicacao interna — `raio_x.py` › `diagnosticar (saída)` › linhas 466 e 486; 473 e 498; 484 e 497
+  - Campos repetidos na saída: itens_margem_negativa (saude.inconsistencias e auditoria), scanner.vazamento_preco = recuperavel.variacao_preco, auditoria.perda_abaixo_custo = recuperavel.abaixo_custo. Útil para a visão por plano, mas são o mesmo número.
+  - Testes: test_saude_scanner... (L78) · Origem: ec4ba95
+- **RX-R54** · duplicacao interna — `blueprints/onboarding.py` › `_contexto_raio_x (limite) x entitlements.limite_historico_meses` › linhas onboarding.py 69-71; entitlements.py 290-296
+  - A regra 'limite do nível atual ou, sem nível, o do menor nível' está escrita duas vezes; entitlements.limite_historico_meses só é usada nos testes (grep).
+  - Testes: test_plano_necessario_e_historico_por_nivel (L470-479) · Origem: ec4ba95
+- **RX-R55** · duplicacao interna — `raio_x.py` › `_brl` › linhas 124-126
+  - Terceira implementação de formatação em reais (também ai_devolutiva.py L85 e pdf_export.py L167).
+  - Testes: nenhum · Origem: ec4ba95
+
+### Formatos e variações (A.3)
+
+- **RX-F01** · extensoes — `raio_x_servico.py` › `processar_envio` › linhas 87-90
+  - O Raio-X aceita só .csv e .xlsx ('Arquivo N: formato não suportado. Envie CSV ou XLSX.'). A Baia reconhece xlsx, xls, csv e txt (security_gatekeeper EXTENSOES_RECONHECIDAS L62, FORMATO_DE_LEITURA L64: txt lido como csv), mas o Raio-X recusa txt e xls antes; config.ALLOWED_EXTENSIONS = {'csv', 'xlsx'} (config.py L277).
+  - Testes: test_erros_de_envio_nao_gravam_e_explicam (L639: 'notas.txt') · Origem: ec4ba95
+- **RX-F02** · codificacao e separador — `etl_inputs.py` › `ENCODINGS; SEPARATORS; _csv_input; _csv_signature` › linhas 26-27; 134-187
+  - Herdado: codificações utf-8-sig, cp1252, utf-8, latin1 nessa ordem; separadores ; , TAB |; escolhe a primeira codificação que decodifica e, nela, o separador com mais colunas (> 1). NUL removido. CSV com assinatura binária recusado.
+  - Testes: tests/test_etl_\*.py (outro recorte) · Origem: SEC-005
+- **RX-F03** · xlsx — `etl_inputs.py` › `_xlsx_input; _disambiguate_numbers; _zip_preflight` › linhas 479-598
+  - Herdado: uma só aba, a com mais células preenchidas; leitura dtype=str; número que parece milhar ('12.125') ganha um zero à direita para não ser lido como milhar pt-BR (relê a aba com dtype=object). Fórmulas: valor em cache (data_only=True).
+  - Testes: tests/test_etl_\*.py (outro recorte) · Origem: SEC-005
+- **RX-F04** · aliases de cabecalho — `etl_processor.py` › `ALIAS_VENDAS; _mapear_cabecalho` › linhas 359-387; 415-434
+  - Herdado, por substring do título normalizado, na ordem do dicionário (a 1ª coluna vence): codigo ('id produto', 'codigo', 'cod barras', 'ean', 'sku', 'ref', 'cod '), produto ('nome do produto', 'descricao', 'produto', 'mercadoria'...), estoque ('estoque atual', 'saldo estoque', 'saldo atual', 'estoque'), valor_custo ('total custo', 'vr custo', 'vlr custo', 'valor custo', 'custo total', 'custo'), valor_venda ('faturamento', 'total venda', 'vr total', 'valor total'...), preco_unitario ('preco unitario', 'preco unit', 'valor unitario', 'vlr unitario', 'preco venda', 'preco'), quantidade ('qtde vend', 'quantidade', 'qtd'...), lucro (descartado). Com duas colunas de custo, vale a mais à esquerda. 'CMV' não casa com nenhum alias (experimento: só produto, quantidade e valor_venda mapeados).
+  - Testes: golden do ETL (outro recorte) · Origem: fc63708 e posteriores
+- **RX-F05** · cabecalho — `etl_processor.py` › `_detectar_cabecalho; _vendas_do_bruto (cabecalhos)` › linhas 437-486; 636-639
+  - Cabeçalho de 1 linha ou composto de 2 linhas adjacentes, procurado nas primeiras 100 linhas (janela=100), exigindo produto + quantidade + (valor_venda ou preco_unitario). O título de cada coluna reconhecida (2 linhas juntadas por espaço) vai para df.attrs['cabecalhos'], lido pelo Raio-X (L167, L173, L178).
+  - Testes: golden do ETL; MotorRaioXTests usa cabeçalho de 1 linha após 2 linhas de título · Origem: cabecalhos em ec4ba95
+- **RX-F06** · titulos de custo — `raio_x.py` › `custo_e_unitario` › linhas 79-91
+  - Variações de título de custo tratadas: ver RX-R04 (21 títulos fixados em teste, mais os do experimento: 'Custo Unitario Total' e 'Valor Custo Unit' => unitário; 'Custo x Qtd', 'Tot Custo', 'Custo Bruto' => total).
+  - Testes: test_titulos_de_custo_por_unidade_e_de_custo_da_linha (L131-142) · Origem: ec4ba95
+- **RX-F07** · total x unitario — `raio_x.py` › `_ler_arquivo (valor_derivado)` › linhas 176-178
+  - Relatório com total por linha (valor_venda mapeado) x relatório só com preço unitário (o ETL deriva o total, etl_processor L651-655). No segundo, o preço praticado é o de tabela e a variação dentro da linha não existe.
+  - Testes: test_total_calculado_pelo_preco_unitario_nao_mostra_variacao (L160-163) · Origem: ec4ba95
+- **RX-F08** · periodo no cabecalho — `etl_processor.py` › `_extrair_periodo_base` › linhas 751-770
+  - Padrão reconhecido: célula com 'Período' e datas, ex. 'Periodo: 01/01/2026 a 31/01/2026', 'Período de : 01/01/26 á 31/03/26'. Arquivo anual, trimestral ou mensal é aceito; o rótulo vira 'MM/AAAA' só quando cabe num mês.
+  - Testes: tests/raio_x_support.py (L12-36) · Origem: fc63708
+- **RX-F09** · colunas de situacao — `etl_processor.py` › `_RE_COLUNA_SITUACAO; _RE_COLUNA_DE_OUTRO_ASSUNTO; _RE_LINHA_CANCELADA; _RE_LINHA_DEVOLUCAO` › linhas 544-554
+  - Colunas de status/situação/operação/natureza/movimento(ação)/'tipo'/'tipo de venda|nota|documento...' não mapeadas, ignorando as de pagamento, entrega, cliente, produto, estoque, financeiro, título e cadastro. Linha cancelada: CANC, ESTORN, INUTILIZ; devolução: DEVOL, TROCA; 'NAO'/'SEM' antes negam.
+  - Testes: test_canceladas_e_devolucoes... (L201-209) · Origem: 0ac01c8
+- **RX-F10** · padroes de relatorio — `raio_x.py` › `_ler_arquivo; _avisos; _precificacao` › linhas 175-178; 264-265; 340-342; 375-394
+  - Padrões que o Raio-X distingue: (1) uma linha por venda/preço (variação visível); (2) uma linha por produto com preço de tabela e total (variação pela média contra a tabela); (3) uma linha por produto sem tabela ou com total derivado (variação invisível + nota na tela); (4) mensal x anual/multimês (uma fatia por arquivo; sobreposição só avisada); (5) sem período ('Arquivo N', fora da linha do tempo e da precificação); (6) sem coluna de custo (aviso e motivo PRATA); (7) com estoque (estoque negativo); (8) com código (conflitos). Não distingue relatório de vendas de relatório de margem do ERP.
+  - Testes: MotorRaioXTests (L160-199, L211-233) · Origem: ec4ba95
+- **RX-F11** · quantidade — `etl_processor.py` › `_parse_valor; _converter_serie` › linhas 156-206
+  - Herdado (experimento 13): '2 un(s)' => 2; '1,5 kg' => 1,5; '1.500' => 1,5 (ponto único é decimal em quantidade); '(3)' => -3; "'-2 un(s)" => -2 (apóstrofo da neutralização removido); '1e3' => 13 (o 'e' é descartado, não é notação científica). Vazio vira 0.
+  - Testes: tests do ETL e da Baia (outro recorte) · Origem: fc63708; apóstrofo em 91e5fb0
+- **RX-F12** · dinheiro — `etl_processor.py` › `_converter_serie_monetaria; _interpretar_monetario; _coluna_usa_ponto_decimal` › linhas 222-322
+  - Herdado: 'R$ 12.500,50' => 12500,5; '1,234.56' => 1234,56; '(10,00)' e '10,00-' => -10; '12.500' => 12500 salvo se a coluna usa ponto decimal em outras linhas; inválido => 0,0 (vira 'sem custo' ou 'venda sem valor' no Raio-X).
+  - Testes: tests do ETL (outro recorte) · Origem: 0ac01c8
+- **RX-F13** · linhas descartadas — `etl_processor.py` › `_PADRAO_LIXO; _CABECALHOS_REPETIDOS; _NAO_PRODUTOS` › linhas 146-150; 493-505
+  - Rodapés ('total geral', 'totais', 'subtotal', 'movimenta', 'labsofti', 'software', 'resumo', 'periodo', 'usuario', 'filtro', 'impresso', 'pagina'), cabeçalho reimpresso e não-produtos ('DESCONTO', 'FRETE', 'TROCO', 'TAXA', 'JUROS', 'TOTAL', 'SANGRIA'...). Falso positivo comprovado: 'Filtro de Cafe 103' e 'Pagina Dupla Caderno' saem.
+  - Testes: golden do ETL (outro recorte) · Origem: fc63708
+- **RX-F14** · formato da saida — `raio_x.py` › `diagnosticar (dict de saída)` › linhas 443-506
+  - JSON: versao; arquivos[{indice, rotulo, linhas, tem_custo, tem_preco_unitario}]; fatias[]; saude{indice, faturamento_total, faturamento_sem_custo, pct_faturamento_sem_custo, itens_vendidos, itens_sem_custo, pct_itens_sem_custo, arquivos_com_custo, devolucoes, inconsistencias{5}}; scanner{variacao_visivel, itens_com_variacao, faturamento_envolvido, vazamento_preco, itens[<=50]}; auditoria{...}; recuperavel{total, abaixo_custo, variacao_preco}; periodo{inicio, fim, meses}; avisos[]. Dinheiro com 2 casas, frações com 4, datas ISO.
+  - Testes: test_saude_scanner... (L60) · Origem: ec4ba95
+- **RX-F15** · nomes de arquivo — `raio_x_servico.py` › `processar_envio` › linhas 86; 91; 106
+  - Nome original passa por secure_filename (vazio => 'arquivo-N'), é guardado com até 80 caracteres em nomes_arquivos; no disco o arquivo vira arquivo_NN.csv|xlsx e o worker tira a extensão desse nome (etl_worker L67-68).
+  - Testes: nenhum específico · Origem: ec4ba95
+
+### Desempenho e limites (A.3)
+
+- **RX-P01** · quantidade de arquivos — `raio_x.py` › `MAX_ARQUIVOS` › linhas 63; raio_x_servico.py 74-76; etl_worker.py 64-66; raio_x.py 399-400
+  - Até 36 relatórios por envio ('até 3 anos, um por mês'), conferido no processo pai, no worker e no motor.
+  - Testes: test_quantidade_de_arquivos_fora_do_limite (L243-246); test_erros_de_envio... (L649-651) · Origem: ec4ba95
+- **RX-P02** · tamanho por arquivo — `security_gatekeeper.py` › `teto_bytes; raio_x_servico._gravar_limitado; ETLLimits.max_file_bytes` › linhas 104-106; raio_x_servico.py 37, 47-66; etl_limits.py 11
+  - Cada arquivo até min(20 MiB, 50 MiB) = 20 MiB, lido em blocos de 64 KiB sem confiar no Content-Length.
+  - Testes: tests/test_security_gatekeeper.py (teto em blocos) · Origem: 91e5fb0
+- **RX-P03** · tamanho do envio — `config.py` › `MAX_CONTENT_LENGTH; app._grande_demais` › linhas 227-229; app.py 470-481
+  - O corpo inteiro (36 arquivos somados) até 20 MB por padrão: 3 anos de massa bruta precisam caber em ≈555 KB por mês ou ser enviados em lotes; acima disso, 413 'envie menos meses por vez'.
+  - Testes: test_envio_acima_do_limite_somado_responde_413_em_portugues (L653-669) · Origem: ec4ba95
+- **RX-P04** · limites estruturais — `etl_limits.py` › `ETLLimits; _HARD_CAPS` › linhas 9-52
+  - Por arquivo: 100.000 linhas, 128 colunas, 500.000 células por aba (também o teto do CSV), 1.000.000 por arquivo, 16 abas, 16.384 caracteres por campo, 131.072 por registro CSV, 32 MiB descompactados. Tetos rígidos: 200.000 linhas, 120 s, 512 MB.
+  - Testes: tests/test_etl_\*.py (outro recorte) · Origem: SEC-005
+- **RX-P05** · prazo e memoria do lote — `etl_runtime.py` › `run_raio_x; etl_worker.main (setrlimit)` › linhas 117-125; etl_worker.py 24-33
+  - Os 36 arquivos dividem UM worker: prazo de parede min(120, 2 x timeout_seconds) = 120 s, RLIMIT_CPU de 120 s, espaço de endereçamento 384 MB, threads numéricas = 1 (etl_runtime L26-27). O \_Budget de cada leitura (etl_inputs L46-57) também recebe 120 s. Gunicorn com -w 1 --threads 50 --timeout 180 (render.yaml L21).
+  - Testes: nenhum de carga · Origem: ec4ba95
+- **RX-P06** · concorrencia — `etl_uploads.py` › `_UPLOAD_ADMISSION; vaga_de_entrada; etl_runtime._ADMISSION` › linhas 19; 44-53; etl_runtime.py 17, 49-50
+  - Uma vaga de upload/processamento e uma de worker por processo: um Raio-X de 120 s bloqueia uploads e processamentos de análise do mesmo processo; mais 10 envios/hora por usuário (onboarding L39).
+  - Testes: test_envio_ocupado_nao_processa (L671-679) · Origem: SEC-005; ec4ba95
+- **RX-P07** · leitura repetida — `etl_worker.py` › `main (validate_input + diagnosticar)` › linhas 67-69
+  - Cada arquivo é varrido duas vezes no worker: validate_input (CSV: até 4 codificações x 4 separadores + passe de validação; XLSX: pré-checagem do ZIP + iteração openpyxl) e read_raw dentro do motor (refaz a validação e materializa; XLSX: iteração openpyxl + pd.read_excel + releitura opcional em \_disambiguate_numbers). Ponto forte do motor: dentro de diagnosticar o arquivo é lido uma vez só (período e vendas da mesma matriz), ao contrário de \_calcular_kpis_local, que relê para o período (etl_processor L941).
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-P08** · memoria — `raio_x.py` › `diagnosticar; _ler_arquivo` › linhas 401-411; 235-244
+  - Processamento sequencial arquivo a arquivo: a matriz crua (texto, dtype object) e o DataFrame de linhas de um arquivo vivem só dentro de \_ler_arquivo; ficam em memória apenas os agregados por produto de cada arquivo (por_arquivo: produtos x arquivos x ≈20 colunas). Não há chunks dentro do arquivo: um CSV de 500 mil células é materializado inteiro como lista de listas.
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-P09** · pontos quentes — `etl_processor.py` › `_converter_serie_monetaria; _converter_serie; _filtrar_linhas_validas; _situacao_das_linhas; raio_x._codigos; raio_x._precificacao (iterrows)` › linhas 205-206; 308-322; 524-535; 557-572; raio_x.py 132-136, 352-370
+  - Conversões e filtros em Python puro, valor a valor (list comprehension, map com lambda); \_precificacao percorre produtos com iterrows. Perfil medido por arquivo: CSV de 8.000 linhas => read_raw 0,25 s, \_vendas_do_bruto 0,61 s, regras do Raio-X ≈0,20 s; XLSX de 2.000 linhas => read_raw 0,80 s, \_vendas_do_bruto 0,17 s, Raio-X ≈0,03 s. No CSV o custo dominante é a limpeza herdada; no XLSX, a leitura.
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp_perfil.py)
+- **RX-P10** · medicoes — `raio_x.py` › `diagnosticar (+ validate_input, como o worker)` › linhas 397-506
+  - Medido neste Windows, emulando o worker (sem limites do SO), 7 colunas, um produto por linha: CSV 36 x 2.000 linhas (2,91 MiB) = 13,6 s (validação 1,7 + motor 11,9); CSV 36 x 8.000 (11,86 MiB) = 50,0 s (6,3 + 43,7); XLSX 36 x 500 (0,84 MiB) = 16,0 s (4,5 + 11,5); XLSX 36 x 2.000 (2,84 MiB) = 58,8 s (17,7 + 41,1). Extrapolando, XLSX acima de ≈4.000 linhas por mês em 36 meses passa dos 120 s; relatórios linha a linha de venda (massa bruta) estouram antes o teto de 500 mil células por arquivo ou os 20 MB do envio.
+  - Testes: nenhum · Origem: medição deste diagnóstico (exp_desempenho.py)
+- **RX-P11** · tamanho da saida — `raio_x.py` › `LIMITE_ITENS_LISTA; ETLLimits.max_output_bytes` › linhas 64; etl_limits.py 25
+  - Saída limitada a listas de 50 itens: ≈43 KiB nos lotes medidos (teto de 4 MiB do worker). Não há saída por produto x período além dessas listas.
+  - Testes: nenhum · Origem: ec4ba95
+- **RX-P12** · persistencia — `raio_x_servico.py` › `salvar; models.DiagnosticoEntrada` › linhas 116-135; models.py 1257-1296
+  - Uma linha por empresa com o JSON em Text; os arquivos somem com o diretório temporário. Sem histórico de Raio-X anteriores e sem dado de linha no banco.
+  - Testes: test_novo_envio_substitui_o_anterior (L699-703) · Origem: ec4ba95
+- **RX-P13** · plataforma — `etl_worker.py` › `main (import resource)` › linhas 24-33
+  - Sem o módulo resource (Windows) o worker devolve 'platform' e o Raio-X não roda; os testes trocam run_raio_x por executar_como_o_worker.
+  - Testes: tests/test_planos_raio_x.py L272 · Origem: SEC-005
+- **RX-P14** · protocolo — `etl_runtime.py` › `_run_job` › linhas 57-60; etl_worker.py 10-11
+  - O pedido ao worker (36 caminhos + limites) precisa caber em 16.384 bytes; com nomes arquivo_NN.ext num diretório temporário, cabe com folga.
+  - Testes: nenhum · Origem: SEC-005
+
+## A.4 Tabelas de lead e Avaliação de Cenário
+
+`lead_avaliacao`, `brainstorming_dados_pdv`, migração `f4c2a8e1d9b6`, expurgo e o que existe de reaproveitável para a avaliação.
+
+### Componentes (A.4)
+
+- **LEAD-C01** · modelo — `models.py` › `LeadAvaliacao` › linhas 1306-1357
+  - Tabela lead_avaliacao: uma linha por pedido de avaliação (o e-mail não é único). Colunas: id Uuid (default uuid.uuid4), nome_contato String(120), email String(254), whatsapp String(20) opcional, nome_loja String(120), score_saude_cadastral Numeric(5,2), vazamento_total_reais mapeado para a coluna 'vazamento_total_r$' Numeric(12,2), status String(30) com default 'pendente' no ORM e no servidor, plano_recomendado_codigo com FK para plano_nivel.codigo, resumo_urgencia_json, resumo_atencao_json e resumo_eletiva_json (Text, sem esquema), criado_em e atualizado_em (InstanteUTC; atualizado_em com onupdate=agora_utc). A relação dados_pdv tem cascade 'all, delete-orphan' e passive_deletes=True (1340-1341). Nenhum código de produção cria instâncias: só leads_avaliacao.py consulta e atualiza a tabela, no expurgo.
+  - Testes: tests/test_leads_avaliacao.py EsquemaTests (52-140); tests/test_leads_postgresql.py metadata_matches_models (213-214); tests/test_backup_restore.py (409-420) · Origem: 91e5fb0 (2026-11-08)
+- **LEAD-C02** · modelo — `models.py` › `BrainstormingDadosPdv` › linhas 1360-1402
+  - Tabela brainstorming_dados_pdv, descrita como 'uma linha por produto e ano de exercício'. Colunas: id Uuid, lead_id (FK com CASCADE), ano_exercicio Integer, codigo_produto String(60) opcional, descricao_produto String(200), quantidade Numeric(14,3), valor_venda_bruto Numeric(14,2), custo_medio_registrado Numeric(14,4) (NULL quer dizer sem custo), flag_venda_sem_custo, flag_venda_abaixo_custo e flag_omissao_erp (Boolean, default false), vazamento_estimado_reais mapeado para a coluna 'vazamento_estimado_r$' Numeric(12,2) com default 0, e criado_em InstanteUTC (a base do TTL). Não há UniqueConstraint (lead, ano, produto): 'uma linha por produto e ano' existe só na docstring. Também não há coluna de mês, preço de referência, número de linhas, faturamento com custo nem versão de regras.
+  - Testes: tests/test_leads_avaliacao.py test_tabelas_colunas_e_indices_da_revisao (53-73), test_restricoes_recusam_dado_invalido (99-125); tests/test_leads_postgresql.py uuid_and_defaults_from_database (229-243) · Origem: 91e5fb0 (2026-11-08)
+- **LEAD-C03** · modelo — `models.py` › `STATUS_LEAD_AVALIACAO` › linhas 1302-1303
+  - Tupla dos 6 status: 'pendente', 'em_processamento', 'concluido', 'processamento_manual', 'convertido' e 'expirado'. Alimenta o CHECK do modelo; a migração tem uma cópia própria em \_STATUS (linha 45). Só 'pendente' (default) e 'expirado' (expurgo) são atribuídos por código. Os outros quatro aparecem apenas em models, migração, testes e docs.
+  - Testes: tests/test_leads_avaliacao.py test_restricoes_recusam_dado_invalido (caso 'status' = 'aprovado') · Origem: 91e5fb0
+- **LEAD-C04** · migracao — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `upgrade` › linhas 137-200
+  - upgrade() cria as duas tabelas com CHECKs nomeados, a FK lead_id com ON DELETE CASCADE e 5 índices: ix_lead_avaliacao_plano, ix_lead_avaliacao_status, ix_lead_avaliacao_email, ix_brainstorming_dados_pdv_lead e ix_brainstorming_dados_pdv_criado_em. É expand puro e não toca nas tabelas existentes. down_revision é b3e9d6c1f7a2, e esta revisão é a head atual. Não foi aplicada no Supabase.
+  - Testes: tests/test_leads_avaliacao.py test_tabelas_colunas_e_indices_da_revisao (53-73); tests/test_leads_postgresql.py migration_reaches_head (208-212) · Origem: 91e5fb0
+- **LEAD-C05** · seguranca rls — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_POLITICAS_POSTGRESQL + bloco PostgreSQL de upgrade` › linhas 48-72, 202-208
+  - Só no PostgreSQL (linhas 202-208). id ganha DEFAULT gen_random_uuid() e as tabelas ganham ENABLE ROW LEVEL SECURITY, sem FORCE. Um bloco DO revoga tudo de anon e authenticated, quando esses papéis existem, e cria para eles a política RESTRICTIVE deny_api_access (USING false, WITH CHECK false). Quando postgres e service_role existem, cria para eles acesso_servidor PERMISSIVE (true/true). É o mesmo padrão da b3e9d6c1f7a2. A aplicação é dona das tabelas, então o RLS não a afeta.
+  - Testes: tests/test_leads_postgresql.py rls_enabled_without_force (215-218), policies_for_api_and_server_roles (219-221), api_roles_lose_default_privileges (222-227), restrictive_policy_denies_even_with_grant (277-292) · Origem: 91e5fb0
+- **LEAD-C06** · retencao ttl — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_FUNCAO_EXPURGO` › linhas 74-134
+  - Cria expurgar_brainstorming_pdv(dias integer DEFAULT 30), que retorna TABLE(leads_expirados, linhas_removidas). É plpgsql, VOLATILE e SECURITY INVOKER, com search_path = pg_catalog, &lt;esquema da migração>, pg_temp. Recusa dias < 1. Trava os leads-alvo com FOR UPDATE, em ordem de id. Marca 'expirado' e apaga as linhas vencidas em comandos separados. O EXECUTE é revogado de PUBLIC, anon e authenticated.
+  - Testes: tests/test_leads_postgresql.py purge_function_hardened (316-322), purge_function_not_executable_by_api_roles (323-330), purge_matches_sqlalchemy_rule (332-359), purge_respects_concurrent_writer (362-431) · Origem: 91e5fb0
+- **LEAD-C07** · migracao — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `downgrade` › linhas 211-232
+  - downgrade() trava as duas tabelas (ACCESS EXCLUSIVE no PostgreSQL) e conta leads e linhas. Se houver qualquer um, levanta RuntimeError ('Downgrade da Avaliação de Cenário recusado: há leads ou dados de PDV gravados...'). Com as tabelas vazias, remove a função, os índices e as tabelas.
+  - Testes: tests/test_leads_avaliacao.py test_downgrade_recusa_dados_e_remove_as_tabelas_vazias (245-263); tests/test_leads_postgresql.py downgrade_refused_with_leads (460-471), downgrade_removes_tables_function_and_policies (473-479), upgrade_again (481-484) · Origem: 91e5fb0
+- **LEAD-C08** · retencao ttl — `leads_avaliacao.py` › `expurgar_dados_pdv` › linhas 27, 31-51
+  - Ponto de entrada do expurgo, sem commit. Valida o prazo: type(dias) is int e dias >= 1, senão ValueError (também para True, 1.5 e '30'). No PostgreSQL, sem o argumento agora, chama SELECT ... FROM expurgar_brainstorming_pdv(:dias). Nos demais casos roda \_expurgar_em_sqlalchemy com o relógio informado (nos testes) ou com agora_utc(). Devolve ResultadoExpurgo(leads_expirados, linhas_removidas). RETENCAO_DIAS = 30 (linha 27).
+  - Testes: tests/test_leads_avaliacao.py test_regra_do_expurgo (167-192), test_prazo_configuravel_e_validado (194-205) · Origem: 91e5fb0
+- **LEAD-C09** · retencao ttl — `leads_avaliacao.py` › `_expurgar_em_sqlalchemy` › linhas 28, 54-79
+  - A mesma regra em SQLAlchemy, para o SQLite e os testes. corte = agora - dias. Seleciona os leads não convertidos com linha antiga, ordenados por id e com with_for_update (que no SQLite não trava). Em lotes de 500 (\_LOTE, linha 28), marca 'expirado' quem não tem linha recente e apaga as linhas antigas. Há uma assimetria: a função do PostgreSQL repete o filtro de status no UPDATE e no DELETE (linhas 111 e 119 da migração); aqui o filtro fica só na seleção travada. Sob a trava, as duas versões são equivalentes.
+  - Testes: tests/test_leads_avaliacao.py ExpurgoTests (143-232); tests/test_leads_postgresql.py purge_matches_sqlalchemy_rule (332-359) · Origem: 91e5fb0
+- **LEAD-C10** · cli — `leads_avaliacao.py` › `registrar_comandos / expurgar_pdv` › linhas 82-107
+  - Grupo CLI 'flask leads' com o comando 'expurgar-pdv': --dias usa click.IntRange(min=1) com padrão 30, e --aplicar é um flag. Sem --aplicar o comando faz rollback (simulação). A saída mostra o destino (cli_contratos.\_destino_banco), o modo e só contagens, nunca dados pessoais.
+  - Testes: tests/test_leads_avaliacao.py test_comando_simula_por_padrao_e_aplica_com_a_opcao (207-232); tests/test_leads_postgresql.py purge_command_simulates_and_applies (434-451) · Origem: 91e5fb0
+- **LEAD-C11** · app — `app.py` › `create_app (registrar_comandos_leads)` › linhas 292-294
+  - create_app registra o grupo CLI dos leads. É a única ligação do app com o módulo de leads: nenhum blueprint, template ou serviço importa leads_avaliacao, LeadAvaliacao ou BrainstormingDadosPdv (confirmado por git grep).
+  - Testes: indireto: os testes de CLI de tests/test_leads_avaliacao.py usam app.test_cli_runner() · Origem: 91e5fb0
+- **LEAD-C12** · servico raio x — `raio_x_servico.py` › `processar_envio` › linhas 69-110
+  - Orquestra o envio do Raio-X no processo do servidor. Descarta campos vazios e recusa zero ou mais de 36 arquivos, com a mensagem 'até 3 anos, um por mês' (74-76). Obtém os limites, cria um TemporaryDirectory, aceita só as extensões csv e xlsx (87-90) e grava cada arquivo com teto (\_gravar_limitado). Passa pela Baia: inspecionar_arquivo com rótulo 'Arquivo N' e registrar_recusa com origem='raio_x' (93-101). Recusa arquivos com SHA-256 repetido (102-104) e chama etl_runtime.run_raio_x (107). Não depende de empresa nem de usuário, então pode ser reaproveitado por uma rota de lead. Não grava os arquivos e não escreve em lead_avaliacao nem em brainstorming_dados_pdv. Não é o motor: o cálculo está em raio_x.py e a higienização em etl_inputs, security_gatekeeper e etl_processor.
+  - Testes: tests/test_planos_raio_x.py test_erros_de_envio_nao_gravam_e_explicam (636-652); tests/test_security_gatekeeper.py BaiaNoRaioXTests (753-765) · Origem: ec4ba95; Baia em 91e5fb0
+- **LEAD-C13** · servico raio x — `raio_x_servico.py` › `_gravar_limitado` › linhas 37, 47-66
+  - Copia o arquivo em blocos de 64 KiB até teto+1, com teto = security_gatekeeper.teto_bytes(limits). Aplica chmod 0600 e calcula o SHA-256. O Content-Length não é autoridade. Devolve 'file_size' acima do teto e 'empty_file' quando o arquivo está vazio.
+  - Testes: tests/test_security_gatekeeper.py TetoTests (617-644) · Origem: ec4ba95; teto da Baia em 91e5fb0
+- **LEAD-C14** · servico raio x — `raio_x_servico.py` › `salvar` › linhas 116-135
+  - Grava o Raio-X em diagnostico_entrada, sem commit e com uma linha por empresa: faz get com with_for_update, e o envio novo substitui o anterior. Grava versao_regras, arquivos, período, indice_saude quantizado a 0,01, valor_recuperavel, plano_recomendado e o JSON completo (resultado, recomendação e nomes dos arquivos, com allow_nan=False). Exige id_empresa e id_usuario, então não serve a um lead sem adaptação. É o molde mais próximo para gravar o resumo em lead_avaliacao.
+  - Testes: tests/test_planos_raio_x.py test_novo_envio_substitui_o_anterior (699), test_cada_empresa_ve_so_o_proprio_raio_x (692) · Origem: ec4ba95
+- **LEAD-C15** · servico raio x — `raio_x_servico.py` › `visao` › linhas 156-216
+  - Devolve uma cópia do resultado em que o que o plano não libera vira None (margem, auditoria, CMV e precificação) e aplica o corte de histórico por meses (\_corte_historico, 156-163). É uma função pura sobre o dict. Uma visão para lead pode reaproveitá-la passando um conjunto explícito de funcionalidades, já que um lead não tem plano nem empresa.
+  - Testes: tests/test_planos_raio_x.py test_envio_grava_o_resultado_e_o_bronze_nao_recebe_custo_nem_margem (578), test_historico_do_bronze_mostra_os_ultimos_seis_meses (705) · Origem: ec4ba95
+- **LEAD-C16** · modelo — `models.py` › `DiagnosticoEntrada` › linhas 1257-1296
+  - Tabela irmã das tabelas de leads, por empresa e com ON DELETE CASCADE: indice_saude Numeric(5,2) de 0 a 100, valor_recuperavel Numeric sem precisão (o comentário da linha 1281 diz que 'o arquivo não tem teto e o valor não pode estourar a coluna'), plano_recomendado com FK, versao_regras, período e o JSON do resultado. lead_avaliacao repete score, recuperável e plano, mas com tipos limitados e sem versão, período ou JSON.
+  - Testes: tests/test_planos_raio_x.py test_exclusao_permanente_da_empresa_leva_o_raio_x (720) · Origem: ec4ba95
+- **LEAD-C17** · baia — `security_gatekeeper.py` › `inspecionar_arquivo / identificar_conteudo` › linhas 190-237
+  - Primeira triagem, no processo do servidor. Aceita as extensões xlsx, xls, csv e txt, lê os primeiros 8 KiB e chama identificar_conteudo (190-214), que devolve zip, xls ou texto. Recusa executáveis, scripts, marcação, PDF, RTF, imagens, mídia, compactados, OLE que não seja planilha e conteúdo binário. O XLS verdadeiro é recusado com orientação, e um conteúdo trocado gera o motivo disfarce_&lt;conteúdo>\_como_&lt;extensão>. Devolve o formato de leitura ('xlsx' ou 'csv'). Com rótulo, a mensagem fica 'Arquivo N: arquivo fora do padrão aceito para auditoria.'
+  - Testes: tests/test_security_gatekeeper.py AssinaturaTests (212-286) · Origem: 91e5fb0
+- **LEAD-C18** · baia — `security_gatekeeper.py` › `teto_bytes / TETO_ABSOLUTO_BYTES` › linhas 61, 104-106
+  - teto_bytes devolve min(limits.max_file_bytes, TETO_ABSOLUTO_BYTES), com TETO_ABSOLUTO_BYTES = 50 MiB (linha 61). Com o ETLLimits padrão de 20 MiB, o teto efetivo é 20 MiB por arquivo. É usado por raio_x_servico.\_gravar_limitado (linha 50) e por etl_uploads.ler_upload_validado (linha 77).
+  - Testes: tests/test_security_gatekeeper.py test_teto_e_o_menor_entre_o_etl_e_cinquenta_mib (618) · Origem: 91e5fb0
+- **LEAD-C19** · baia — `security_gatekeeper.py` › `registrar_recusa` › linhas 262-272
+  - Log WARNING da quarentena com origem, motivo saneado, extensão, bytes e SHA-256. Nunca registra conteúdo, nome do arquivo ou caminho, e ignora o código 'busy'. As origens hoje são 'upload' (etl_uploads.py:103-104) e 'raio_x' (raio_x_servico.py:99-100). Não existe origem para lead.
+  - Testes: tests/test_security_gatekeeper.py QuarentenaLogTests (646-670) · Origem: 91e5fb0
+- **LEAD-C20** · baia — `etl_inputs.py + security_gatekeeper.py` › `read_raw -> neutralizar_matriz / neutralizar_celula` › linhas etl_inputs.py 625-633; security_gatekeeper.py 327-379
+  - Toda leitura do motor passa por neutralizar_matriz: análises, Raio-X, triagem e a releitura da cópia. Uma célula de texto que seria fórmula ganha o apóstrofo da recomendação OWASP, e attrs['celulas_neutralizadas'] guarda quantas mudaram. Isso garante que descricao_produto e codigo_produto lidos pelo Raio-X cheguem a qualquer tabela já neutralizados, sem mudar nenhum número.
+  - Testes: tests/test_security_gatekeeper.py NeutralizacaoTests (288-359), test_toda_leitura_do_motor_sai_neutralizada (605-615) · Origem: 91e5fb0
+- **LEAD-C21** · baia — `security_gatekeeper.py` › `triar` › linhas 733-758
+  - Segunda triagem, no worker (operação validate). Roda read_raw, exigir_estrutura_minima e inventariar_xlsx, e quando há algo a neutralizar grava uma cópia só com valores, conferida por releitura. É usada apenas por etl_uploads.ler_upload_validado (envio do cliente em blueprints/cliente.py:668 e do consultor em blueprints/admin.py:1012). O Raio-X não a chama, porque o arquivo do Raio-X não é gravado.
+  - Testes: tests/test_security_gatekeeper.py TriagemTests (361-616), WorkerUsaABaiaTests (767-782) · Origem: 91e5fb0
+- **LEAD-C22** · baia — `security_gatekeeper.py` › `motivo_de_quarentena` › linhas 96-101
+  - Extrai o motivo de um código 'quarentena:&lt;motivo>' que atravessa o worker. Está definida e testada, mas não tem uso em produção. É o gancho para separar uma recusa da Baia de um erro do ETL, por exemplo para um futuro status 'processamento_manual'.
+  - Testes: tests/test_security_gatekeeper.py test_erro_da_baia_e_um_erro_de_entrada_do_etl (277-286, asserts em 281-282) · Origem: 91e5fb0
+- **LEAD-C23** · worker — `etl_worker.py` › `main (ramo raio_x)` › linhas 61-69
+  - Operação raio_x no processo isolado, com RLIMIT de AS, CPU, FSIZE e CORE (24-33) e um audit hook que bloqueia rede e criação de processos (35-47). Recusa mais de MAX_ARQUIVOS, roda validate_input em cada arquivo usando a extensão do nome e chama raio_x.diagnosticar. Não roda triar e não acessa banco: o campo database_modules_loaded é reportado na linha 86.
+  - Testes: tests/test_planos_raio_x.py test_worker_tem_a_operacao_e_o_teto_de_arquivos (256-260), test_motor_nao_carrega_banco_nem_configuracao (248-254) · Origem: ec4ba95
+- **LEAD-C24** · worker — `etl_runtime.py` › `run_raio_x` › linhas 117-128
+  - Dobra o prazo para min(120, 2×timeout), chama \_run_job('raio_x', paths) e exige set(result) == CHAVES_RESULTADO (126-127). Devolver as linhas produto×ano no mesmo resultado quebraria esse contrato e incharia o JSON gravado em diagnostico_entrada (raio_x_servico.py:133-134).
+  - Testes: tests/test_planos_raio_x.py test_saude_scanner_recuperavel_e_precificacao_conferidos_a_mao (58-87, confere as chaves) · Origem: ec4ba95
+- **LEAD-C25** · motor raio x — `raio_x.py` › `_ler_arquivo` › linhas 154-271
+  - Lê um relatório: chama \_ler_bruto (read_raw), tira o período do cabeçalho e monta as vendas canônicas com \_vendas_do_bruto. Filtra a 'venda analisada' (não devolução, quantidade > 0 e valor > 0). Multiplica o custo pela quantidade quando o título indica custo unitário e trabalha em centavos. Calcula o preço de referência e, por linha, vazamento, perda e recuperável, e agrega por produto normalizado. Devolve (produtos, resumo, envolvidos). É a fonte natural das colunas de brainstorming_dados_pdv, mas é privada, e diagnosticar não expõe a tabela por arquivo.
+  - Testes: tests/test_planos_raio_x.py MotorRaioXTests (42-264) · Origem: ec4ba95
+- **LEAD-C26** · motor raio x — `raio_x.py` › `diagnosticar` › linhas 397-506
+  - Combina de 1 a 36 arquivos. Concatena as tabelas por arquivo, ordena em ordem cronológica e agrega por produto no envio inteiro, não por ano (413-421). Calcula a saúde (índice, sem custo, inconsistências), o scanner (top-50), a auditoria (top-50), o recuperável, o período em meses e os avisos. Recusa um envio sem venda ('raio_x_sem_vendas', 424-426).
+  - Testes: tests/test_planos_raio_x.py MotorRaioXTests (42-264) · Origem: ec4ba95
+- **LEAD-C27** · motor raio x — `raio_x.py` › `recomendar` › linhas 69-70, 512-544
+  - Recomenda o plano por regras fixas. PRATA quando nenhum arquivo traz custo, quando ao menos 10% do faturamento sai sem custo (LIMIAR_SEM_CUSTO), quando há item com margem negativa ou quando o recuperável chega a 1% do faturamento (LIMIAR_RECUPERAVEL). OURO quando, além disso, os meses enviados passam do limite do PRATA. Nos demais casos, BRONZE. Devolve {'plano', 'motivos'} e nunca recomenda CUSTOM.
+  - Testes: tests/test_planos_raio_x.py test_sem_coluna_de_custo_recomenda_prata_e_avisa (211-219), test_cadastro_saudavel_fica_no_bronze_e_historico_longo_com_problema_vai_ao_ouro (220-230) · Origem: ec4ba95
+- **LEAD-C28** · portal — `blueprints/onboarding.py` › `_executar_raio_x / diagnostico_enviar / api_diagnostico_enviar` › linhas 39, 114-162, 212-229
+  - As rotas do Raio-X (página e API) exigem cliente_required, requer_funcionalidade('raio_x_entrada'), o limite de 10 envios por hora (linha 39) e a vaga única. Depois da leitura, \_executar_raio_x relê a situação contratual, que precisa estar ativa (120-122), chama recomendar com o limite de meses do PRATA do catálogo (123-124) e faz salvar e commit (125-126). Um lead (anônimo) e o admin não entram.
+  - Testes: tests/test_planos_raio_x.py test_admin_e_anonimo_nao_entram (536-543), RaioXPortalTests (577-745) · Origem: ec4ba95
+- **LEAD-C29** · concorrencia — `etl_uploads.py` › `_UPLOAD_ADMISSION / vaga_de_entrada` › linhas 19, 44-53
+  - BoundedSemaphore(1) por processo, compartilhado por upload, processamento e Raio-X. vaga_de_entrada é o context manager usado pelas rotas que montam a própria resposta de 'ocupado'. Com gunicorn -w 1 (render.yaml:21), entra um envio por vez no servidor inteiro.
+  - Testes: tests/test_planos_raio_x.py test_envio_ocupado_nao_processa (671) · Origem: ec4ba95 (vaga_de_entrada)
+- **LEAD-C30** · padrao 3 niveis — `insights.py` › `gerar_semaforos` › linhas 25-28, 39-114
+  - Único classificador em 3 níveis do código: 'critico', 'atencao' e 'oportunidade', em cards {nivel, titulo, o_que_fazer, por_que}. Parte de IndicadorAnalise (compras × vendas) e da Curva ABC, com os limiares PRESSAO_CRITICA = 0,15 e PRESSAO_ATENCAO = 0,05 (27-28). Não lê o Raio-X nem os leads e não afirma margem ou lucro (regra inegociável, 18-20). É usado em blueprints/cliente.py:61, 241, 539 e 580.
+  - Testes: tests/test_pdf_export_layout.py e tests/test_pdf_export_security.py (semáforos no PDF) · Origem: fc63708 (2026-10-19)
+- **LEAD-C31** · padrao 3 niveis — `templates/_macros.html` › `semaforo_card` › linhas 173-176
+  - Macro do card-semáforo, com ícone por nível e as classes CSS s-critico, s-atencao e s-oportunidade. A forma pode ser reaproveitada para exibir blocos de prioridade; a regra, não.
+  - Testes: nenhum específico do recorte · Origem: fc63708
+- **LEAD-C32** · portal — `templates/onboarding/diagnostico.html` › `seção scanner / formulário` › linhas 84-90, 109-110, 128, 199
+  - Tela do Raio-X. A seção 'Scanner de omissão' tem o título 'Itens que o relatório de margem do ERP costuma deixar de fora' (84-90). O que o código chama de 'vazamento' aparece como 'Abaixo do preço de referência' (109-110 e 128). O formulário diz 'até {{ max_arquivos }} meses (3 anos)' (199).
+  - Testes: tests/test_planos_raio_x.py RaioXPortalTests (577-745) · Origem: ec4ba95
+- **LEAD-C33** · validacao contato — `emails.py + contas_email.py` › `email_valido / normalizar_email` › linhas emails.py 206-211; contas_email.py 27-31
+  - email_valido faz a validação estrutural do e-mail: ASCII imprimível, de 3 a 254 caracteres, e a regex \_EMAIL. normalizar_email produz a forma canônica (strip + lower). As duas servem para lead_avaliacao.email (String(254)); o CHECK do banco só exige '%_@_%'.
+  - Testes: testes de e-mail das contas (fora do recorte); nenhum aplicado a leads · Origem: 82ca010 (email_valido)
+- **LEAD-C34** · validacao contato — `configuracoes_conta.py` › `_TELEFONE / limpar_telefone` › linhas 57, 85-93
+  - Põe o telefone em uma linha e o valida pela regex \_TELEFONE (sinal + opcional e de 8 a 25 caracteres entre dígitos, parênteses, hífen, ponto e espaço), com 10 a 15 dígitos. Serve para o WhatsApp do lead, com uma ressalva de tamanho (ver LEAD-F13). O módulo importa models e não foi importado nos experimentos: a regex foi copiada.
+  - Testes: tests/test_configuracoes_conta.py (fora do recorte); nenhum aplicado a leads · Origem: 79849a3 (2026-11-02)
+- **LEAD-C35** · concorrencia — `extensions.py` › `chave_limite_usuario` › linhas 154-158
+  - Chave do rate limit: o usuário autenticado ou, para anônimo, o IP. O limite compartilhado do Raio-X (10 por hora, blueprints/onboarding.py:39) funcionaria por IP para um lead.
+  - Testes: nenhum do recorte · Origem: -
+- **LEAD-C36** · testes — `tests/test_leads_avaliacao.py` › `EsquemaTests / ExpurgoTests / DowngradeTests` › linhas 52-263
+  - 8 testes em SQLite com as migrações reais. Cobrem o esquema (colunas, FKs e índices), as colunas com cifrão e os padrões do banco, as restrições, o CASCADE, a regra do expurgo, a validação do prazo, o comando (simulação e aplicação, com saída sem dado pessoal) e o downgrade.
+  - Testes: (é o próprio teste) · Origem: 91e5fb0
+- **LEAD-C37** · testes — `tests/test_leads_postgresql.py` › `PostgreSQLLeadsTests / _ClusterDosLeads` › linhas 48-62, 65-484
+  - Ensaio em PostgreSQL real. É pulado sem NEXO_TEST_POSTGRES_BIN; a CI define a variável em .github/workflows/nexo-security-ci.yml:54. Faz 20 verificações (tupla CHECKS, 48-62): RLS sem FORCE, políticas, privilégios revogados, política restritiva contra GRANT e contra política intrusa, UUID e padrões do banco, cifrão, restrições, função endurecida e fora da Data API, igualdade entre a função e o SQLAlchemy, corrida com um gravador concorrente simulado por SQL, comando, CASCADE, downgrade e novo upgrade.
+  - Testes: (é o próprio teste) · Origem: 91e5fb0
+- **LEAD-C38** · documentacao — `Docs/BAIA_DE_SEGURANCA_E_LEADS.md` › `seções 1-5` › linhas 1-174 (23, 146, 150, 166, 170-172)
+  - Documento da etapa: a Baia (seção 1), as tabelas e o expurgo (seção 2), os testes (seção 3), a aplicação no Supabase só com autorização (seção 4) e as pendências do dono (seção 5: LGPD, agendamento, TXT/XLS). A linha 150 diz 'Ainda não existe formulário, rota ou processamento que grave nessas tabelas', e a 166, 'O código dos leads só é usado pelo comando flask leads'.
+  - Testes: - · Origem: 91e5fb0
+
+### Regras (A.4)
+
+- **LEAD-R01** · restricao banco — `models.py` › `LeadAvaliacao.__table_args__ (ck_lead_avaliacao_status)` › linhas 1344-1345 (migração 157)
+  - ck_lead_avaliacao_status: o status precisa estar entre os 6 valores. 'aprovado' dá IntegrityError.
+  - Testes: tests/test_leads_avaliacao.py test_restricoes_recusam_dado_invalido (99-125); tests/test_leads_postgresql.py constraints_enforced (259-275) · Origem: 91e5fb0
+- **LEAD-R02** · restricao banco — `models.py` › `ck_lead_avaliacao_score` › linhas 1346-1347 (migração 158-159)
+  - ck_lead_avaliacao_score: NULL ou de 0 a 100. 100,01 e -1 são recusados; 72,50 é aceito. É o mesmo domínio de diagnostico_entrada.indice_saude (models.py:1290-1291).
+  - Testes: tests/test_leads_avaliacao.py test_restricoes_recusam_dado_invalido; PostgreSQL constraints_enforced · Origem: 91e5fb0
+- **LEAD-R03** · restricao banco — `models.py` › `ck_lead_avaliacao_vazamento / vazamento_total_reais` › linhas 1326, 1348-1349
+  - ck_lead_avaliacao_vazamento: NULL ou >= 0, então -0,01 é recusado. Pelo NUMERIC(12,2), 10.000.000.000,00 estoura: no PostgreSQL vira DataError; no SQLite a precisão não é imposta.
+  - Testes: tests/test_leads_avaliacao.py (caso 'vazamento negativo'); tests/test_leads_postgresql.py constraints_enforced (264, 272-273) · Origem: 91e5fb0
+- **LEAD-R04** · restricao banco — `models.py` › `ck_lead_avaliacao_nomes` › linhas 1350-1351
+  - ck_lead_avaliacao_nomes: length(trim(nome_contato)) > 0 e length(trim(nome_loja)) > 0. ' ' e '' são recusados.
+  - Testes: tests/test_leads_avaliacao.py (casos 'nome vazio' e 'loja vazia') · Origem: 91e5fb0
+- **LEAD-R05** · restricao banco — `models.py` › `ck_lead_avaliacao_email / ix_lead_avaliacao_email` › linhas 1352, 1356
+  - ck_lead_avaliacao_email exige email LIKE '%_@_%': 'sem-arroba.example.invalid' é recusado e 'a@b' passa. O banco não normaliza (maiúsculas contam), e o índice ix_lead_avaliacao_email não é único, então o mesmo e-mail pode ter vários leads. É por esse índice que se localiza o titular num pedido da LGPD.
+  - Testes: tests/test_leads_avaliacao.py (caso 'e-mail sem arroba'); PostgreSQL constraints_enforced · Origem: 91e5fb0
+- **LEAD-R06** · restricao banco — `models.py` › `ck_lead_avaliacao_whatsapp` › linhas 1353
+  - ck_lead_avaliacao_whatsapp: NULL ou de 10 a 20 caracteres (conta caracteres, não dígitos). '123' é recusado e '11900000000' é aceito.
+  - Testes: tests/test_leads_avaliacao.py (caso 'whatsapp curto') · Origem: 91e5fb0
+- **LEAD-R07** · restricao banco — `models.py` › `LeadAvaliacao.plano_recomendado_codigo` › linhas 1329-1331
+  - fk_lead_avaliacao_plano: plano_recomendado_codigo precisa existir em plano_nivel, que tem BRONZE, PRATA, OURO e CUSTOM gravados pela b3e9d6c1f7a2 (linhas 50-53). 'DIAMANTE' é recusado.
+  - Testes: tests/test_leads_avaliacao.py (caso 'plano inexistente'); tests/test_leads_avaliacao.py test_tabelas_colunas_e_indices_da_revisao (69-70) · Origem: 91e5fb0
+- **LEAD-R08** · restricao banco — `models.py` › `LeadAvaliacao.status` › linhas 1327-1328
+  - O status padrão é 'pendente', no ORM e no servidor. Um INSERT feito fora da aplicação, sem status, grava 'pendente' e preenche criado_em.
+  - Testes: tests/test_leads_avaliacao.py test_valores_com_cifrao_no_nome_da_coluna_e_padroes (91-97); PostgreSQL uuid_and_defaults_from_database (229-243) · Origem: 91e5fb0
+- **LEAD-R09** · restricao banco — `models.py` › `ck_brainstorming_dados_pdv_ano` › linhas 1395
+  - ck_brainstorming_dados_pdv_ano exige ano_exercicio entre 2000 e 2100, então 1999 é recusado. O leitor de período do ETL aceita 1999: no exp_mapeamento, 'Periodo: 01/01/1999 a 31/01/1999' virou (1999-01-01, 1999-01-31). É preciso validar o ano antes de gravar.
+  - Testes: tests/test_leads_avaliacao.py (caso 'ano' = 1999) · Origem: 91e5fb0
+- **LEAD-R10** · restricao banco — `models.py` › `ck_brainstorming_dados_pdv_descricao` › linhas 1396
+  - ck_brainstorming_dados_pdv_descricao: length(trim(descricao_produto)) > 0, então ' ' é recusado. O filtro do ETL (\_prod_norm != '' em etl_processor.py:669-672) já garante pelo menos um caractere alfanumérico no nome que viesse do Raio-X.
+  - Testes: tests/test_leads_avaliacao.py (caso 'descrição vazia') · Origem: 91e5fb0
+- **LEAD-R11** · restricao banco — `models.py` › `ck_brainstorming_dados_pdv_custo` › linhas 1380, 1397-1398
+  - ck_brainstorming_dados_pdv_custo: custo_medio_registrado é NULL ou >= 0, e NULL quer dizer sem custo. -1 é recusado; 12,3456 é aceito e preservado com 4 casas.
+  - Testes: tests/test_leads_avaliacao.py test_valores_com_cifrao... (78, 88) e caso 'custo negativo' · Origem: 91e5fb0
+- **LEAD-R12** · restricao banco — `models.py` › `vazamento_estimado_reais / ck_brainstorming_dados_pdv_vazamento` › linhas 1386-1388, 1399
+  - ck_brainstorming_dados_pdv_vazamento: vazamento_estimado_r$ >= 0, com padrão 0 tanto no ORM (Decimal('0')) quanto no servidor ('0').
+  - Testes: tests/test_leads_avaliacao.py (caso 'vazamento negativo'); PostgreSQL uuid_and_defaults_from_database (Decimal 0.00) · Origem: 91e5fb0
+- **LEAD-R13** · restricao banco — `models.py` › `flag_venda_sem_custo / flag_venda_abaixo_custo / flag_omissao_erp` › linhas 1381-1385
+  - As três flags nascem false, no ORM e por server_default false(). Nenhum código as calcula.
+  - Testes: tests/test_leads_avaliacao.py (85-86); PostgreSQL uuid_and_defaults_from_database · Origem: 91e5fb0
+- **LEAD-R14** · restricao banco — `models.py` › `LeadAvaliacao.dados_pdv / BrainstormingDadosPdv.lead_id` › linhas 1340-1341, 1371-1374 (migração 194-195)
+  - Apagar o lead apaga as linhas: FK com ON DELETE CASCADE, mais o relationship com cascade 'all, delete-orphan' e passive_deletes=True.
+  - Testes: tests/test_leads_avaliacao.py test_excluir_o_lead_leva_os_dados_do_pdv (127-140); PostgreSQL cascade_delete (453-457) · Origem: 91e5fb0
+- **LEAD-R15** · restricao banco — `models.py` › `BrainstormingDadosPdv (colunas numéricas)` › linhas 1378-1380, 1386
+  - Precisão limitada em valores vindos de planilha: quantidade Numeric(14,3), valor_venda_bruto Numeric(14,2), custo Numeric(14,4) e os dois vazamentos Numeric(12,2). Isso contraria o precedente do próprio código, que deixa sem precisão, de propósito, os valores tirados de planilha (models.py:1162-1163 em validacao_pdv e 1281-1282 em diagnostico_entrada: 'o arquivo não tem teto'). O raio_x só exige número finito (raio_x.py:181-184). No exp_mapeamento, uma linha com Valor Total 1.200.000.000.000,00 deu faturamento 1,2e12 (acima de 999.999.999.999,99) e perda 1e11 (acima de 9.999.999.999,99).
+  - Testes: nenhum teste de estouro em brainstorming; só lead_avaliacao no PostgreSQL (constraints_enforced, 264) · Origem: 91e5fb0
+- **LEAD-R16** · ttl — `leads_avaliacao.py` › `_expurgar_em_sqlalchemy (corte, antigas, recentes)` › linhas 55-59 (migração 100-106, 115-120)
+  - Sai a linha com criado_em < agora - dias, numa comparação estrita: com 30 dias, a linha de exatamente 30 dias fica e a de 31 sai. O relógio é o criado_em da linha (o momento da gravação), não o do lead nem o ano de exercício, então regravar as linhas reinicia o prazo.
+  - Testes: tests/test_leads_avaliacao.py \_cenario (156: 'exatamente 30 dias: fica') e test_regra_do_expurgo (167-192) · Origem: 91e5fb0
+- **LEAD-R17** · ttl — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_FUNCAO_EXPURGO (status <> 'convertido')` › linhas 104, 111, 119 (leads_avaliacao.py 62)
+  - As linhas de um lead 'convertido' nunca são expurgadas e ficam sem prazo de retenção.
+  - Testes: tests/test_leads_avaliacao.py test_regra_do_expurgo (convertido com linha de 90 dias fica) · Origem: 91e5fb0
+- **LEAD-R18** · ttl — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_FUNCAO_EXPURGO (UPDATE ... NOT EXISTS recentes)` › linhas 108-113 (leads_avaliacao.py 68-73)
+  - Só vira 'expirado' o lead que tinha linha vencida e não ficou com nenhuma recente. Um lead misto (linhas de 45 e de 5 dias) mantém o status e perde só a linha antiga. Um lead sem nenhuma linha continua 'pendente' para sempre. No cenário do teste, o resultado é (1 lead, 5 linhas).
+  - Testes: tests/test_leads_avaliacao.py test_regra_do_expurgo (175-179: 'sem_linhas' fica 'pendente') · Origem: 91e5fb0
+- **LEAD-R19** · ttl — `leads_avaliacao.py` › `docstring do módulo` › linhas 7-9 (migração 25-28)
+  - O expurgo não toca no resumo (score, vazamento total, plano e resumos) nem no contato (nome, e-mail, WhatsApp e loja).
+  - Testes: tests/test_leads_avaliacao.py (185-188); tests/test_leads_postgresql.py purge_matches_sqlalchemy_rule (resumo 50,00, 351-358) · Origem: 91e5fb0
+- **LEAD-R20** · ttl — `leads_avaliacao.py + migração` › `_expurgar_em_sqlalchemy / _FUNCAO_EXPURGO` › linhas leads_avaliacao.py 60-64; migração 74-80, 101-107
+  - Ordem de trava: o lead antes dos dados. A função faz SELECT ... FOR UPDATE ordenado por id e depois UPDATE e DELETE em comandos separados, em READ COMMITTED. Isso é um contrato para o futuro gravador, que ainda não existe: ele precisa travar o lead antes de inserir ou apagar linhas, como diz o comentário da linha 60. O ensaio simula esse gravador com SQL. No caso A (linha nova e status 'concluido') o resultado é (1, 6) e o lead fica; no caso B (linhas apagadas e status 'em_processamento') o resultado é (1, 5).
+  - Testes: tests/test_leads_postgresql.py \_corrida_com_quem_grava (362-379) e \_corrida (381-431) · Origem: 91e5fb0
+- **LEAD-R21** · ttl — `leads_avaliacao.py` › `expurgar_dados_pdv / expurgar_pdv` › linhas 43-44, 88-89 (migração 97-99)
+  - O prazo precisa ser um inteiro >= 1. 0, -1, None, 1,5, '30' e True dão ValueError. No CLI vale click.IntRange(min=1); na função do banco, RAISE EXCEPTION.
+  - Testes: tests/test_leads_avaliacao.py test_prazo_configuravel_e_validado (194-205); test_comando... ('--dias 0' recusado, 231-232) · Origem: 91e5fb0
+- **LEAD-R22** · ttl — `leads_avaliacao.py` › `expurgar_pdv` › linhas 95-107
+  - O CLI simula por padrão (rollback) e --aplicar faz commit. A saída traz só contagens, como 'a remover: 5; leads a expirar: 1', sem e-mail nem nome.
+  - Testes: tests/test_leads_avaliacao.py test_comando_simula_por_padrao_e_aplica_com_a_opcao (207-232) · Origem: 91e5fb0
+- **LEAD-R23** · seguranca — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_POLITICAS_POSTGRESQL` › linhas 19-23, 48-72, 206-207
+  - RLS ligado sem FORCE. anon e authenticated ficam sem privilégio e sob política restritiva: nem um GRANT nem uma política permissiva criados depois abrem a tabela (o count dá 0 e o INSERT é negado). postgres e service_role recebem acesso_servidor. A aplicação, que é dona das tabelas, não passa pelo RLS, então qualquer tela futura de leads precisa da própria autorização de admin.
+  - Testes: tests/test_leads_postgresql.py rls_enabled_without_force, policies_for_api_and_server_roles, api_roles_lose_default_privileges, restrictive_policy_denies_even_with_grant (215-292) · Origem: 91e5fb0
+- **LEAD-R24** · seguranca — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `_FUNCAO_EXPURGO` › linhas 86-91, 125-131
+  - Função endurecida: SECURITY INVOKER, search_path 'pg_catalog, public, pg_temp', para que uma tabela temporária homônima não tome o lugar da real, e EXECUTE revogado de PUBLIC, anon e authenticated (has_function_privilege('anon', ...) = false).
+  - Testes: tests/test_leads_postgresql.py purge_function_hardened (316-322), purge_function_not_executable_by_api_roles (323-330) · Origem: 91e5fb0
+- **LEAD-R25** · seguranca — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py` › `downgrade` › linhas 211-223
+  - O downgrade é recusado se houver qualquer lead ou linha (RuntimeError), para obrigar backup e uma decisão sobre os dados pessoais.
+  - Testes: tests/test_leads_avaliacao.py test_downgrade_recusa_dados_e_remove_as_tabelas_vazias (245-263) · Origem: 91e5fb0
+- **LEAD-R26** · baia raio x — `raio_x_servico.py` › `processar_envio` › linhas 87-90
+  - No Raio-X, a extensão é conferida antes da Baia. processar_envio recusa tudo que não seja csv ou xlsx com 'Arquivo N: formato não suportado. Envie CSV ou XLSX.', então TXT e XLS nunca chegam à Baia por esse caminho.
+  - Testes: tests/test_planos_raio_x.py test_erros_de_envio_nao_gravam_e_explicam (639: 'notas.txt') · Origem: ec4ba95
+- **LEAD-R27** · baia raio x — `raio_x_servico.py` › `processar_envio` › linhas 93-101
+  - Assinatura no Raio-X: inspecionar_arquivo com rótulo e registrar_recusa com origem 'raio_x'. Um executável com extensão .csv é recusado ('Arquivo 2: arquivo fora do padrão aceito para auditoria.') sem que run_raio_x seja chamado.
+  - Testes: tests/test_security_gatekeeper.py BaiaNoRaioXTests (753-765) · Origem: 91e5fb0
+- **LEAD-R28** · baia raio x — `raio_x_servico.py` › `processar_envio` › linhas 102-104
+  - Arquivos repetidos: um SHA-256 igual ao de outro arquivo do envio dá 'Arquivo N: é igual a outro arquivo enviado.' (código raio_x_repetido).
+  - Testes: tests/test_planos_raio_x.py test_erros_de_envio_nao_gravam_e_explicam (640) · Origem: ec4ba95
+- **LEAD-R29** · baia raio x — `raio_x.py + etl_worker.py` › `_ler_arquivo / main` › linhas raio_x.py 156-165; etl_worker.py 61-69; raio_x_servico.py 93-95 (comentário)
+  - O Raio-X não roda exigir_estrutura_minima, inventariar_xlsx nem a cópia neutralizada, porque nada é gravado. Valem o teto, a assinatura e a neutralização de read_raw. A estrutura é exigida pelo próprio motor (\_vendas_do_bruto com \_validar_vendas, mais estrito que \_minimo_vendas da Baia), e o erro 'data' vira 'Arquivo N: não foi possível identificar produto, quantidade e valor de venda...' (código raio_x_dados).
+  - Testes: tests/test_planos_raio_x.py test_arquivo_sem_colunas_de_vendas_tem_mensagem_segura (235-242) · Origem: ec4ba95 / 91e5fb0
+- **LEAD-R30** · baia raio x — `etl_processor.py + security_gatekeeper.py` › `_parse_valor / neutralizar_celula` › linhas etl_processor.py 167-171; security_gatekeeper.py 327-351
+  - Um nome ou código que começa com fórmula chega com o apóstrofo: '=== PROMO ===' vira ''=== PROMO ==='. Nenhum número muda e a chave do produto também não, porque \_normalizar_produto ignora pontuação. \_parse_valor ignora o apóstrofo: um '-2 un(s)' neutralizado continua -2, sem a devolução virar venda.
+  - Testes: tests/test_security_gatekeeper.py NeutralizacaoTests (288-359), test_numeros_iguais_aos_da_leitura_de_antes_da_baia (467) · Origem: 91e5fb0
+- **LEAD-R31** · mapeamento campo — `etl_processor.py + raio_x.py` › `_extrair_periodo_base / _parse_data_br / _ler_arquivo` › linhas etl_processor.py 738-770; raio_x.py 159, 250-251
+  - ano_exercicio exige regra nova; a fonte existente é parcial. Hoje o ano sai do período do cabeçalho via \_extrair_periodo_base, exposto em resumo['inicio'] e resumo['fim'] de \_ler_arquivo. O exp_mapeamento mostra três lacunas. Sem período o resultado é None, e a coluna é NOT NULL. Um período que cruza o ano ('01/12/2025 a 31/01/2026') não se divide, porque vendas não têm coluna de data. E um ano fora de 2000 a 2100 passa pelo parser.
+  - Testes: equivalência dourada (tests/test_etl_financial_equivalence.py, fixtures/sec005_financial_expected.json periodo_base_inicio); tests/raio_x_support.py (12-36) · Origem: fc63708 (período); ec4ba95 (Raio-X)
+- **LEAD-R32** · mapeamento campo — `raio_x.py` › `_texto_curto / _codigos / _conflitos` › linhas 119-121, 132-151, 237-238, 415-416
+  - codigo_produto pode vir de \_codigos, mas exige decisão sobre o agrupamento. \_codigos colapsa os espaços do código e o corta em 60 caracteres, o mesmo tamanho de String(60); 'nan', 'none', 'null' e vazio viram NULL. O Raio-X, porém, agrupa por nome normalizado. No exp_divergencias C, 'Tinta Branca' (A1), 'Tinta Branca' (B2) e 'TINTA-BRANCA' (C3) viraram uma linha com o código A1 (o primeiro do arquivo; no envio inteiro, o do mês mais recente) e entraram em 'nome com vários códigos'. Gravar 'uma linha por produto' herda esse colapso.
+  - Testes: tests/test_planos_raio_x.py test_inconsistencias_contam_cada_codigo_e_produto_uma_vez (112-120) · Origem: ec4ba95
+- **LEAD-R33** · mapeamento campo — `etl_processor.py + raio_x.py` › `LIMITE_NOME_PRODUTO / _nome_exibivel` › linhas etl_processor.py 130-139; raio_x.py 195, 237, 415
+  - descricao_produto pode ser preenchida por função existente: \_nome_exibivel tira o NUL e corta em LIMITE_NOME_PRODUTO = 200, igual a String(200). No arquivo, o Raio-X guarda o primeiro nome do produto; no envio inteiro, o do mês mais recente.
+  - Testes: tests/test_complementary_hardening_security.py test_oversized_product_name_is_length_capped_and_nul_stripped (71-82) · Origem: bd8cace (teto 200)
+- **LEAD-R34** · mapeamento campo — `raio_x.py` › `_ler_arquivo (venda, v['quantidade']) / _item` › linhas 168-170, 197, 236, 315
+  - quantidade pode ser preenchida por função existente: é a soma das quantidades das vendas analisadas (não devolução, quantidade > 0 e valor > 0), arredondada a 3 casas em \_item, a mesma escala de Numeric(14,3). Não há teto de magnitude.
+  - Testes: tests/test_planos_raio_x.py test_canceladas_e_devolucoes_ficam_fora_das_contas_de_preco_e_custo (201-210) · Origem: ec4ba95
+- **LEAD-R35** · mapeamento campo — `raio_x.py + etl_processor.py` › `_ler_arquivo (faturamento) / faturamento_bruto` › linhas raio_x.py 170, 198, 246; etl_processor.py 1090-1092
+  - valor_venda_bruto exige escolha, porque o código tem duas definições de bruto. No Raio-X, é a soma das vendas analisadas em centavos (valor.round(2)). Na trava do PDV, é etl_processor.faturamento_bruto = faturamento_total + valor_devolucoes, que soma toda linha não cancelada e não devolução, inclusive valor negativo sem status e quantidade zero. No exp_divergencias B (Tinta 100,00; Rolo -10,00; Lixa com quantidade 0 e 5,00; Pincel em devolução 20,00; Fita cancelada 30,00), o Raio-X deu 100,00 e a trava deu 95,00.
+  - Testes: tests/test_trava_pdv.py test_retorno_do_etl_leva_a_conferencia_para_auditoria (70-75), test_compara_com_o_bruto_e_mantem_o_liquido_no_kpi (258); tests/test_planos_raio_x.py (201-210) · Origem: bba0971 (trava) / ec4ba95
+- **LEAD-R36** · mapeamento campo — `raio_x.py` › `custo_e_unitario / _ler_arquivo / _item` › linhas 76-91, 171-174, 199, 325-326
+  - custo_medio_registrado pode ser preenchido por função existente. O custo da linha é a coluna de custo, multiplicada pela quantidade quando custo_e_unitario(título) é verdadeiro; custo vazio ou zero conta como sem custo. A média é custo_total / quantidade_com_custo, como \_item['custo_medio'], mas \_item arredonda a 2 casas com \_dinheiro e a coluna aceita 4. O valor é NULL quando não há custo. Exemplo: Cafe, 10 unidades com custo unitário de 15,00, dá custo_total 150,00 e custo médio 15,00.
+  - Testes: tests/test_planos_raio_x.py test_coluna_de_custo_unitario_vira_custo_da_linha (121-129), test_titulos_de_custo_por_unidade_e_de_custo_da_linha (131-143) · Origem: ec4ba95
+- **LEAD-R37** · mapeamento campo — `raio_x.py` › `diagnosticar (sem_custo) / _fatia` › linhas 199, 204, 296-297, 429, 454-458
+  - flag_venda_sem_custo exige decisão, porque o Raio-X tem duas leituras. Por item, custo_total <= 0 (itens_sem_custo). Por faturamento, faturamento - faturamento_com_custo > 0. No exp_mapeamento, 'Queijo' tem uma venda com custo (2 unidades por 50,00, custo 40,00) e outra sem (1 unidade por 30,00): não é item sem custo, mas tem R$ 30,00 vendidos sem custo. 'Pao' com Total Custo '0' conta como sem custo.
+  - Testes: tests/test_planos_raio_x.py test_saude_scanner_recuperavel_e_precificacao_conferidos_a_mao (58-87), test_sem_coluna_de_custo_recomenda_prata_e_avisa (211-219) · Origem: ec4ba95
+- **LEAD-R38** · mapeamento campo — `etl_processor.py + raio_x.py` › `_calcular_kpis_local (alerta) / _ler_arquivo (perda) / diagnosticar (margem_negativa)` › linhas etl_processor.py 1009-1022; raio_x.py 223, 225, 432, 435
+  - flag_venda_abaixo_custo exige decisão, porque há três versões. (1) O alerta das análises no etl_processor marca linha com valor_custo > 0 e valor_venda < valor_custo, sem tratar custo unitário. (2) No raio_x, perda > 0: alguma venda abaixo do custo da linha, já com custo unitário × quantidade. (3) No raio_x, margem negativa: faturamento_com_custo < custo_total no item. No exp_divergencias A ('Custo Unitario' 12,00; 10 unidades por 100,00), o etl_processor achou 0 itens e o raio_x achou 1, com perda de 20,00. No exp_granularidade, 'Massa Corrida' com uma venda de 10,00 (custo 15,00) e outra de 20,00 (custo 10,00) dá (2) verdadeiro e (3) falso.
+  - Testes: tests/test_etl_regras_financeiras.py test_devolucao_nao_gera_alerta_de_venda_abaixo_do_custo (243-247); fixtures/sec005_financial_expected.json (itens_venda_abaixo_custo_pdv); tests/test_planos_raio_x.py (88-96, 121-129) · Origem: fc63708 (alerta) / ec4ba95 (raio_x)
+- **LEAD-R39** · mapeamento campo — `raio_x.py` › `_ler_arquivo (variacao, variacao_visivel)` › linhas 25-30, 65-68, 205-221, 264-265 (Docs/PLANOS_E_RAIO_X.md 76-80)
+  - flag_omissao_erp tem só uma aproximação heurística; a omissão real exige regra e entrada novas. O mais próximo é o scanner de omissão do Raio-X (variacao): produto com quantidade total > 1 e preço praticado fora da referência (preço de tabela ou o mais praticado) por mais de max(R$ 0,01; 0,5%), ou com amplitude de preço acima disso no mesmo arquivo. É uma heurística de perfil: a documentação diz que 'O NEXO não recebe o relatório do ERP' e que o scanner não afirma descarte. Sem preço de tabela e com uma linha por produto, a variação não é visível (variacao_visivel = false), e a flag ficaria false sem querer dizer 'sem omissão'. A omissão real de um relatório consolidado precisa de uma entrada que hoje não existe.
+  - Testes: tests/test_planos_raio_x.py test_diferenca_dentro_da_tolerancia_nao_vira_vazamento (97-105), test_uma_linha_por_produto_sem_preco_unitario_nao_mostra_variacao (194-200), test_total_calculado_pelo_preco_unitario_nao_mostra_variacao (160-164) · Origem: ec4ba95
+- **LEAD-R40** · mapeamento campo — `raio_x.py` › `_ler_arquivo (vazamento, perda, recuperavel)` › linhas 31-34, 221-224, 236
+  - vazamento_estimado_r$ tem um nome que colide com a terminologia do Raio-X e exige decisão. No Raio-X, 'vazamento' é só a parte de preço (referência × quantidade - vendido, quando abaixo da referência e com variação), e 'recuperável' é max(vazamento, perda) por linha, para não contar duas vezes. A tela chama o vazamento de 'Abaixo do preço de referência'. Os dois valores são >= 0, então o CHECK é atendido. No exp_mapeamento, 'Cafe 500g' (tabela 20,00, 10 unidades vendidas por 180,00) dá vazamento 20,00 e recuperável 20,00; 'Leite 1L' (custo 110,00, vendido por 100,00) dá perda 10,00 e recuperável 10,00.
+  - Testes: tests/test_planos_raio_x.py test_recuperavel_conta_uma_vez_a_venda_abaixo_do_custo_e_do_preco (181-185) · Origem: ec4ba95
+- **LEAD-R41** · mapeamento campo — `raio_x.py + raio_x_servico.py` › `diagnosticar (auditavel, indice) / salvar` › linhas raio_x.py 427-430, 452; raio_x_servico.py 123, 130
+  - score_saude_cadastral pode ser preenchido por função existente: saude['indice'] = 100 × faturamento com custo dos produtos sem código ou nome conflitante / faturamento analisado, com 2 casas; salvar quantiza em 0,01. O domínio bate com o CHECK. No exp_mapeamento (janeiro e fevereiro), o índice foi 62,93.
+  - Testes: tests/test_planos_raio_x.py test_saude_scanner_recuperavel_e_precificacao_conferidos_a_mao (58-87) · Origem: ec4ba95
+- **LEAD-R42** · mapeamento campo — `raio_x.py + raio_x_servico.py` › `diagnosticar (recuperavel, scanner) / salvar` › linhas raio_x.py 473, 495-499; raio_x_servico.py 131
+  - vazamento_total_r$ exige decisão de significado. O candidato natural é resultado['recuperavel']['total'], o mesmo valor que diagnostico_entrada.valor_recuperavel guarda. A alternativa é só a parte de preço, recuperavel['variacao_preco'] ou scanner['vazamento_preco']. O Numeric(12,2) limita o total a 9.999.999.999,99, enquanto diagnostico_entrada não tem teto.
+  - Testes: tests/test_planos_raio_x.py (58-87) · Origem: ec4ba95
+- **LEAD-R43** · mapeamento campo — `raio_x.py` › `recomendar` › linhas 512-544 (OURO em 540-543); blueprints/onboarding.py 123-124; b3e9d6c1f7a2 linha 51 (PRATA, 24 meses)
+  - plano_recomendado_codigo pode ser preenchido por função existente, com uma consequência de regra. recomendar(resultado, meses do PRATA) devolve BRONZE, PRATA ou OURO, e a FK é atendida. Com 3 anos (36 meses) e o PRATA de 24 meses, qualquer problema leva a OURO, e o PRATA nunca é recomendado. No exp_recomendacao, 12 e 24 meses com problema deram PRATA, 36 meses com problema deram OURO e os casos sem problema deram BRONZE.
+  - Testes: tests/test_planos_raio_x.py test_cadastro_saudavel_fica_no_bronze_e_historico_longo_com_problema_vai_ao_ouro (220-230) · Origem: ec4ba95
+- **LEAD-R44** · mapeamento campo — `raio_x.py + insights.py` › `recomendar / diagnosticar / _avisos / gerar_semaforos` › linhas raio_x.py 375-394, 461-467, 521-535; insights.py 39-114
+  - resumo_urgencia_json, resumo_atencao_json e resumo_eletiva_json exigem regra nova. Já existe matéria-prima: os motivos de recomendar, as inconsistências, a auditoria (perda, margem negativa e precificação), o scanner e os avisos. Nenhuma regra classifica em Urgência, Atenção ou Eletiva. O único padrão de 3 níveis é o dos semáforos de análises (critico, atencao, oportunidade), com cards {nivel, titulo, o_que_fazer, por_que}. Ele serve como forma, mas não pelos limiares, que medem compras × vendas.
+  - Testes: nenhum para Urgência/Atenção/Eletiva · Origem: ec4ba95 / fc63708
+  - Nota da revisão: há outros classificadores de 3 classes no código, que não medem urgência: a Curva ABC (`etl_processor._classificar_curva_abc`, 784-845), a recomendação de plano (`raio_x.recomendar`, 512-544) e as faixas de cor do índice de saúde (`templates/onboarding/diagnostico.html` 52). A triagem do lead não deve criar mais uma cópia desses limiares.
+- **LEAD-R45** · regra negocio — `raio_x.py` › `_avisos` › linhas 377-386
+  - Arquivos com períodos que se sobrepõem geram aviso, mas os totais somam os dois: um anual e três mensais do mesmo ano contam em dobro. Numa linha produto×ano isso duplicaria quantidade e valor, então é preciso uma regra (recusar ou deduplicar) antes de gravar.
+  - Testes: tests/test_planos_raio_x.py test_sobreposicao_com_relatorio_anual_avisa_cada_mensal (172-180), test_periodos_sobrepostos_geram_aviso (231-234) · Origem: ec4ba95
+- **LEAD-R46** · regra negocio — `raio_x.py` › `_avisos` › linhas 388-390
+  - Um arquivo sem período no cabeçalho entra nos totais e fica fora da linha do tempo, com aviso. Como ano_exercicio é NOT NULL, essa linha não teria ano.
+  - Testes: nenhum específico · Origem: ec4ba95
+- **LEAD-R47** · regra negocio — `etl_processor.py` › `TOLERANCIA_PDV / em_centavos / validar_total_pdv / conferir_total_pdv` › linhas 74-77, 1064-1102
+  - validar_total_pdv compara, em centavos, o bruto calculado com um total informado, com tolerância de R$ 1,00; acima disso o status é DIVERGENTE_PDV. É a única regra do código que confronta o detalhe com um total consolidado, e pode servir de base a uma omissão em nível de lead. Ela pede um valor de entrada que o lead hoje não informa e que não tem coluna em lead_avaliacao.
+  - Testes: tests/test_trava_pdv.py RegraDaConferenciaTests (39-79), CenariosPedidosTests (207-249) · Origem: bba0971
+- **LEAD-R48** · regra negocio — `etl_processor.py` › `_persistir_curva_abc / processar_arquivos_analise` › linhas 1134-1159, 1173-1176
+  - Já existe um padrão para gravar muitas linhas por resultado: apagar as anteriores e inserir em lote (insert(...) com lista) dentro de begin_nested(), preservando o anterior em caso de falha. brainstorming_dados_pdv não tem unicidade nem versão, então reprocessar sem esse padrão duplicaria as linhas e reiniciaria o TTL.
+  - Testes: tests/postgresql_etl_resource_security.py (248-) · Origem: 0ac01c8 (insert em lote)
+
+### Formatos e variações (A.4)
+
+- **LEAD-F01** · formato arquivo — `raio_x_servico.py + config.py` › `processar_envio / ALLOWED_EXTENSIONS` › linhas raio_x_servico.py 87-90; config.py 275-277
+  - O Raio-X aceita só .csv e .xlsx (a mensagem é 'Envie CSV ou XLSX.'). O portal também aceita só essas duas: ALLOWED_EXTENSIONS = {'csv', 'xlsx'}, com o comentário de que .xls não tem leitor.
+  - Testes: tests/test_planos_raio_x.py test_erros_de_envio_nao_gravam_e_explicam (636-652) · Origem: ec4ba95
+- **LEAD-F02** · formato arquivo — `security_gatekeeper.py` › `EXTENSOES_RECONHECIDAS / FORMATO_DE_LEITURA / _ole_e_planilha / inspecionar_arquivo` › linhas 62-64, 69, 163-187, 217-233
+  - A Baia reconhece xlsx, xls, csv e txt (EXTENSOES_RECONHECIDAS), e FORMATO_DE_LEITURA mapeia txt para csv. O XLS verdadeiro (OLE2 com o fluxo Workbook ou Book) é recusado como xls_binario ou xls_disfarcado, com ORIENTACAO_XLS. O texto UTF-16 é aceito.
+  - Testes: tests/test_security_gatekeeper.py test_formatos_verdadeiros_passam_e_dizem_como_ler (258-269), test_xls_verdadeiro_e_reconhecido_e_recusado_com_orientacao (250) · Origem: 91e5fb0
+- **LEAD-F03** · formato arquivo — `etl_inputs.py + security_gatekeeper.py` › `_run / triar` › linhas etl_inputs.py 601-622 (612-613); security_gatekeeper.py 740-743
+  - O motor não lê TXT. No exp_mapeamento, read_raw('relatorio.txt') devolveu unsupported ('Formato não suportado. Envie um arquivo CSV ou XLSX.'), triar com .txt devolveu quarentena:formato_de_leitura e inspecionar_arquivo com .txt devolveu 'csv'. Para ler um TXT, o chamador teria de gravá-lo com o sufixo .csv, e nenhum código faz isso.
+  - Testes: tests/test_security_gatekeeper.py test_nao_sobrescreve_uma_copia_existente_nem_le_formato_trocado (583-592) · Origem: 91e5fb0 / 2da719b
+- **LEAD-F04** · cabecalho periodo — `etl_processor.py` › `_RE_DATA_BR / _parse_data_br / _extrair_periodo_base` › linhas 738-770
+  - O período vem de uma célula com 'periodo' (sem acento, em minúsculas) nas primeiras 30 linhas, com datas no formato dd/mm/aa ou dd/mm/aaaa. Uma data só dá (d, d), datas invertidas são ordenadas e ano com 2 dígitos ganha 2000. Exemplos: 'Periodo: 01/01/2026 a 31/01/2026' dá (2026-01-01, 2026-01-31); 'Periodo de : 01/01/26 a 31/03/26' dá (2026-01-01, 2026-03-31); sem a célula, None.
+  - Testes: equivalência dourada tests/test_etl_financial_equivalence.py; tests/raio_x_support.py (12-36) · Origem: fc63708
+- **LEAD-F05** · alias coluna — `raio_x.py` › `_RE_UNITARIO_FORTE / _RE_UNITARIO_FRACO / _RE_MULTIPLICADO / _RE_TOTAL / custo_e_unitario` › linhas 76-91
+  - Títulos de custo lidos como custo por unidade (multiplicados pela quantidade): 'Custo Unitario', 'Custo Unit.', 'Custo Un.', 'Custo Und', 'Custo Unid.', 'Custo Unidade', 'Custo p/ Unidade', 'Custo por Unidade', 'Custo Médio', 'Preço de Custo' e 'Preço Custo'. Títulos lidos como custo da linha: 'Total Custo', 'Custo Total', 'Vlr Custo', 'Custo', 'Total Custo Médio', 'Custo Médio Total', 'Tot. Custo Médio', 'Total Preço de Custo', 'Qtde x Custo Médio' e 'Custo Unit x Qtde'.
+  - Testes: tests/test_planos_raio_x.py test_titulos_de_custo_por_unidade_e_de_custo_da_linha (131-143) · Origem: ec4ba95
+- **LEAD-F06** · alias coluna — `etl_processor.py` › `ALIAS_VENDAS / ALIAS_COMPRAS` › linhas 359-387, 393
+  - Canônicos de vendas que alimentariam brainstorming_dados_pdv: codigo ('id produto', 'codigo', 'cod barras', 'ean', 'sku', 'ref'...), produto ('nome do produto', 'descricao'...), estoque, valor_custo ('total custo', 'vr custo', ..., 'custo'), valor_venda ('faturamento', 'total venda', 'vr total', 'valor total'...), preco_unitario ('preco unitario', 'preco venda', 'preco') e quantidade ('qtde vend', 'qtde', 'quantidade', 'qtd'). lucro é detectado e descartado. Vendas não têm canônico de data: só ALIAS_COMPRAS tem 'data' (linha 393).
+  - Testes: equivalência dourada tests/test_etl_financial_equivalence.py; tests/test_planos_raio_x.py (cabeçalhos Codigo;Produto;Qtde;Preco Unitario;Valor Total;Total Custo) · Origem: fc63708 e posteriores
+- **LEAD-F07** · situacao linha — `etl_processor.py + raio_x.py` › `_RE_COLUNA_SITUACAO / _RE_LINHA_CANCELADA / _RE_LINHA_DEVOLUCAO / _aplicar_situacao_das_vendas` › linhas etl_processor.py 544-601; raio_x.py 168
+  - Colunas de status ou operação: linhas canceladas (CANC, ESTORN, INUTILIZ, sem negação antes) saem; devoluções e trocas (DEVOL, TROCA) ficam negativas. O Raio-X ainda deixa as devoluções fora das contas de preço e custo (validas = \~\_devolucao).
+  - Testes: tests/test_planos_raio_x.py (201-210); tests/test_etl_regras_financeiras.py · Origem: 0ac01c8
+- **LEAD-F08** · identificador — `models.py` › `vazamento_total_reais / vazamento_estimado_reais` › linhas 1326, 1386 (migração 15-17, 147, 186)
+  - As colunas 'vazamento_total_r$' e 'vazamento_estimado_r$' têm cifrão no nome, e os atributos Python são vazamento_total_reais e vazamento_estimado_reais. No SQL bruto os testes usam aspas; no PostgreSQL o nome é lido com e sem aspas.
+  - Testes: tests/test_leads_avaliacao.py test_valores_com_cifrao_no_nome_da_coluna_e_padroes (75-97); PostgreSQL dollar_columns_via_orm (245-257) · Origem: 91e5fb0
+- **LEAD-F09** · identificador — `models.py` › `resumo_urgencia_json / resumo_atencao_json / resumo_eletiva_json` › linhas 1332-1334
+  - Os resumos em JSON ficam em Text, sem esquema e sem validação. O teste de backup grava '["ficticio"]'.
+  - Testes: tests/test_backup_restore.py (409-414) · Origem: 91e5fb0
+- **LEAD-F10** · identificador — `models.py` › `LeadAvaliacao.id / BrainstormingDadosPdv.id` › linhas 1320, 1370 (migração 203-205)
+  - As chaves são Uuid() com default uuid4. No SQLite viram 32 caracteres hexadecimais sem hífen (os testes usam id.hex no SQL bruto); no PostgreSQL também há gen_random_uuid(), versão 4.
+  - Testes: tests/test_leads_avaliacao.py (84, 134); PostgreSQL uuid_and_defaults_from_database · Origem: 91e5fb0
+- **LEAD-F11** · identificador — `models.py` › `criado_em / atualizado_em` › linhas 1335-1338, 1389-1390
+  - Os instantes usam InstanteUTC, com fuso UTC, e CURRENT_TIMESTAMP como padrão no servidor.
+  - Testes: tests/test_leads_avaliacao.py (89: tzinfo == UTC) · Origem: 91e5fb0
+- **LEAD-F12** · contato — `emails.py + contas_email.py` › `email_valido / normalizar_email` › linhas emails.py 206-211; contas_email.py 27-31
+  - E-mail: email_valido aceita ASCII imprimível de 3 a 254 caracteres que case com a regex, e normalizar_email faz strip e lower. O CHECK do banco é bem mais brando ('%_@_%').
+  - Testes: nenhum aplicado a leads · Origem: 82ca010
+- **LEAD-F13** · contato — `configuracoes_conta.py + models.py` › `_TELEFONE / limpar_telefone / ck_lead_avaliacao_whatsapp` › linhas configuracoes_conta.py 57, 85-93; models.py 1353
+  - Telefone e WhatsApp não batem. limpar_telefone aceita até 26 caracteres com 10 a 15 dígitos, e o CHECK do WhatsApp exige de 10 a 20 caracteres. No exp_divergencias D, '+55 (011) 9 1234-5678' (21 caracteres) passou em limpar_telefone e violaria o CHECK; '+55 (11) 9 1234-5678' (20 caracteres) passa nos dois.
+  - Testes: nenhum · Origem: 79849a3 / 91e5fb0
+- **LEAD-F14** · mensagem — `security_gatekeeper.py` › `MENSAGEM_PADRAO / ORIENTACAO_* / SecurityGatekeeperError` › linhas 58, 69-75, 78-93
+  - Mensagem de recusa padronizada: 'Arquivo fora do padrão aceito para auditoria.'. Com rótulo vira 'Arquivo N: arquivo fora do padrão...', às vezes seguida de uma orientação fixa. O código é 'quarentena:&lt;motivo>'.
+  - Testes: tests/test_security_gatekeeper.py test_rotulo_numera_o_arquivo_sem_mudar_o_motivo (270-276), BaiaNoRaioXTests (753-765) · Origem: 91e5fb0
+
+### Desempenho e limites (A.4)
+
+- **LEAD-D01** · limite — `raio_x.py` › `MAX_ARQUIVOS` › linhas 63, 399-400 (raio_x_servico.py 74-76; etl_worker.py 65-66)
+  - MAX_ARQUIVOS = 36: de 1 a 36 relatórios por envio, com a mensagem 'até 3 anos, um por mês'. O worker repete a checagem.
+  - Testes: tests/test_planos_raio_x.py test_quantidade_de_arquivos_fora_do_limite (243-246) · Origem: ec4ba95
+- **LEAD-D02** · limite — `config.py` › `MAX_CONTENT_LENGTH` › linhas 227-229 (Docs/PLANOS_E_RAIO_X.md 60)
+  - MAX_CONTENT_LENGTH tem padrão de 20 MB para a requisição inteira, ou seja, para os 36 arquivos somados. Acima disso a resposta é 413.
+  - Testes: tests/test_planos_raio_x.py test_envio_acima_do_limite_somado_responde_413_em_portugues (653) · Origem: -
+- **LEAD-D03** · limite — `etl_limits.py` › `ETLLimits` › linhas 11-19 (security_gatekeeper.py 104-106)
+  - Por arquivo: teto de min(20 MiB, 50 MiB), até 100 mil linhas, 500 mil células por aba e 1 milhão por arquivo. Os orçamentos valem por arquivo, porque cada read_raw ou validate_input cria o seu.
+  - Testes: tests/test_etl_resource_limits.py, tests/test_etl_runtime_limits.py · Origem: 2da719b
+- **LEAD-D04** · limite — `etl_runtime.py + etl_worker.py + etl_limits.py` › `run_raio_x / main / ETLLimits` › linhas etl_runtime.py 117-128; etl_worker.py 24-29; etl_limits.py 22-23
+  - Um único job no worker processa todos os arquivos, com min(120, 2×60) s de prazo e de CPU e 384 MB de espaço de endereçamento (RLIMIT_AS).
+  - Testes: tests/test_planos_raio_x.py test_worker_tem_a_operacao_e_o_teto_de_arquivos (256-260) · Origem: ec4ba95
+- **LEAD-D05** · medicao — `raio_x.py` › `diagnosticar` › linhas 397-506
+  - Medição neste Windows, no próprio processo, sem RLIMIT e sem OPENBLAS_NUM_THREADS=1, portanto indicativa. Com 36 CSV mensais de 4.000 produtos (12,2 MiB), validate_input nos 36 arquivos levou 4,0 s, diagnosticar levou de 25,5 a 27,7 s e o JSON do resultado ficou com 69 KiB. O working set subiu de 86 MiB (pandas e raio_x importados) para um pico de 245 MiB, cerca de 160 MiB a mais. O limite de 384 MB de espaço de endereçamento do worker no Linux não foi medido aqui.
+  - Testes: experimentos exp_volume.py e exp_memoria.py (ver observações) · Origem: medição deste recorte
+- **LEAD-D06** · protocolo worker — `etl_limits.py + etl_worker.py + etl_runtime.py` › `max_output_bytes / _HARD_CAPS` › linhas etl_limits.py 25, 51; etl_worker.py 94-96; etl_runtime.py 72-77
+  - max_output_bytes é de 4 MiB, que também é o teto rígido. As linhas produto×ano teriam de voltar do worker por esse JSON. No exp_volume, 12.000 linhas (4.000 SKUs × 3 anos) ocuparam 3,67 MiB em JSON compacto; com os separadores padrão que o worker usa, a estimativa é de cerca de 3,9 MiB. Cabem por volta de 12 mil a 13 mil linhas, menos com nomes longos ou acentuados (ensure_ascii).
+  - Testes: tests/test_etl_runtime_limits.py · Origem: 0ac01c8 (4 MiB)
+- **LEAD-D07** · protocolo worker — `etl_runtime.py + etl_worker.py` › `_run_job / main` › linhas etl_runtime.py 57-60; etl_worker.py 10-12
+  - O request do worker tem no máximo 16 KiB e leva só operation, paths, extension e limits. Não há como mandar linhas nem um parâmetro de 'modo' sem mudar o protocolo do SEC-005.
+  - Testes: tests/test_etl_runtime_limits.py · Origem: 2da719b
+- **LEAD-D08** · protocolo worker — `etl_worker.py` › `refuse_external / envelope['runtime']` › linhas 35-47, 82-87
+  - O worker não acessa banco: o audit hook bloqueia rede e criação de processos, e o envelope reporta database_modules_loaded. Gravar em lead_avaliacao ou brainstorming_dados_pdv só é possível no processo pai.
+  - Testes: tests/test_planos_raio_x.py test_motor_nao_carrega_banco_nem_configuracao (248-254) · Origem: 2da719b / ec4ba95
+- **LEAD-D09** · concorrencia — `etl_runtime.py + etl_uploads.py + render.yaml` › `_ADMISSION / _UPLOAD_ADMISSION / startCommand` › linhas etl_runtime.py 17, 49-50; etl_uploads.py 19, 44-53; render.yaml 21
+  - Vaga única: \_ADMISSION no runtime e \_UPLOAD_ADMISSION nas rotas, mais gunicorn -w 1 --threads 50 --timeout 180. O servidor inteiro faz uma avaliação por vez, dividida com os uploads e os processamentos de clientes; quem chega com a vaga ocupada recebe 'busy' ou 'ocupado'.
+  - Testes: tests/test_planos_raio_x.py test_envio_ocupado_nao_processa (671) · Origem: 2da719b / ec4ba95
+- **LEAD-D10** · concorrencia — `blueprints/onboarding.py` › `limite_raio_x` › linhas 38-39 (extensions.py 154-158)
+  - Rate limit de 10 envios por hora, somando a página e a API, por usuário ou por IP para anônimo.
+  - Testes: nenhum específico do recorte · Origem: ec4ba95
+- **LEAD-D11** · limite — `raio_x.py` › `LIMITE_ITENS_LISTA` › linhas 64, 372, 474-491
+  - O resultado do Raio-X traz só os 50 primeiros de cada lista (scanner, abaixo do custo, margem por item e precificação). Não carrega a matriz completa de produtos que brainstorming_dados_pdv pede.
+  - Testes: tests/test_planos_raio_x.py (58-96) · Origem: ec4ba95
+- **LEAD-D12** · protocolo worker — `etl_runtime.py + raio_x.py + raio_x_servico.py` › `run_raio_x / CHAVES_RESULTADO / salvar` › linhas etl_runtime.py 126-127; raio_x.py 73-75; raio_x_servico.py 133-134
+  - run_raio_x exige exatamente CHAVES_RESULTADO, e salvar grava o resultado inteiro em diagnostico_entrada. Pôr as linhas produto×ano no resultado do Raio-X quebraria o contrato e incharia o JSON por empresa. O caminho limpo é uma operação nova no worker.
+  - Testes: tests/test_planos_raio_x.py (58-60) · Origem: ec4ba95
+- **LEAD-D13** · memoria — `raio_x.py` › `diagnosticar` › linhas 402-421
+  - Os arquivos são lidos em sequência, cada um como DataFrame completo de strings (dtype=str), sem chunks. As tabelas por produto são concatenadas e agregadas em memória. O exp_volume levou 26,8 s para reler os 36 arquivos com \_ler_arquivo e agrupar por (produto, ano). Uma operação nova pode fazer isso na mesma passada de diagnosticar, reaproveitando as tabelas por arquivo.
+  - Testes: - · Origem: ec4ba95
+- **LEAD-D14** · persistencia — `migrations/versions/f4c2a8e1d9b6_avaliacao_cenario_leads.py + leads_avaliacao.py` › `índices / _LOTE` › linhas migração 198-200; leads_avaliacao.py 28, 66-78
+  - No expurgo, os índices ix_brainstorming_dados_pdv_lead e ix_brainstorming_dados_pdv_criado_em atendem os EXISTS. No SQLAlchemy há lotes de 500 leads; no PostgreSQL, um comando por etapa.
+  - Testes: tests/test_leads_avaliacao.py ExpurgoTests · Origem: 91e5fb0
+- **LEAD-D15** · persistencia — `etl_processor.py` › `_persistir_curva_abc` › linhas 1158-1159, 1173
+  - A inserção em lote que já existe, insert(Modelo) com lista (executemany), serve para cerca de 12 mil linhas por lead dentro de begin_nested().
+  - Testes: tests/postgresql_etl_resource_security.py · Origem: 0ac01c8
+- **LEAD-D16** · limite — `etl_uploads.py + etl_runtime.py` › `ler_upload_validado / run_validation` › linhas etl_uploads.py 61-113; etl_runtime.py 106-114
+  - Se os arquivos de um lead fossem gravados, cada um precisaria do triar completo da Baia, num job por arquivo de até 120 s. Seriam até 36 jobs em sequência ocupando a vaga única; a triagem com cópia de um XLSX de 450 mil células já leva cerca de 63 s (medição anterior). O Raio-X evita isso porque não grava arquivo.
+  - Testes: tests/test_security_gatekeeper.py BaiaNoPortalTests (672-751) · Origem: 91e5fb0
+
+## A.5 Volume e desempenho
+
+Medições com dados sintéticos de 3 anos, limites do SEC-005 e gargalos.
+
+### Componentes (A.5)
+
+- **VOL-C01** · limites/configuração — `etl_limits.py` › `ETLLimits` › linhas 9-41
+  - Política finita do ETL (dataclass congelada). Padrões: max_file_bytes 20 MiB, max_sheets 16, max_zip_entries 256, max_uncompressed_bytes 32 MiB, max_zip_ratio 200, max_rows 100.000, max_columns 128, max_cells_per_sheet 500.000, max_cells_per_file 1.000.000, max_field_chars 16.384, max_record_chars 131.072, timeout_seconds 60, memory_mb 384, max_output_bytes 4 MiB (o comentário da linha 24 estima ≈170 bytes por produto da Curva ABC; medido: 174,9). _\_post_init__ recusa valor não inteiro, menor que 1 ou acima do teto, e memory_mb < 128.
+  - Testes: tests/test_etl_runtime_limits.py:24-57 · Origem: 2da719b (2026-10-24, SEC-005); max_output_bytes 2→4 MiB em 0ac01c8 (2026-11-02)
+- **VOL-C02** · limites/configuração — `etl_limits.py` › `_HARD_CAPS` › linhas 44-52
+  - Tetos absolutos que nenhuma variável ETL_\* ultrapassa: 20 MiB de arquivo, 64 abas, 1024 entradas ZIP, 64 MiB expandidos, razão 1000, 200 mil linhas, 256 colunas, 1 milhão de células por aba, 2 milhões por arquivo, 120 s, 512 MB e 4 MiB de saída. O teto de saída é igual ao padrão: não há folga configurável para um resultado maior; só mudando código.
+  - Testes: tests/test_etl_runtime_limits.py:38-44; tests/test_etl_resource_limits.py:385-390 · Origem: 2da719b; 0ac01c8 (saída 4 MiB)
+- **VOL-C03** · limites/configuração — `etl_limits.py` › `limits_from_environment / get_limits / using_limits` › linhas 55-93
+  - limits_from_environment lê ETL_&lt;CAMPO> só com dígitos ASCII (sem ecoar o valor); get_limits usa primeiro o ContextVar (\_ACTIVE_LIMITS, que o worker define), depois app.config['ETL_LIMITS'] (config.py:280) e por fim o ambiente; using_limits fixa a política no processo isolado, que a recebe explícita no JSON do pedido.
+  - Testes: tests/test_etl_runtime_limits.py:59-84 · Origem: 2da719b
+- **VOL-C04** · isolamento/execução — `etl_runtime.py` › `_run_job` › linhas 44-103
+  - Um processo Python novo por job (subprocess.Popen com -I -B, stdin/stdout/stderr nulos, start_new_session no POSIX), num diretório temporário próprio; pedido JSON limitado a 16 KiB (59-60); espera com Popen.wait(timeout=policy.timeout_seconds) e SIGKILL do grupo ao estourar (67-71); lê no máximo max_output_bytes+1 do result.json (72-77) e só aceita envelope válido com returncode 0 (78-93). Não há pool nem reaproveitamento: cada job paga o import a frio de pandas/openpyxl/sqlalchemy (2,18–2,27 s medidos neste PC).
+  - Testes: tests/test_etl_runtime_limits.py:128-187, 263-285 · Origem: 2da719b
+- **VOL-C05** · concorrência/prazo — `etl_runtime.py` › `_ADMISSION / run_validation / run_raio_x / run_calculation` › linhas 17; 106-146
+  - \_ADMISSION = threading.BoundedSemaphore(1) (linha 17): um segundo job no mesmo processo recebe ETLInputError('busy') sem esperar (49-50). run_validation e run_raio_x usam o prazo dobrado limitado a 120 s (replace(policy, timeout_seconds=min(120, 2×prazo)), linhas 113 e 124); run_calculation fica nos 60 s padrão.
+  - Testes: tests/test_etl_runtime_limits.py:218-227 · Origem: 2da719b; prazo dobrado do raio_x em ec4ba95 e do validate em 91e5fb0
+- **VOL-C06** · isolamento/execução — `etl_runtime.py` › `_worker_environment` › linhas 20-29
+  - Ambiente do filho filtrado (sem segredos, só PATH/TEMP/LANG/proxy/CA) e OPENBLAS_NUM_THREADS, OMP_NUM_THREADS, MKL_NUM_THREADS e NUMEXPR_NUM_THREADS = 1: o worker é monothread por construção.
+  - Testes: tests/test_etl_runtime_limits.py:189-216 · Origem: 2da719b
+- **VOL-C07** · isolamento/execução — `etl_worker.py` › `main` › linhas 8-100
+  - Entrypoint do processo isolado. Antes de importar pandas aplica RLIMIT_AS = memory_mb (384 MiB), RLIMIT_CPU = timeout_seconds (60 ou 120 s de CPU, contando também o import), RLIMIT_FSIZE = max_output_bytes (4 MiB) ou max(4 MiB, 20 MiB) na operação validate, RLIMIT_CORE = 0 (20-33); audit hook recusa rede e criação de processos (38-47). Despacha validate→security_gatekeeper.triar, calculate→etl_processor.\_calcular_kpis_local, raio_x→validate_input de cada arquivo + raio_x.diagnosticar, com no máximo MAX_ARQUIVOS (50-71). MemoryError vira code 'memory' (73-75); serializa com ensure_ascii=True e allow_nan=False e troca resultado acima de max_output_bytes por {'ok':false,'code':'output'} (88-97). Sem o módulo resource (Windows) responde code 'platform' e não processa (30-33).
+  - Testes: tests/test_etl_runtime_limits.py:229-285; tests/test_planos_raio_x.py:256-260; tests/test_security_gatekeeper.py:768-775 · Origem: 2da719b; eventos recusados em bd8cace; FSIZE do validate em 91e5fb0; operação raio_x em ec4ba95
+- **VOL-C08** · concorrência/admissão — `etl_uploads.py` › `_UPLOAD_ADMISSION / _limitar_entrada / vaga_de_entrada / limitar_upload / limitar_processamento` › linhas 19-58
+  - Segunda vaga única por processo (\_UPLOAD_ADMISSION = BoundedSemaphore(1), linha 19), adquirida sem bloqueio em todo POST de upload (cliente e consultor), no processamento (limitar_processamento) e no Raio-X (vaga_de_entrada). Ocupada: flash + redirect ou 503 em JSON, sem fila nem nova tentativa automática. Cobre a leitura dos bytes, a materialização, a espera por lock e o commit.
+  - Testes: tests/test_etl_upload_security.py:231-270; tests/test_planos_raio_x.py:671-679 · Origem: 2da719b; vaga_de_entrada em ec4ba95
+- **VOL-C09** · entrada/upload — `etl_uploads.py` › `ler_upload_validado` › linhas 61-113
+  - Lê o upload em blocos de 64 KiB (\_CHUNK_SIZE, linha 18) até teto+1 (teto_bytes = min(max_file_bytes, 50 MiB)), grava num diretório temporário e acumula tudo num bytearray (79, 93); devolve bytes(content), outra cópia (113). Aceita só csv/xlsx (75-76); chama inspecionar_arquivo, run_validation (worker, até 120 s) e ler_liberado (98-101).
+  - Testes: tests/test_security_gatekeeper.py:618-650; tests/test_etl_upload_security.py:225-244 · Origem: 2da719b; Baia em 91e5fb0
+- **VOL-C10** · armazenamento — `storage.py` › `salvar / materializar_para_etl` › linhas 77-89; 145-220
+  - Os relatórios ficam inteiros como BYTEA em arquivo_armazenado (uma linha por arquivo, conteúdo deferred; models.py:716-735). Para processar, materializar_para_etl consulta length() no banco (168-174), carrega o BYTEA inteiro na memória do processo web (175-177), grava uma cópia temporária .csv/.xlsx (193-212) e solta o payload antes de chamar o worker (214). Só .csv e .xlsx (158-160).
+  - Testes: tests/test_etl_upload_security.py; tests/postgresql_etl_resource_security.py · Origem: 2da719b (materialização limitada)
+- **VOL-C11** · prazo cooperativo — `etl_inputs.py` › `_Budget / _run` › linhas 46-57; 601-622
+  - \_Budget é criado a cada \_run (linha 602) com deadline = agora + timeout_seconds; check() roda por linha de CSV (\_CSVLines, 92), por linha de aba (562), por bloco do ZIP/XML (384, 454, 464) e antes/depois do pandas (538, 590, 594). Não acumula entre arquivos: no Raio-X cada leitura tem o próprio prazo e quem limita o total é o Popen.wait e o RLIMIT_CPU.
+  - Testes: tests/test_etl_resource_limits.py:380-383 · Origem: 2da719b
+- **VOL-C12** · leitura CSV — `etl_inputs.py` › `_CSVLines / _csv_pass / _csv_input` › linhas 81-187
+  - Para cada encoding (utf-8-sig, cp1252, utf-8, latin1) tenta os 4 separadores (; , TAB |), cada um uma passagem completa com csv.reader (151-170), e fica com o de mais colunas; depois uma passagem com validação de linhas/colunas/células/campos que, se materialize, guarda todas as linhas numa lista (129), completa com None numa segunda lista (183) e cria DataFrame dtype=object (184); \_trim faz dropna/reset_index (74-78). As sondas (validate_fields=False) não aplicam limite de linha/célula, só tamanho de registro e prazo.
+  - Testes: tests/test_etl_resource_limits.py:98-182 · Origem: 2da719b
+- **VOL-C13** · leitura XLSX — `etl_inputs.py` › `_xlsx_input / _zip_preflight / _stream_member / _XMLCheck / _disambiguate_numbers` › linhas 293-392; 434-476; 479-517; 530-598
+  - (1) \_zip_preflight confere o diretório central e infla cada parte em blocos de 64 KiB passando o XML pelo expat (\_XMLCheck) com contagem de linhas, células reais, nós e profundidade, em memória constante; (2) openpyxl read_only percorre TODAS as abas e células para escolher a de mais células preenchidas (550-578); (3) pd.read_excel(dtype=str) materializa só a vencedora (591); (4) se algum texto casa com -?[0-9]{1,3}\.[0-9]{3}, \_disambiguate_numbers relê a aba inteira com dtype=object (530-545).
+  - Testes: tests/test_etl_resource_limits.py:184-301 · Origem: 2da719b; \_disambiguate_numbers em 0ac01c8
+- **VOL-C14** · leitura — `etl_inputs.py` › `read_raw / validate_input` › linhas 625-638
+  - read_raw = \_run(materialize=True) + security_gatekeeper.neutralizar_matriz; validate_input = \_run(materialize=False), sem DataFrame (só metadados: linhas, colunas, células, encoding, separador, aba escolhida).
+  - Testes: tests/test_etl_resource_limits.py:173-176, 204-207; tests/test_security_gatekeeper.py:605-616 · Origem: 2da719b; neutralização em toda leitura em 91e5fb0
+- **VOL-C15** · higiene por célula — `security_gatekeeper.py` › `neutralizar_matriz` › linhas 359-379
+  - Percorre a matriz coluna a coluna com .tolist() e testa cada célula em Python (\_talvez_ativa, 354-356); só recria a coluna alterada (isetitem, 376). Medido: 1.261.260 chamadas de \_talvez_ativa em 36 arquivos × 5.007 linhas × 7 colunas; 1,16 s dos 34,10 s do Raio-X CSV 36×5.000.
+  - Testes: tests/test_security_gatekeeper.py:337-360, 605-616 · Origem: 91e5fb0
+- **VOL-C16** · triagem do upload — `security_gatekeeper.py` › `triar / _liberar_copia / _mesma_matriz / _linhas / inventariar_xlsx` › linhas 480-510; 540-556; 690-758
+  - No worker (operação validate): read_raw completo, exigir_estrutura_minima, inventariar_xlsx (relê com expat toda parte passiva) e, se algo foi neutralizado, grava a cópia e a relê com read_raw comparando célula a célula via itertuples (\_mesma_matriz 545-556, \_linhas 540-542). No CSV são até 16 tentativas (2 codificações × 4 separadores × com/sem aspas, linha 704), cada uma com gravação + read_raw completo.
+  - Testes: tests/test_security_gatekeeper.py:362-604 · Origem: 91e5fb0
+- **VOL-C17** · cálculo — `etl_processor.py` › `_calcular_kpis_local / calcular_kpis_em_memoria / _detectar_periodo_arquivo` › linhas 773-778; 887-893; 896-1058
+  - Operação calculate: carregar_vendas e carregar_compras (cada um um read_raw) e, para o período, \_detectar_periodo_arquivo(caminho_vendas) — um terceiro read_raw do mesmo arquivo de vendas (linha 941; função 773-778) — e um quarto, das compras, se vendas não tiver período. Agrega por produto com groupby (903-909) e devolve a Curva ABC de todos os produtos (938).
+  - Testes: tests/test_etl_financial_equivalence.py; tests/etl_equivalence_support.py; tests/test_etl_regras_financeiras.py · Origem: releitura do período desde fc63708 (2026-10-19)
+- **VOL-C18** · higiene por célula — `etl_processor.py` › `_strip_acentos / _norm_chave / _normalizar_produto / _parse_valor / _converter_serie / _converter_serie_monetaria` › linhas 95-125; 156-322
+  - \_strip_acentos (genexpr por caractere com unicodedata), \_norm_chave, \_normalizar_produto, \_parse_valor (via \_converter_serie, 205-206) e \_limpar_monetario/\_separar_sinal/\_normalizar_separadores/\_interpretar_monetario (via \_converter_serie_monetaria, 308-322): tudo em Python puro, uma chamada por célula; nada é vetorizado em pandas/numpy.
+  - Testes: tests/test_etl_regras_financeiras.py · Origem: 0ac01c8 (conversor monetário atual)
+- **VOL-C19** · persistência — `etl_processor.py` › `_persistir_curva_abc / _persistir_indicadores / processar_arquivos_analise` › linhas 1108-1187
+  - Em SAVEPOINT (1173): DELETE da curva anterior (1143) e um único execute(insert(ProdutoCurvaABC), linhas) com a lista de dicts (1159). Com psycopg2, o SQLAlchemy 2.x agrupa em INSERT ... VALUES de até 1000 linhas (insertmanyvalues_page_size=1000 em sqlalchemy/engine/default.py:395; executemany_mode='values_only' em dialects/postgresql/psycopg2.py:640, venv com SQLAlchemy 2.1.6): não é uma linha por comando.
+  - Testes: tests/test_etl_regras_financeiras.py:343 (GravacaoDaCurvaTests); tests/postgresql_etl_resource_security.py:240 · Origem: 0ac01c8 (antes gravava só o TOP_N)
+- **VOL-C20** · Raio-X — `raio_x.py` › `diagnosticar / _ler_arquivo` › linhas 154-271; 397-506
+  - Lê os arquivos em sequência, um por vez (o bruto e o df de cada mês saem de escopo ao fim de \_ler_arquivo), guarda em 'partes' o agregado por produto de cada arquivo (≈21 colunas, 236-244), concatena tudo (409), ordena com cópia (411) e agrupa por produto (413-421). A lista 'partes' continua viva até o return: no pico coexistem partes, por_arquivo e a cópia do sort_values.
+  - Testes: tests/test_planos_raio_x.py:58-246; tests/raio_x_support.py:39-49 · Origem: ec4ba95 (2026-11-08)
+- **VOL-C21** · Raio-X — `raio_x.py` › `_precificacao` › linhas 338-372
+  - Precificação desatualizada: para cada produto com custo em pelo menos 2 meses compara o primeiro e o último mês num laço iterrows (352), em Python por produto.
+  - Testes: tests/test_planos_raio_x.py:58-87 · Origem: ec4ba95
+- **VOL-C22** · Raio-X/serviço — `raio_x_servico.py` › `processar_envio / _gravar_limitado / salvar` › linhas 47-135
+  - Recebe até 36 arquivos (74-76), copia cada um com teto (\_gravar_limitado, 47-66) num único diretório temporário, confere assinatura (97) e duplicidade por SHA-256 (102-104) e chama run_raio_x com todos de uma vez (107). Grava só o resultado: JSON TEXT numa linha por empresa, que substitui a anterior (116-135).
+  - Testes: tests/test_planos_raio_x.py:578-720 · Origem: ec4ba95; assinatura da Baia em 91e5fb0
+- **VOL-C23** · Raio-X/rota — `blueprints/onboarding.py` › `limite_raio_x / _executar_raio_x / diagnostico_enviar / api_diagnostico_enviar` › linhas 39; 114-162; 212-229
+  - O Raio-X roda dentro da requisição HTTP (thread do gunicorn), sob a vaga única (147, 217) e com limite de 10 envios por hora por usuário, somando página e API (limite_raio_x, linha 39).
+  - Testes: tests/test_planos_raio_x.py:620-690 · Origem: ec4ba95
+- **VOL-C24** · processamento/rota — `blueprints/admin.py` › `processar_analise` › linhas 1389-1478
+  - Processamento pelo consultor: trava a análise com SELECT ... FOR UPDATE (1395) e mantém a transação e a conexão abertas durante a materialização dos dois arquivos (1420-1426), todo o worker (até 60 s), a persistência e a conferência do PDV, até o commit (1452).
+  - Testes: tests/test_etl_upload_security.py:253-270; tests/postgresql_etl_resource_security.py:281-347 · Origem: 2da719b (lock até o fim)
+- **VOL-C25** · upload/rota — `blueprints/cliente.py` › `upload` › linhas 609-717
+  - Upload do cliente: 30 POST por hora por usuário (612), vaga única (613), triagem no worker (668) depois de a sessão já ter consultado o banco (620-624), o que deixa a transação aberta durante a triagem (até 120 s). Uma análise tem um upload de VENDAS e um de COMPRAS (models.py:391): 36 meses = 72 uploads.
+  - Testes: tests/test_etl_upload_security.py · Origem: limite de 30/h em bd8cace (2026-10-29)
+- **VOL-C26** · limites HTTP — `config.py` › `Config.MAX_CONTENT_LENGTH` › linhas 227-229
+  - MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH_MB (padrão 20) × 1 MiB para a requisição inteira. No Raio-X todos os meses vão numa só requisição: os 36 arquivos somados ficam em 20 MiB. Acima disso, 413 com 'envie menos meses por vez' (app.py:470-481).
+  - Testes: tests/test_planos_raio_x.py:653-669; tests/test_dependency_security_compat.py:235-270 · Origem: fc63708
+- **VOL-C27** · infraestrutura — `render.yaml` › `startCommand` › linhas 11; 19-21
+  - gunicorn -w 1 --threads 50 --timeout 180, plano free (linha 11; comentário da linha 20: 'o ETL e o PDF rodam na requisição e o free tem só 0,1 CPU'). Um processo só, então as duas vagas únicas valem para o serviço inteiro (wsgi.py:6-12 explica o -w 1 pelo Socket.IO). No worker gthread do gunicorn 23.0.0 o laço principal chama notify() a cada volta (venv/Lib/site-packages/gunicorn/workers/gthread.py:203-205): o --timeout não corta uma requisição longa; o limite efetivo do ETL é o Popen.wait.
+  - Testes: tests/test_etl_runtime_limits.py:288-367 (gunicorn 1×50, só POSIX) · Origem: fc63708
+- **VOL-C28** · leitura do resultado — `models.py` › `Analise.curva_abc / ProdutoCurvaABC` › linhas 335-340; 540-577
+  - Analise.curva_abc é relationship sem limite (lazy padrão): a tela carrega todas as linhas da curva como objetos ORM para mostrar 10 (cliente.\_abc_chart, cliente.py:126-128); gerar_semaforos (insights.py:100-104) e o PDF (cliente.py:580-583) percorrem todas.
+  - Testes: nenhum de volume · Origem: 0ac01c8 (curva com todos os produtos)
+- **VOL-C29** · leads — `models.py` › `LeadAvaliacao / BrainstormingDadosPdv` › linhas 1306-1402
+  - brainstorming_dados_pdv: uma linha por produto e ano por lead (3 anos × 5.000 produtos = 15.000 linhas por lead), PK UUID gerada pela aplicação ou por gen_random_uuid, índices só em lead_id e criado_em (migration 198-200). lead_avaliacao guarda o resumo. Nenhum código grava nessas tabelas hoje.
+  - Testes: tests/test_leads_avaliacao.py; tests/test_leads_postgresql.py · Origem: 91e5fb0 (migration f4c2a8e1d9b6)
+- **VOL-C30** · leads/retenção — `leads_avaliacao.py` › `expurgar_dados_pdv / _expurgar_em_sqlalchemy / _LOTE` › linhas 28; 37-79
+  - Expurgo dos dados de PDV dos leads: no SQLAlchemy em lotes de 500 leads (\_LOTE, linha 28; laço 66-78); no PostgreSQL pela função expurgar_brainstorming_pdv (migration f4c2a8e1d9b6:81-134), que trava os leads com FOR UPDATE e apaga num DELETE só.
+  - Testes: tests/test_leads_avaliacao.py; tests/test_leads_postgresql.py:418 · Origem: 91e5fb0
+- **VOL-C31** · ferramenta de medição — `tools/measure_etl_resources.py` › `main / _probe / _fixtures` › linhas 1-181
+  - Medição SEC-005 reproduzível, mas só em Linux (import resource, linha 15), só das operações read/calculate (não cobre validate nem raio_x) e com amostras de até 20.000 linhas em CSV e 5.000 por aba em XLSX (138-139).
+  - Testes: nenhum · Origem: 2da719b
+
+### Regras (A.5)
+
+- **VOL-R01** · limite de tamanho — `etl_inputs.py; security_gatekeeper.py` › `_file_size; teto_bytes / TETO_ABSOLUTO_BYTES` › linhas etl_inputs.py:60-71; security_gatekeeper.py:61, 104-106
+  - Arquivo até 20 MiB: conferido por os.stat antes do parser e na cópia do upload (teto_bytes = min(max_file_bytes, 50 MiB)). Arquivo vazio ou não regular é recusado.
+  - Testes: tests/test_etl_resource_limits.py:77-84; tests/test_security_gatekeeper.py:618-650 · Origem: 2da719b; 91e5fb0
+- **VOL-R02** · limite de células CSV — `etl_inputs.py` › `_csv_pass` › linhas 117-123
+  - No CSV o orçamento é min(max_cells_per_file, max_cells_per_sheet) = 500.000 células do retângulo linhas × maior número de colunas, além de 100.000 linhas e 128 colunas. Ex.: com 7 colunas cabem 71.428 linhas; com 8, 62.500.
+  - Testes: tests/test_etl_resource_limits.py:98-116, 337-338 · Origem: 2da719b
+- **VOL-R03** · limite de linhas — `etl_inputs.py` › `_csv_pass` › linhas 110-123
+  - A contagem é de registros físicos do CSV: título, linhas em branco, cabeçalho e rodapé 'Total Geral' entram nos limites de linhas e de células, antes de qualquer filtro de lixo.
+  - Testes: tests/test_etl_resource_limits.py:98-116 · Origem: 2da719b
+- **VOL-R04** · limite de campo — `etl_inputs.py` › `_CSVLines.__next__ / _csv_pass` › linhas 91-101; 126-127
+  - Registro (inclusive multilinha com aspas) até 131.072 caracteres e campo até 16.384; NUL é removido de cada linha.
+  - Testes: tests/test_etl_resource_limits.py:117-146 · Origem: 2da719b
+- **VOL-R05** · limites XLSX — `etl_inputs.py` › `_end_directory / _XMLCheck / _stream_member / _zip_preflight / _xlsx_input` › linhas 190-225; 317-370; 434-517; 548-578
+  - XLSX: até 16 abas, 256 entradas ZIP, 32 MiB expandidos, razão de compressão 200, profundidade XML 64, nós ≤ 12 × max_cells_per_file + 16.384, células reais e retângulo por aba ≤ 500.000 e acumulado ≤ 1.000.000; só STORED/DEFLATE, sem criptografia.
+  - Testes: tests/test_etl_resource_limits.py:184-301, 340-373 · Origem: 2da719b
+- **VOL-R06** · seleção de aba — `etl_inputs.py` › `_xlsx_input` › linhas 551-591
+  - Só uma aba é materializada: a de mais células preenchidas (no empate, a primeira). As outras abas são lidas pelo openpyxl para a contagem e descartadas sem aviso ao processador.
+  - Testes: tests/test_etl_resource_limits.py:192-207 · Origem: 2da719b
+- **VOL-R07** · releitura XLSX — `etl_inputs.py` › `_disambiguate_numbers / _LOOKS_LIKE_THOUSANDS` › linhas 30; 530-545
+  - Se qualquer texto da aba casa com -?[0-9]{1,3}\.[0-9]{3} (ex.: quantidade 12.345 kg gravada como número), a aba inteira é relida com pd.read_excel(dtype=object) para acrescentar '0' aos números. Nos sintéticos com granel de 3 casas isso aconteceu em todos os 36 arquivos.
+  - Testes: tests/test_etl_regras_financeiras.py · Origem: 0ac01c8
+- **VOL-R08** · prazo — `etl_runtime.py; etl_worker.py; etl_inputs.py` › `run_validation / run_raio_x; main; _Budget` › linhas etl_runtime.py:106-128; etl_worker.py:27; etl_inputs.py:46-57, 602
+  - Prazo padrão 60 s; validate e raio_x 2× até 120 s; teto 120 s; RLIMIT_CPU igual ao prazo (CPU, incluindo imports); prazo cooperativo por leitura (\_Budget), não cumulativo.
+  - Testes: tests/test_etl_runtime_limits.py:128-134, 263-285; tests/test_etl_resource_limits.py:380-383 · Origem: 2da719b; ec4ba95; 91e5fb0
+- **VOL-R09** · memória — `etl_worker.py` › `main` › linhas 23-26; 73-75
+  - RLIMIT_AS = 384 MiB (teto 512) aplicado antes dos imports; MemoryError vira 'Arquivo excede o orçamento de memória. Reduza ou divida o relatório.' O SEC-005 registra ≈176 MiB de espaço virtual só nos imports (Docs/RELATORIO_NEXO_SEC005_ETL_SEGURO.md:88).
+  - Testes: tests/test_etl_runtime_limits.py:236-245 (só POSIX) · Origem: 2da719b
+- **VOL-R10** · saída — `etl_worker.py; etl_runtime.py` › `main; _run_job` › linhas etl_worker.py:94-97; etl_runtime.py:72-77
+  - Resultado JSON até 4 MiB: o filho troca o payload maior por {'ok':false,'code':'output'} e o pai recusa arquivo maior que max_output_bytes antes de ler.
+  - Testes: tests/test_etl_runtime_limits.py:171-174; tests/test_etl_regras_financeiras.py:323-335 · Origem: 2da719b; 0ac01c8
+- **VOL-R11** · gravação no worker — `etl_worker.py` › `main (escrita)` › linhas 17-22; 28
+  - RLIMIT_FSIZE: 4 MiB (max_output_bytes) em calculate e raio_x; max(4 MiB, 20 MiB) só em validate, que grava a cópia neutralizada. Qualquer arquivo maior que o worker tente gravar é cortado pelo kernel.
+  - Testes: tests/test_security_gatekeeper.py:768-775 · Origem: 2da719b; 91e5fb0
+- **VOL-R12** · Raio-X — `raio_x.py; raio_x_servico.py; etl_worker.py` › `MAX_ARQUIVOS; processar_envio; main` › linhas raio_x.py:63, 399-400; raio_x_servico.py:74-76, 88-90, 102-104; etl_worker.py:65-66
+  - De 1 a 36 relatórios por envio (conferido no serviço, no worker e em diagnosticar); arquivo idêntico a outro (SHA-256) é recusado; só csv/xlsx.
+  - Testes: tests/test_planos_raio_x.py:243-246, 636-651 · Origem: ec4ba95
+- **VOL-R13** · Raio-X/saída — `raio_x.py` › `LIMITE_ITENS_LISTA / diagnosticar / _precificacao` › linhas 64; 372; 474-491
+  - As listas do resultado (scanner, abaixo do custo, margem por item, precificação) param em 50 itens (LIMITE_ITENS_LISTA): a saída não cresce com o número de produtos (56,7–69,1 KB medidos para 2.000 ou 5.000 produtos).
+  - Testes: tests/test_planos_raio_x.py:88-96 · Origem: ec4ba95
+- **VOL-R14** · cálculo/saída — `etl_processor.py` › `_classificar_curva_abc / _persistir_curva_abc` › linhas 784-845; 1134-1159
+  - A Curva ABC volta inteira (todos os produtos) no resultado do calculate e é gravada inteira em produto_curva_abc.
+  - Testes: tests/test_etl_regras_financeiras.py:318-335 · Origem: 0ac01c8
+- **VOL-R15** · taxa — `blueprints/cliente.py; blueprints/onboarding.py` › `upload; limite_raio_x` › linhas cliente.py:612; onboarding.py:39
+  - Upload do cliente: 30 POST por hora por usuário. Raio-X: 10 envios por hora por usuário, página e API somadas. O upload do consultor não tem limitador.
+  - Testes: tests/test_planos_raio_x.py (envio) · Origem: bd8cace; ec4ba95
+- **VOL-R16** · concorrência — `etl_uploads.py; etl_runtime.py` › `_limitar_entrada; _run_job` › linhas etl_uploads.py:28-32; etl_runtime.py:49-50
+  - Uma entrada de upload/processamento e um job isolado por processo, com acquire não bloqueante: não há fila, a segunda requisição é recusada na hora.
+  - Testes: tests/test_etl_upload_security.py:231-270; tests/test_etl_runtime_limits.py:218-227 · Origem: 2da719b
+- **VOL-R17** · tamanho de linha — `etl_processor.py` › `LIMITE_NOME_PRODUTO / _nome_exibivel` › linhas 130-139
+  - Nome exibível do produto cortado em 200 caracteres e sem NUL: limita o tamanho de cada item da curva no JSON e no banco.
+  - Testes: tests/test_complementary_hardening_security.py · Origem: bd8cace
+- **VOL-R18** · varredura limitada — `etl_processor.py` › `_detectar_cabecalho / _extrair_periodo_base` › linhas 437-486; 751-770
+  - O cabeçalho é procurado nas primeiras 100 linhas e o período nas primeiras 30: custo fixo, que não cresce com o arquivo (0,52 s em 36 arquivos).
+  - Testes: tests/test_etl_financial_equivalence.py · Origem: fc63708
+- **VOL-R19** · protocolo — `etl_runtime.py; etl_worker.py` › `_run_job; main` › linhas etl_runtime.py:59-60; etl_worker.py:10-11
+  - O pedido ao worker é um JSON de até 16 KiB (conferido no pai e no filho); com 36 caminhos temporários cabe com folga.
+  - Testes: tests/test_etl_runtime_limits.py · Origem: 2da719b
+- **VOL-R20** · retenção — `leads_avaliacao.py` › `RETENCAO_DIAS / _LOTE / _expurgar_em_sqlalchemy` › linhas 27-28; 54-79
+  - Expurgo dos dados de PDV de leads não convertidos após 30 dias (RETENCAO_DIAS), em lotes de 500 leads no SQLAlchemy.
+  - Testes: tests/test_leads_avaliacao.py · Origem: 91e5fb0
+
+### Formatos e variações (A.5)
+
+- **VOL-F01** · encoding × separador — `etl_inputs.py` › `ENCODINGS / SEPARATORS / _csv_input` › linhas 26-27; 148-177
+  - 4 encodings × 4 separadores, cada candidato uma passagem completa. Num CSV cp1252 com acento no título, o utf-8-sig falha logo e vêm 4 sondas cp1252 + 1 passagem validada por leitura. No Raio-X cada arquivo é lido 2 vezes (validate_input + read_raw): 12 passagens de csv.reader por arquivo (medido: 360 sondas, 36 validações e 36 materializações em 36 arquivos; 7,21 s de 34,10 s).
+  - Testes: tests/test_etl_resource_limits.py:147-163 · Origem: 2da719b
+- **VOL-F02** · dtype CSV — `etl_inputs.py` › `_csv_input` › linhas 183-184
+  - CSV vira DataFrame dtype=object: 59,7 bytes por célula medidos. Arquivo de 4,35 MB (60.005 × 7) → matriz de 23,9 MiB (5,5× o arquivo).
+  - Testes: nenhum de memória · Origem: 2da719b
+- **VOL-F03** · dtype XLSX — `etl_inputs.py` › `_xlsx_input` › linhas 591
+  - XLSX lido com pd.read_excel(dtype=str): no pandas 3.0.3 (future.infer_string=True) sem pyarrow, vira o dtype 'str' em armazenamento Python, com 59,4 bytes por célula medidos, praticamente o mesmo custo do object.
+  - Testes: tests/test_etl_resource_limits.py:196-202 · Origem: 2da719b
+- **VOL-F04** · CSV × XLSX — `etl_inputs.py` › `_xlsx_input / _zip_preflight / _disambiguate_numbers` › linhas 479-598
+  - Para os mesmos dados, XLSX é ≈5× mais lento: Raio-X 36×5.000 = 173,26 s em XLSX contra 34,10–36,57 s em CSV. Cada XLSX é analisado 6 vezes no Raio-X: 2 preflights do ZIP, 2 varreduras openpyxl e 2 pd.read_excel.
+  - Testes: nenhum de desempenho · Origem: medição deste diagnóstico
+- **VOL-F05** · densidade — `config.py` › `Config.MAX_CONTENT_LENGTH` › linhas 227-229
+  - Bytes por linha nos sintéticos de 7 colunas: CSV 72,6 B/linha e XLSX 53,1 B/linha. Com 20 MiB por requisição divididos por 36 meses (≈568 KiB por arquivo), cabem ≈8.000 linhas/mês em CSV ou ≈11.000 em XLSX. Medido: 36×5.000 = 12,48 MiB em CSV e 9,12 MiB em XLSX.
+  - Testes: tests/test_planos_raio_x.py:653-669 · Origem: medição deste diagnóstico
+- **VOL-F06** · extensões — `etl_inputs.py; security_gatekeeper.py; config.py; raio_x_servico.py` › `_run; inspecionar_arquivo; ALLOWED_EXTENSIONS; processar_envio` › linhas etl_inputs.py:610-613; security_gatekeeper.py:62-64, 227-229; config.py:277; raio_x_servico.py:88-90
+  - .xls é reconhecido e recusado com orientação; .txt é lido como CSV pela Baia, mas o portal e o Raio-X aceitam só csv e xlsx.
+  - Testes: tests/test_etl_resource_limits.py:91-97; tests/test_security_gatekeeper.py · Origem: 2da719b; 91e5fb0
+- **VOL-F07** · serialização — `etl_worker.py` › `main` › linhas 94
+  - O JSON do worker usa ensure_ascii=True: cada letra acentuada vira \uXXXX (6 bytes). Medido: 174,9 bytes por produto na Curva ABC com nomes pt-BR.
+  - Testes: tests/test_etl_regras_financeiras.py:334-340 · Origem: 2da719b
+- **VOL-F08** · coluna de situação — `etl_processor.py` › `_situacao_das_linhas / _aplicar_situacao_das_vendas` › linhas 557-601
+  - Relatório com coluna de status/operação ativa \_situacao_das_linhas (itertuples por linha) e duas regex por linha em \_aplicar_situacao_das_vendas. Medido em 60.001 linhas: 4,755 s sem a coluna e 5,073 s com ela (+0,32 s, ≈7%).
+  - Testes: tests/test_etl_regras_financeiras.py · Origem: 0ac01c8
+- **VOL-F09** · armazenamento do resultado — `raio_x_servico.py` › `salvar` › linhas 133-134
+  - Resultado do Raio-X guardado como um JSON TEXT compacto (separators sem espaço, ensure_ascii=False) numa linha por empresa.
+  - Testes: tests/test_planos_raio_x.py:578-602, 699-704 · Origem: ec4ba95
+- **VOL-F10** · armazenamento do arquivo — `models.py; storage.py` › `ArquivoArmazenado; salvar` › linhas models.py:716-735; storage.py:77-89
+  - Os relatórios ficam no próprio PostgreSQL como BYTEA (disco efêmero do Render). 3 anos de análises mensais = 72 blobs por empresa (VENDAS e COMPRAS por mês), cada um até 20 MiB.
+  - Testes: tests/test_storage_deletion_security.py · Origem: b7c4e2a9f031 (migration de storage no banco)
+
+### Desempenho e limites (A.5)
+
+- **VOL-D01** · medição Raio-X CSV — `raio_x.py` › `diagnosticar` › linhas 397-506
+  - Raio-X com CSV mensais sintéticos, medido no próprio processo (validate_input de cada arquivo + diagnosticar, como o worker faz): 12×2.000 produtos = 5,73–5,75 s; 36×2.000 = 15,83–16,42 s; 12×5.000 = 13,01–13,07 s; 36×5.000 = 34,10–36,57 s. Some ≈2,2 s de import a frio por job. Saída de 56,7 a 69,1 KB.
+  - Testes: nenhum (medição deste diagnóstico)
+- **VOL-D02** · onde vai o tempo (CSV) — `raio_x.py; etl_processor.py` › `_ler_arquivo / _vendas_do_bruto` › linhas raio_x.py:154-271; etl_processor.py:629-681
+  - 36×5.000 CSV (34,10 s): validate_input 3,66 s (10,7%); read_raw 5,21 s (15,3%, dos quais neutralização 1,16 s); \_vendas_do_bruto 16,18 s (47,4%: \_converter_serie_monetaria 7,30 s em 72 chamadas, \_filtrar_linhas_validas 3,63 s, \_converter_serie 1,87 s, \_detectar_cabecalho 0,52 s); resto de \_ler_arquivo 7,23 s (21,2%: preço de tabela via \_converter_serie_monetaria 3,45 s, \_conflitos 0,76 s, \_codigos 0,28 s); combinação 1,83 s (5,4%, quase toda em \_precificacao, 1,58 s).
+  - Testes: nenhum
+- **VOL-D03** · medição Raio-X XLSX — `etl_inputs.py` › `_xlsx_input` › linhas 548-598
+  - Mesmos dados em XLSX (números como célula numérica, granel com 3 casas): 12×2.000 = 24,66 s; 36×2.000 = 75,58 s; 12×5.000 = 59,81 s; 36×5.000 = 173,26 s, acima dos 120 s do Raio-X neste PC. No 36×5.000: validate_input 43,85 s (25,3%) e read_raw 104,49 s (60,3%), sendo pd.read_excel 58,35 s em 72 chamadas (30,89 s dentro de \_disambiguate_numbers), \_zip_preflight 30,70 s em 72 chamadas e a varredura openpyxl ≈29 s por rodada. A regra de negócio (\_vendas_do_bruto + Raio-X) fica em ≈24,9 s (14%).
+  - Testes: nenhum
+- **VOL-D04** · perfil (cProfile) — `etl_processor.py` › `_strip_acentos / _limpar_monetario / _norm_chave` › linhas 95-125; 222-277
+  - cProfile do 36×5.000 CSV (o perfilador infla o total para 80,0 s): \_csv_pass 432 chamadas, 18,97 s acumulados; \_converter_serie_monetaria 30,78 s; \_limpar_monetario 1.080.000 chamadas (13,92 s); \_strip_acentos 385.200 chamadas (12,66 s; genexpr de 12,3 milhões de caracteres); \_norm_chave 205.740 (9,66 s); \_normalizar_produto 180.000 (8,23 s); \_parse_valor 360.000 (4,91 s); \_talvez_ativa 1.261.260 (2,17 s); Series.map com função Python 18,90 s acumulados. O tempo está em funções Python por célula, não em operações vetorizadas.
+  - Testes: nenhum
+- **VOL-D05** · trabalho duplicado — `etl_processor.py` › `_converter_serie_monetaria / _interpretar_monetario` › linhas 263-277; 308-322
+  - \_converter_serie_monetaria aplica \_separar_sinal(\_limpar_monetario(v)) a todos os valores (310) e \_interpretar_monetario repete a mesma limpeza (270): cada célula de dinheiro é limpa duas vezes (1.080.000 chamadas para 540.000 valores). É o maior custo isolado da regra de negócio (7,30 + 3,45 s no 36×5.000).
+  - Testes: tests/test_etl_regras_financeiras.py
+- **VOL-D06** · custo por linha — `etl_processor.py` › `_filtrar_linhas_validas` › linhas 524-535
+  - \_filtrar_linhas_validas faz 3 map com lambda/\_norm_chave e um str.contains com regex por linha só para tirar vazios, rodapés e cabeçalhos repetidos: 3,63 s em 180.000 linhas (≈20 µs por linha). O grosso é \_norm_chave (NFKD caractere a caractere) aplicado ao nome de cada linha (534).
+  - Testes: tests/test_etl_financial_equivalence.py
+- **VOL-D07** · custo por produto — `raio_x.py` › `_precificacao` › linhas 338-372
+  - \_precificacao em iterrows: 1,30–1,58 s com 5.000 produtos (≈0,3 ms por produto) e 0,52–0,69 s com 2.000.
+  - Testes: nenhum
+- **VOL-D08** · medição calculate — `etl_processor.py` › `_calcular_kpis_local` › linhas 896-1058
+  - \_calcular_kpis_local de 1 mês com 5.000 produtos (vendas + compras): 1,23–1,35 s. 36 cálculos mensais em sequência: 18,47 s com 2.000 produtos (mediana 0,52 s) e 42,35 s com 5.000 (mediana 1,20 s). No portal cada mês é um job isolado (+≈2,2 s de import) e cada arquivo passa antes por uma triagem própria: 72 uploads e 36 processamentos para 3 anos.
+  - Testes: nenhum
+- **VOL-D09** · releitura — `etl_processor.py` › `_calcular_kpis_local / _detectar_periodo_arquivo` › linhas 773-778; 941
+  - O calculate lê vendas duas vezes: carregar_vendas e \_detectar_periodo_arquivo(caminho_vendas) na linha 941, cada uma com read_raw completo (3 leituras medidas por cálculo). Consolidado CSV de 12 meses × 5.000 (60.000 linhas): 8,73–8,97 s, dos quais 1,70 s na releitura só para achar o período. O mesmo em XLSX: 73,51 s, acima dos 60 s do calculate (read_raw ×3 = 68,23 s; releitura do período 34,20 s; \_disambiguate_numbers 20,04 s).
+  - Testes: nenhum
+- **VOL-D10** · limite de consolidado — `etl_inputs.py` › `_csv_pass` › linhas 117-123
+  - Um arquivo único de 3 anos esbarra nas 500.000 células do CSV. Com 7 colunas cabem 71.428 linhas físicas: até 1.984 produtos por mês em 36 meses ou 5.952 em 12. Medido: 36 meses × 2.000 (72.006 linhas × 7 = 504.042 células) recusado com code 'cells' em 1,27 s, depois de 5 sondas completas; 12 × 5.000 (420.035 células) passa.
+  - Testes: tests/test_etl_resource_limits.py:110-116
+- **VOL-D11** · limite de saída — `etl_worker.py; etl_limits.py` › `main; ETLLimits.max_output_bytes / _HARD_CAPS` › linhas etl_worker.py:94-97; etl_limits.py:25, 51
+  - Curva ABC inteira no JSON: 174,9 bytes por produto. 20.000 produtos = 3.497.370 bytes (passa); 25.000 = 4.371.953 bytes (> 4.194.304): o worker devolve code 'output' e o processamento falha. O teto prático é ≈23.980 produtos distintos no período, menos com nomes longos ou acentuados. Como o padrão já é o teto rígido, não dá para subir por configuração.
+  - Testes: tests/test_etl_regras_financeiras.py:323-335 (só a curva, sem o envelope)
+- **VOL-D12** · memória por célula — `etl_inputs.py; etl_processor.py` › `_csv_input; _vendas_do_bruto` › linhas etl_inputs.py:128-187; etl_processor.py:629-681
+  - CSV de 420.035 células: matriz bruta de 23,9 MiB, pico de alocação na leitura de 41,4 MiB (lista de linhas + cópia retangular + DataFrame) e df canônico de 18,3 MiB (tracemalloc). Extrapolado às 500.000 células: ≈28 MiB de matriz e ≈49 MiB de pico, folga para um arquivo dentro dos 384 MiB.
+  - Testes: nenhum
+- **VOL-D13** · memória do Raio-X — `raio_x.py` › `diagnosticar` › linhas 401-421
+  - No Raio-X a memória cresce com meses × produtos: pico (tracemalloc) de 63,2 MiB em 12×5.000, 75,1 MiB em 36×2.000 e 183,9 MiB em 36×5.000 (≈1,05 KiB por produto-mês). Cada arquivo retém só ≈1,8 MiB (5.000 produtos); o pico vem do fim, quando coexistem 'partes' (64,8 MiB), o concat por_arquivo (180.000 × 21, 62,5 MiB) e a cópia do sort_values.
+  - Testes: nenhum
+- **VOL-D14** · risco de memória (estimativa) — `etl_worker.py` › `main` › linhas 23-26; 73-75
+  - Estimativa, não medida em Linux: ≈176 MiB de espaço virtual dos imports (SEC-005, linha 88) somados aos ≈184 MiB de heap Python do 36×5.000, sem contar fragmentação e temporários do numpy, ficam no limite ou acima dos 384 MiB de RLIMIT_AS. O Raio-X de 3 anos com 5.000 produtos/mês tende a terminar em MemoryError ('Arquivo excede o orçamento de memória').
+  - Testes: tests/test_etl_runtime_limits.py:236-245 (só confirma o fechamento com 128 MiB)
+- **VOL-D15** · triagem por arquivo — `security_gatekeeper.py` › `triar` › linhas 733-758
+  - security_gatekeeper.triar (sem cópia) por arquivo mensal: CSV de 2.000 linhas 0,09–0,13 s; CSV de 5.000 0,16–0,21 s; XLSX de 2.000 1,20–1,29 s; XLSX de 5.000 2,90–3,13 s (mais ≈2,2 s de import por job). Medição anterior do dono neste PC: XLSX de 450 mil células com fórmulas, triagem com cópia ≈63 s (Docs/BAIA_DE_SEGURANCA_E_LEADS.md:89).
+  - Testes: nenhum de desempenho
+- **VOL-D16** · import a frio — `etl_processor.py` › `imports do módulo` › linhas 42-59
+  - Import dos módulos do worker em processo novo: 2,18–2,27 s (pandas 0,91 s, com numpy 0,24 s; openpyxl 0,52 s; sqlalchemy 0,41 s; etl_processor total 2,17 s). O sqlalchemy só entra no worker porque etl_processor.py:56 importa delete/insert/select no topo, e eles só servem à persistência no processo pai. Esse tempo conta no RLIMIT_CPU e no prazo de cada job.
+  - Testes: tests/test_planos_raio_x.py:248-254 (verifica models, config e flask, não sqlalchemy)
+- **VOL-D17** · CPU do Render (estimativa) — `render.yaml` › `plan / comentário do startCommand` › linhas 11; 20
+  - render.yaml declara plano free e diz que ele 'tem só 0,1 CPU'. Se essa cota valer para o worker, o tempo de parede fica na ordem de 10× o medido aqui (estimativa): o Raio-X CSV 36×2.000 (≈18 s aqui, com import) passaria dos 120 s e o calculate mensal de 5.000 produtos (≈3,5 s) iria a ≈35 s. O próprio SEC-005 registra o risco (Docs/RELATORIO_NEXO_SEC005_ETL_SEGURO.md:373-375).
+  - Testes: nenhum
+- **VOL-D18** · vaga única — `etl_uploads.py; etl_runtime.py; render.yaml` › `_UPLOAD_ADMISSION; _ADMISSION; startCommand` › linhas etl_uploads.py:19; etl_runtime.py:17; render.yaml:21
+  - Um processo gunicorn com uma vaga de entrada e uma de job, sem fila: enquanto um Raio-X de até 120 s roda, todo upload, processamento e Raio-X de qualquer cliente recebe 'Há outro upload ou processamento em andamento'.
+  - Testes: tests/test_etl_upload_security.py:231-270
+- **VOL-D19** · conexão de banco — `blueprints/admin.py; blueprints/cliente.py; entitlements.py` › `processar_analise; upload; requer_funcionalidade` › linhas admin.py:1395-1452; cliente.py:620-668; entitlements.py:378-396
+  - O worker roda com a sessão do banco já aberta: processar_analise segura o FOR UPDATE (1395) até o commit (1452), e o upload do cliente e o Raio-X já consultaram o banco antes do worker (cliente.py:620-624; requer_funcionalidade → funcionalidades_da_empresa, entitlements.py:378-396). A conexão fica em transação por até 60–120 s. Pool PostgreSQL: 5 + 10 de overflow (config.py:214-218).
+  - Testes: tests/postgresql_etl_resource_security.py:281-347
+- **VOL-D20** · persistência em lote — `etl_processor.py` › `_persistir_curva_abc` › linhas 1134-1159
+  - A Curva ABC não é gravada linha a linha: 1 DELETE e 1 execute com a lista, que o SQLAlchemy/psycopg2 divide em INSERTs de até 1.000 linhas (5.000 produtos = 5 comandos). No pai, json.loads de 3,5 MB (20.000 produtos) leva 0,34 s e ocupa 9,3 MiB, e a lista do insert mais 5,4 MiB.
+  - Testes: tests/test_etl_regras_financeiras.py:343
+- **VOL-D21** · leitura da curva — `blueprints/cliente.py; models.py` › `_abc_chart; Analise.curva_abc` › linhas cliente.py:119-134; models.py:335-340
+  - O painel pega analise.curva_abc[:10], mas o relationship carrega todas as linhas como objetos ORM; com 20 mil produtos, cada abertura do painel, dos semáforos ou do PDF materializa 20 mil objetos.
+  - Testes: nenhum
+- **VOL-D22** · memória do processo web — `etl_uploads.py; storage.py` › `ler_upload_validado; materializar_para_etl` › linhas etl_uploads.py:79, 93, 113; storage.py:175-177, 214
+  - ler_upload_validado guarda o arquivo inteiro num bytearray e devolve bytes(content): até 2 cópias de 20 MiB no processo web, que também importa pandas/openpyxl (blueprints/admin.py:25 importa etl_processor). materializar_para_etl carrega o BYTEA inteiro antes de gravar a cópia temporária e o solta antes do worker.
+  - Testes: nenhum de memória
+- **VOL-D23** · prazo efetivo — `etl_runtime.py; render.yaml` › `_run_job; startCommand` › linhas etl_runtime.py:67-71; render.yaml:21; venv/Lib/site-packages/gunicorn/workers/gthread.py:203-205
+  - O --timeout 180 do gunicorn (gthread) não corta a requisição: o laço principal avisa o árbitro a cada volta. Quem limita o ETL é o Popen.wait (60/120 s) e o RLIMIT_CPU; o tempo do request inclui ainda a cópia dos arquivos, as consultas e o commit.
+  - Testes: tests/test_etl_runtime_limits.py:128-134
+- **VOL-D24** · pontos fortes — `etl_inputs.py; etl_worker.py; raio_x.py` › `_zip_preflight / _XMLCheck; main; diagnosticar` › linhas etl_inputs.py:293-517; etl_worker.py:8-100; raio_x.py:397-506
+  - Conferidos: ZIP/XML validados em fluxo com memória constante, recusando bomba de compressão, coordenada esparsa e entidade antes de alocar; validate_input não cria DataFrame; worker isolado, sem banco, com AS, CPU, FSIZE e saída limitados e falha fechada; Raio-X lê um arquivo por vez e devolve só agregados e listas de 50 (69 KB para 36×5.000); Curva ABC gravada em lote; resultados idênticos em CSV e XLSX nos experimentos (mesmo tamanho de JSON nos 4 cenários).
+  - Testes: tests/test_etl_resource_limits.py:173-176, 204-207, 232-301; tests/test_etl_runtime_limits.py
+- **VOL-D25** · limite da requisição — `config.py; blueprints/onboarding.py` › `Config.MAX_CONTENT_LENGTH; _executar_raio_x` › linhas config.py:227-229; onboarding.py:117
+  - No Raio-X os 36 meses dividem os 20 MiB de uma requisição (≈568 KiB por arquivo). Na prática isso limita o envio a ≈8.000 linhas/mês em CSV ou ≈11.000 em XLSX; nesse tamanho, um XLSX levaria ≈10 s por arquivo aqui, bem acima dos 120 s somados.
+  - Testes: tests/test_planos_raio_x.py:653-669

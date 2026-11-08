@@ -278,6 +278,9 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(contratos_bp)
     # Planos por nível e Raio-X de entrada (entitlements.py): rotas /onboarding/* e /api/onboarding/*.
     app.register_blueprint(onboarding_bp)
+    # Avaliação de Cenário dos leads, só para consultores: rotas /admin/leads/*.
+    from blueprints.leads import leads_bp
+    app.register_blueprint(leads_bp)
 
     # Gestão contratual: prazos exibidos no fuso da política (nunca no do
     # navegador) e comandos `flask contratos` / `flask planos` (simulação padrão).
@@ -470,11 +473,13 @@ def create_app(config_name: str = None) -> Flask:
     @app.errorhandler(413)
     def _grande_demais(e):
         # O corpo inteiro passou de MAX_CONTENT_LENGTH. Nada foi lido nem gravado; /api/ recebe
-        # JSON, as páginas a identidade do portal. O Raio-X manda vários meses por envio.
+        # JSON, as páginas a identidade do portal. O Raio-X e a Avaliação de Cenário mandam vários
+        # meses por envio.
         limite = app.config.get("MAX_CONTENT_LENGTH")
         teto = (f"{limite // 1048576} MB" if limite and limite >= 1048576
                 else f"{limite // 1024} KB" if limite else "o limite do servidor")
-        if request.endpoint in ("onboarding.diagnostico_enviar", "onboarding.api_diagnostico_enviar"):
+        if request.endpoint in ("onboarding.diagnostico_enviar", "onboarding.api_diagnostico_enviar",
+                                "leads.avaliar", "leads.reenviar"):
             mensagem = f"Os relatórios enviados passam de {teto} somados. Nada foi gravado: envie menos meses por vez."
         else:
             mensagem = f"O envio passa de {teto}. Nada foi gravado: envie um arquivo menor."

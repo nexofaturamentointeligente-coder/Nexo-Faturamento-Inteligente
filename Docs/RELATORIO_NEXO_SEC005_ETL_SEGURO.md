@@ -64,13 +64,13 @@ Política padrão e tetos absolutos (inteiros positivos; memória mínima 128 Mi
 | `max_zip_ratio` | 200 | 1,000 |
 | `max_rows` | 100,000 | 200,000 |
 | `max_columns` | 128 | 256 |
-| `max_cells_per_sheet` | 500,000 | 1,000,000 |
+| `max_cells_per_sheet` | 500,000 | 500,000 (trava rígida desde 11/2026) |
 | `max_cells_per_file` | 1,000,000 | 2,000,000 |
 | `max_field_chars` | 16,384 | 32,768 |
 | `max_record_chars` | 131,072 | 1,048,576 |
 | `timeout_seconds` | 60 | 120 |
 | `memory_mb` | 384 | 512 |
-| `max_output_bytes` | 2,097,152 | 4,194,304 |
+| `max_output_bytes` | 4,194,304 | 4,194,304 |
 
 Variáveis `ETL_<NOME_DO_CAMPO_EM_MAIÚSCULAS>` configuram os valores; por exemplo,
 `ETL_MAX_ROWS`. `Config.ETL_LIMITS` contém a política validada. Overrides parciais
@@ -122,6 +122,10 @@ O separador é escolhido pelo máximo de colunas observado no arquivo inteiro,
 não por amostra inicial. Empates mantêm a ordem anterior. Arquivos binários
 com assinaturas conhecidas disfarçados como CSV são recusados.
 
+Depois do SEC-005, o saneamento de 11/2026 acrescentou o reparo de codificação:
+o CSV que cai para `cp1252` ou `latin1` tem o UTF-8 desfeito refeito célula a
+célula (`Docs/SANEAMENTO_MOTOR_ETL.md`, seção 7).
+
 Registros físicos/lógicos com aspas e quebras de linha têm limite de caracteres;
 campos, linhas, colunas e retângulo são validados antes de materializar. O CSV
 usa o menor orçamento de células de tabela/arquivo. Candidatos de separador
@@ -165,10 +169,12 @@ habilitados: continuam recusados com orientação de conversão para CSV/XLSX.
 
 O filho recebe RLIMIT_AS de 384 MiB por padrão, antes de importar pandas, e
 RLIMIT_CORE=0. Esse é limite de espaço virtual do processo isolado, não medição
-nem teto RSS global da aplicação/container. Há um filho ativo por processo
+nem teto RSS global da aplicação/container. A operação `avaliacao_cenario`
+(Avaliação de Cenário de leads, ver `Docs/AVALIACAO_DE_CENARIO.md`) fica sempre em
+no máximo 384 MiB, mesmo que `ETL_MEMORY_MB` suba o limite das outras operações. Há um filho ativo por processo
 chamador e uma entrada de upload/processamento por processo servidor.
 
-JSON de requisição ≤16 KiB e resultado ≤2 MiB; sem pickle. BLAS/OMP/MKL/NumExpr
+JSON de requisição ≤16 KiB e resultado ≤4 MiB; sem pickle. BLAS/OMP/MKL/NumExpr
 usam uma thread. Ambiente filtrado exclui segredos do aplicativo e configurações
 Python herdadas, mantendo controles de sistema/TLS/proxy. Não há shell ou
 preexec_fn inseguro em servidor com threads. Rede e novos comandos externos
@@ -219,6 +225,11 @@ total explícito antes de unitário, quantidade×preço/custo quando necessário
 compras NF/item-level, rankings, exceção de coincidência do maior faturamento,
 percentuais/classes A/B/C, TOP_N, produto/saldo parado e período real. Nenhum
 KPI de lucro, margem, CMV ou rentabilidade foi criado.
+
+Depois do SEC-005, o saneamento de 11/2026 revisou de propósito os rodapés, as
+frações, o sinal no fim, as compras líquidas e a vírgula com 3 casas, com golden
+de regressão contra o `91e5fb0` (`Docs/SANEAMENTO_MOTOR_ETL.md`). A análise
+mensal continua sem lucro, margem e CMV.
 
 Arquivos comerciais da homologação citada na documentação não estão disponíveis
 nas fixtures do checkout. Não foram abertos dados reais; os cenários são

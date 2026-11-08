@@ -47,3 +47,19 @@ def executar_como_o_worker(caminhos, limits=None):
             validate_input(caminho, Path(caminho).suffix.lower(), politica)
         resultado = raio_x.diagnosticar(caminhos)
     return json.loads(json.dumps(resultado, ensure_ascii=True, allow_nan=False))
+
+
+def avaliar_como_o_worker(caminhos, limits=None, *, hoje=None):
+    """etl_runtime.run_avaliacao_cenario sem o processo filho: a mesma validação, o cálculo, a
+    serialização e a conferência do contrato que o processo pai faz (etl_runtime.validar_avaliacao).
+    `hoje` fixa a data da regra do ano e da cobertura (o worker usa a data do dia)."""
+    import avaliacao_motor
+    import etl_runtime
+    from etl_inputs import validate_input
+    from etl_limits import get_limits, using_limits
+    politica = get_limits() if limits is None else limits
+    with using_limits(politica):
+        for caminho in caminhos:
+            validate_input(caminho, Path(caminho).suffix.lower(), politica)
+        resultado = avaliacao_motor.avaliar_cenario(caminhos, hoje=hoje)
+    return etl_runtime.validar_avaliacao(json.loads(json.dumps(resultado, ensure_ascii=True, allow_nan=False)))

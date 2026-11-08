@@ -56,10 +56,12 @@ import pandas as pd
 from etl_inputs import ETLInputError
 from etl_processor import (
     ETLValidationError, _converter_serie_monetaria, _extrair_periodo_base, _ler_bruto, _nome_exibivel,
-    _vendas_do_bruto,
+    _reais as _brl, _vendas_do_bruto,
 )
 
-VERSAO_REGRAS = "raio-x-2026-11.3"
+# 11.4: saneamento de 11/2026 (rodapés, quantidades, títulos de reserva, codificação e os campos de
+# CMV líquido). Raio-X gravado com a 11.3 não tem os campos líquidos (raio_x_servico.visao).
+VERSAO_REGRAS = "raio-x-2026-11.4"
 MAX_ARQUIVOS = 36
 LIMITE_ITENS_LISTA = 50
 TOLERANCIA_PRECO_MINIMA = 0.01
@@ -121,11 +123,6 @@ def _texto_curto(valor, limite=120):
     return texto[:limite] or None
 
 
-def _brl(valor: float) -> str:
-    inteiro, _, centavos = f"{abs(valor):,.2f}".partition(".")
-    return ("-" if valor < 0 else "") + inteiro.replace(",", ".") + "," + centavos
-
-
 # ---------------------------------------------------------------------------
 # Um arquivo
 # ---------------------------------------------------------------------------
@@ -176,7 +173,7 @@ def _ler_arquivo(caminho: str, indice: int):
     # Sem coluna de total, o ETL calcula o valor da linha pelo preço unitário: o preço praticado
     # é o próprio preço de tabela, e a diferença entre os dois não existe.
     valor_derivado = "valor_venda" not in cabecalhos
-    preco_tabela = (_converter_serie_monetaria(df["preco_unitario"], Counter()) if tem_preco_unitario
+    preco_tabela = (_converter_serie_monetaria(df["preco_unitario"], Counter(), bruto.attrs.get("format") == "csv") if tem_preco_unitario
                     else pd.Series(np.nan, index=df.index))
     numeros = np.concatenate([quantidade[venda].to_numpy(float), valor[venda].to_numpy(float),
                               custo[venda].to_numpy(float)])
@@ -245,6 +242,13 @@ def _ler_arquivo(caminho: str, indice: int):
 
     faturamento = float(v["faturamento"].sum())
     devolucoes = float(-valor[~validas].sum()) if "_devolucao" in df.columns else 0.0
+    # CMV líquido: a bonificação (item entregue sem cobrança: quantidade com valor zero informado,
+    # "0,00", e não célula em branco) saiu do estoque e soma o custo; a devolução voltou ao estoque
+    # e desconta o custo e a receita dela.
+    custo_linha = custo.abs().round(2)
+    informado = df["_valor_informado"] if "_valor_informado" in df.columns else pd.Series(True, index=df.index)
+    bonificadas = validas & informado & (quantidade > 0) & (valor.round(2) == 0) & (custo_linha > 0)
+    devolvidas_com_custo = ~validas & (custo_linha > 0)
     resumo = {
         "indice": indice,
         "inicio": periodo[0] if periodo else None,
@@ -263,6 +267,15 @@ def _ler_arquivo(caminho: str, indice: int):
         "venda_sem_valor": int((validas & (quantidade > 0) & (valor <= 0)).sum()),
         "variacao_visivel": bool((tem_preco_unitario and not valor_derivado)
                                  or (grupos["linhas"].sum() > 1).any()),
+        "custo_bonificacoes": float(custo_linha[bonificadas].sum()),
+        "custo_devolucoes": float(custo_linha[devolvidas_com_custo].sum()),
+        "devolucoes_com_custo": float(valor[devolvidas_com_custo].abs().round(2).sum()),
+        "celulas_recodificadas": int(df.attrs.get("celulas_recodificadas", 0)),
+        # Do arquivo, para a Avaliação de Cenário (avaliacao_motor): conflito por arquivo e o que o
+        # ETL contou na limpeza. Também não são serializados.
+        "_envolvidos": envolvidos,
+        "_qualidade": dict(df.attrs.get("qualidade") or {}),
+        "_situacao": dict(df.attrs.get("situacao") or {}),
         # Conjuntos, não serializados: as inconsistências contam cada código ou produto uma vez.
         "_codigos_conflito": codigos_ruins,
         "_nomes_conflito": nomes_ruins,
@@ -391,11 +404,22 @@ def _avisos(resumos: list) -> list:
         if not r["tem_custo"]:
             avisos.append(f"O arquivo {r['indice'] + 1} não traz a coluna de custo: as vendas dele contam como "
                           "sem custo informado.")
+        if r.get("celulas_recodificadas"):
+            avisos.append(f"O arquivo {r['indice'] + 1} misturava codificações de texto: os acentos de "
+                          f"{r['celulas_recodificadas']} célula(s) foram corrigidos, para o mesmo produto não "
+                          "virar dois entre os meses.")
     return avisos
 
 
 def diagnosticar(caminhos: list) -> dict:
     """Lê os relatórios de vendas (na ordem recebida) e devolve o Raio-X combinado."""
+    return _combinar(*_ler_envio(caminhos))
+
+
+def _ler_envio(caminhos: list):
+    """(por_arquivo, resumos, envolvidos): cada relatório lido uma vez por _ler_arquivo e os
+    agregados por produto e arquivo em ordem cronológica estável (arquivo sem período conta como
+    o mais antigo). A Avaliação de Cenário (avaliacao_motor) parte daqui, como o Raio-X."""
     if not 1 <= len(caminhos) <= MAX_ARQUIVOS:
         raise ETLInputError("raio_x_arquivos", f"Envie de 1 a {MAX_ARQUIVOS} relatórios de vendas.")
     partes, resumos, envolvidos = [], [], set()
@@ -409,7 +433,12 @@ def diagnosticar(caminhos: list) -> dict:
     por_arquivo = pd.concat(partes, ignore_index=True)
     por_arquivo["_data"] = por_arquivo["arquivo"].map(datas)
     por_arquivo = por_arquivo.sort_values(["_data", "arquivo"], kind="stable")
+    return por_arquivo, resumos, envolvidos
 
+
+def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict:
+    """O Raio-X do envio a partir do que _ler_envio leu: totais, saúde, scanner, auditoria,
+    recuperável, período e avisos."""
     grupos = por_arquivo.groupby("produto", sort=False)
     produtos = grupos[list(_SOMAS)].sum()
     produtos["nome"] = grupos["nome"].last()
@@ -440,6 +469,13 @@ def diagnosticar(caminhos: list) -> dict:
     inicios = [r["inicio"] for r in resumos if r["inicio"] is not None]
     fins = [r["fim"] for r in resumos if r["fim"] is not None]
     inicio, fim = (min(inicios), max(fins)) if inicios else (None, None)
+    # Composição líquida do CMV e da margem: + custo das bonificações, - custo e receita das
+    # devoluções que trazem custo. Os campos de sempre (custo_total, margem_valor) não mudam.
+    custo_bonificacoes = sum(r["custo_bonificacoes"] for r in resumos)
+    custo_devolucoes = sum(r["custo_devolucoes"] for r in resumos)
+    cmv_liquido = custo_total + custo_bonificacoes - custo_devolucoes
+    receita_liquida_com_custo = com_custo - sum(r["devolucoes_com_custo"] for r in resumos)
+    margem_liquida = receita_liquida_com_custo - cmv_liquido
     return {
         "versao": VERSAO_REGRAS,
         "arquivos": [{
@@ -491,6 +527,11 @@ def diagnosticar(caminhos: list) -> dict:
                                 for _, linha in com_margem.head(LIMITE_ITENS_LISTA).iterrows()],
             "precificacao_visivel": precificacao_visivel,
             "precificacao": precificacao,
+            "custo_bonificacoes": _dinheiro(custo_bonificacoes),
+            "custo_devolucoes": _dinheiro(custo_devolucoes),
+            "cmv_liquido": _dinheiro(cmv_liquido) if custo_total > 0 else None,
+            "margem_liquida_valor": _dinheiro(margem_liquida) if custo_total > 0 else None,
+            "margem_liquida_percentual": _fracao(margem_liquida, receita_liquida_com_custo) if custo_total > 0 else None,
         },
         "recuperavel": {
             "total": _dinheiro(produtos["recuperavel"].sum()),

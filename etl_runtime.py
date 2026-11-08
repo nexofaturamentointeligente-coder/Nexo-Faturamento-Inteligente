@@ -3,8 +3,10 @@
 from dataclasses import asdict
 from datetime import date
 import json
+import math
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -125,6 +127,161 @@ def run_raio_x(paths, limits=None):
     result = _run_job("raio_x", paths, limits=policy)
     if set(result) != CHAVES_RESULTADO:
         raise ETLInputError("worker", "Resultado inválido do processamento isolado.")
+    return result
+
+
+# Memória (RLIMIT_AS) da Avaliação de Cenário: a da instância do Render, mesmo que ETL_MEMORY_MB
+# suba a das outras operações (o teto do ETLLimits é 512 MiB).
+MEMORIA_AVALIACAO_MB = 384
+
+
+def run_avaliacao_cenario(paths, limits=None):
+    """Avaliação de Cenário (lead) no processo isolado: o Raio-X dos relatórios e a matriz
+    produto x ano. Mesmo prazo do Raio-X (o dobro do configurado, até 120 s) e no máximo
+    384 MiB de memória. O retorno é conferido inteiro antes de chegar ao banco
+    (validar_avaliacao)."""
+    from dataclasses import replace
+    policy = get_limits() if limits is None else limits
+    policy = replace(policy, timeout_seconds=min(120, policy.timeout_seconds * 2),
+                     memory_mb=min(MEMORIA_AVALIACAO_MB, policy.memory_mb))
+    return validar_avaliacao(_run_job("avaliacao_cenario", paths, limits=policy))
+
+
+_CHAVE_PRODUTO = re.compile(r"[0-9a-f]{16}")
+_ANO = re.compile(r"[0-9]{4}")
+_DATA_ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _inteiro(valor, minimo=0, maximo=None) -> bool:
+    return type(valor) is int and valor >= minimo and (maximo is None or valor <= maximo)
+
+
+def _numero(valor, minimo=None, maximo=None) -> bool:
+    return (type(valor) in (int, float) and math.isfinite(valor)
+            and (minimo is None or valor >= minimo) and (maximo is None or valor <= maximo))
+
+
+def _data_iso(valor) -> bool:
+    if valor is None:
+        return True
+    if not isinstance(valor, str) or not _DATA_ISO.fullmatch(valor):
+        return False
+    try:
+        date.fromisoformat(valor)
+    except ValueError:
+        return False
+    return True
+
+
+def _meta_valida(meta, versao) -> bool:
+    """A meta do envio (avaliacao_motor._meta): chaves fixas, só contagens, nenhum texto livre. Ela
+    fica no lead depois do expurgo das linhas, então nada fora disto pode chegar ao banco."""
+    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_META, CHAVES_QUALIDADE,
+                                 CHAVES_SITUACAO_CONTAGENS, CHAVES_SITUACAO_VALORES)
+    from raio_x import MAX_ARQUIVOS, VERSAO_REGRAS
+    if not isinstance(meta, dict) or set(meta) != CHAVES_META:
+        return False
+    if meta["versao_regras"] != versao or meta["versao_raio_x"] != VERSAO_REGRAS:
+        return False
+    arquivos = meta["arquivos"]
+    if not _inteiro(arquivos, 1, MAX_ARQUIVOS):
+        return False
+    por_ano, dias, mensais = meta["arquivos_por_ano"], meta["dias_por_ano"], meta["relatorios_mensais_por_ano"]
+    if not all(isinstance(contagem, dict) for contagem in (por_ano, dias, mensais)):
+        return False
+    anos = set(por_ano)
+    if (not anos or set(dias) != anos or set(mensais) != anos
+            or not all(isinstance(ano, str) and _ANO.fullmatch(ano)
+                       and ANO_MINIMO <= int(ano) <= ANO_MAXIMO_DO_BANCO for ano in anos)):
+        return False
+    if (not all(_inteiro(quantos, 1, MAX_ARQUIVOS) for quantos in por_ano.values())
+            or sum(por_ano.values()) != arquivos
+            or not all(_inteiro(quantos, 1, 366) for quantos in dias.values())
+            or not all(type(mensal) is bool for mensal in mensais.values())):
+        return False
+    if not _inteiro(meta["arquivos_com_custo"], 0, arquivos) or not _inteiro(meta["linhas_lidas"]):
+        return False
+    if not _inteiro(meta["celulas_recodificadas"]):
+        return False
+    qualidade, situacao = meta["qualidade"], meta["situacao"]
+    if (not isinstance(qualidade, dict) or not set(qualidade) <= CHAVES_QUALIDADE
+            or not all(_inteiro(valor) for valor in qualidade.values())):
+        return False
+    if not isinstance(situacao, dict) or not set(situacao) <= CHAVES_SITUACAO_CONTAGENS | CHAVES_SITUACAO_VALORES:
+        return False
+    return all(_inteiro(valor) if chave in CHAVES_SITUACAO_CONTAGENS else _numero(valor, 0)
+               for chave, valor in situacao.items())
+
+
+def _raio_x_valido(raio) -> bool:
+    """O que o processo pai lê do Raio-X do lead: período, índice de saúde e o que
+    raio_x.recomendar usa para indicar o plano."""
+    periodo, saude, recuperavel = raio.get("periodo"), raio.get("saude"), raio.get("recuperavel")
+    if not all(isinstance(parte, dict) for parte in (periodo, saude, recuperavel)):
+        return False
+    if not (_data_iso(periodo.get("inicio")) and _data_iso(periodo.get("fim"))):
+        return False
+    if periodo.get("meses") is not None and not _inteiro(periodo.get("meses")):
+        return False
+    inconsistencias = saude.get("inconsistencias")
+    return (_numero(saude.get("indice"), 0, 100) and _inteiro(saude.get("arquivos_com_custo"))
+            and (saude.get("pct_faturamento_sem_custo") is None or _numero(saude.get("pct_faturamento_sem_custo"), 0))
+            and _numero(saude.get("faturamento_total")) and isinstance(inconsistencias, dict)
+            and _inteiro(inconsistencias.get("itens_margem_negativa")) and _numero(recuperavel.get("total"), 0))
+
+
+def validar_avaliacao(result):
+    """O resultado da avaliação no formato exato que o processo pai grava; senão, recusa. Confere
+    a estrutura inteira: um processo isolado com defeito (ou comprometido) não grava texto livre
+    nem derruba a gravação com erro 500."""
+    from etl_inputs import ETLInputError
+    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_RESULTADO as CHAVES_AVALIACAO, COLUNAS,
+                                 LIMITE_DESCRICAO, VERSAO_REGRAS_LEAD)
+    from raio_x import CHAVES_RESULTADO
+
+    def invalido():
+        return ETLInputError("worker", "Resultado inválido do processamento isolado.")
+
+    if not isinstance(result, dict) or set(result) != CHAVES_AVALIACAO:
+        raise invalido()
+    if result["versao"] != VERSAO_REGRAS_LEAD:
+        raise invalido()
+    if not isinstance(result["raio_x"], dict) or set(result["raio_x"]) != CHAVES_RESULTADO:
+        raise invalido()
+    if not _raio_x_valido(result["raio_x"]) or not _meta_valida(result["meta"], result["versao"]):
+        raise invalido()
+    linhas = result["linhas"]
+    if (not isinstance(linhas, dict) or set(linhas) != {"colunas", "valores"}
+            or linhas["colunas"] != list(COLUNAS) or not isinstance(linhas["valores"], list)):
+        raise invalido()
+    anos_do_envio = {int(ano) for ano in result["meta"]["arquivos_por_ano"]}
+    marcas = {"variacao", "conflito_cadastral", "estoque_negativo"}
+    vistos = set()
+    for linha in linhas["valores"]:
+        if not isinstance(linha, list) or len(linha) != len(COLUNAS):
+            raise invalido()
+        for nome, valor in zip(COLUNAS, linha):
+            if nome == "ano_exercicio":
+                valido = _inteiro(valor, ANO_MINIMO, ANO_MAXIMO_DO_BANCO) and valor in anos_do_envio
+            elif nome in ("linhas", "meses"):
+                valido = _inteiro(valor)
+            elif nome == "chave_produto":
+                valido = isinstance(valor, str) and _CHAVE_PRODUTO.fullmatch(valor) is not None
+            elif nome == "descricao_produto":
+                valido = isinstance(valor, str) and 0 < len(valor) <= LIMITE_DESCRICAO and bool(valor.strip())
+            elif nome in marcas:
+                valido = type(valor) is bool
+            elif nome == "codigo_produto":
+                valido = valor is None or (isinstance(valor, str) and 0 < len(valor) <= 60 and bool(valor.strip()))
+            else:
+                valido = _numero(valor, 0)
+            if not valido:
+                raise invalido()
+        # Uma linha por produto e ano: a unicidade da staging (lead, ano, produto).
+        par = (linha[COLUNAS.index("ano_exercicio")], linha[COLUNAS.index("chave_produto")])
+        if par in vistos:
+            raise invalido()
+        vistos.add(par)
     return result
 
 

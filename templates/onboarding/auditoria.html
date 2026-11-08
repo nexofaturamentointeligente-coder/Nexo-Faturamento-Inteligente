@@ -36,12 +36,19 @@
     <div class="col-12 col-sm-6 col-xl-3">
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Custo informado das vendas</span><span class="kpi-icon is-info"><i class="bi bi-receipt" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{{ pl.dado_protegido(not prot.cmv, ('<small>R$</small> '|safe ~ m.brl(aud.custo_total)) if aud.custo_total is not none else '—', plano_cmv, url_upgrade(plano_cmv), 'Custo informado das vendas') }}</div>
-            <div class="kpi-foot">Sobre R$ {{ m.brl(aud.faturamento_com_custo) }} vendidos com custo</div></div>
+            <div class="kpi-foot">Sobre R$ {{ m.brl(aud.faturamento_com_custo) }} vendidos com custo</div>
+            {% if aud.cmv_liquido is defined and aud.cmv_liquido is not none and (aud.custo_bonificacoes or aud.custo_devolucoes) %}
+            <div class="kpi-foot">Custo líquido R$ {{ m.brl(aud.cmv_liquido) }}: + R$ {{ m.brl(aud.custo_bonificacoes) }} em bonificações, − R$ {{ m.brl(aud.custo_devolucoes) }} em devoluções</div>
+            {% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Margem bruta estimada</span><span class="kpi-icon is-green"><i class="bi bi-percent" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{{ pl.dado_protegido(not prot.margem, pl.pct(aud.margem_percentual), plano_margem, url_upgrade(plano_margem), 'Margem bruta', '00,0%') }}</div>
-            <div class="kpi-foot">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(aud.margem_valor)) if aud.margem_valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Margem bruta em reais') }}</div></div>
+            <div class="kpi-foot">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(aud.margem_valor)) if aud.margem_valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Margem bruta em reais') }}</div>
+            {% if aud.margem_liquida_valor is defined and aud.margem_liquida_valor is not none
+                  and aud.margem_liquida_percentual is not none and aud.margem_liquida_valor != aud.margem_valor %}
+            <div class="kpi-foot">Líquida, com bonificações e devoluções: {{ pl.pct(aud.margem_liquida_percentual) }} (R$ {{ m.brl(aud.margem_liquida_valor) }})</div>
+            {% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Perda em vendas abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>

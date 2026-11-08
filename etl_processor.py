@@ -153,6 +153,58 @@ _NAO_PRODUTOS = {
 # =====================================================================
 # 2) Conversão numérica robusta (pt-BR e en-US)
 # =====================================================================
+# Quantidade fracionada como o PDV escreve: "1/2", "3/4 kg", "1 1/2 un(s)", "(1/2)", "(1/2) KG",
+# "1/2-" e "1/2 KG-". Grupos: sinal no começo, inteiro, numerador, denominador, sinal logo depois
+# do número e o resto (unidade, parêntese e o sinal no fim). Só texto curto (_TETO_DA_FRACAO): é
+# quantidade, e nada de célula longa passa por regex.
+_RE_FRACAO = re.compile(r"\(?\s*([+-])?\s*(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)(-)?([^\d/+]*)")
+_TETO_DA_FRACAO = 64
+# Acima do teto, só a forma simples ("1000...0/1", "-9999/1", "(1/2)"), sem espaços, conferida sem
+# retrocesso: o valor gigante vira infinito, como os dígitos colados viravam antes.
+_RE_FRACAO_LONGA = re.compile(r"(\(?)([+-]?)(\d+)/(\d+)(-?)\)?")
+# Data numa coluna de quantidade não é quantidade: "2026-01-02" viraria 20260102.
+_RE_DATA_COMO_TEXTO = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?")
+_RE_CIENTIFICO_QUANTIDADE = re.compile(r"[+-]?\d+(?:[.,]\d+)?[eE][+-]?\d+")
+
+
+# Número seguido da unidade, numa unidade com barra ("2 UN/CX", "1,250 KG/UN", "18,350/KG",
+# "(2) UN/CX", "1 P/ KG"): a quantidade é o número do começo, com o parêntese, como sempre foi.
+_RE_NUMERO_ANTES_DA_UNIDADE = re.compile(r"(\(?\s*[+-]?\s*\d[\d.,]*\s*\)?)\s*-?\s*/?\s*[^\W\d_]")
+
+
+def _parse_fracao(texto: str):
+    """Valor da fração ("1 1/2" = 1,5), com o sinal; None se não for fração ou se dividir por zero.
+    Fração grande demais para um float vira infinito, como os dígitos colados viravam antes, e a
+    leitura recusa o arquivo com a mensagem de valor fora do intervalo."""
+    if len(texto) > _TETO_DA_FRACAO:
+        longa = _RE_FRACAO_LONGA.fullmatch(texto.replace(" ", ""))
+        if longa is None:
+            return None
+        parentese, sinal, numerador, denominador, sinal_no_fim = longa.groups()
+        inteiro = None
+        negativo = sinal == "-" or sinal_no_fim == "-" or (parentese == "(" and texto.rstrip().endswith(")"))
+    else:
+        encontrado = _RE_FRACAO.fullmatch(texto)
+        if not encontrado:
+            return None
+        sinal, inteiro, numerador, denominador, sinal_logo_depois, resto = encontrado.groups()
+        # O resto só pode ter um sinal, e no fim ("1/2 KG-"); "1/2-3" não é fração.
+        if "-" in resto.rstrip().rstrip("-"):
+            return None
+        negativo = (sinal == "-" or sinal_logo_depois == "-" or resto.rstrip().endswith("-")
+                    or (texto.lstrip().startswith("(") and ")" in texto))
+    # Zeros à esquerda fora antes da conta: o int() do Python recusa texto com mais de 4.300 dígitos,
+    # e "000…0/1" vale 0, e não infinito; "1/000…0" divide por zero.
+    inteiro, numerador, denominador = ((parte or "0").lstrip("0") or "0" for parte in (inteiro, numerador, denominador))
+    if denominador == "0":
+        return None
+    try:
+        valor = int(inteiro) + int(numerador) / int(denominador)
+    except (OverflowError, ValueError):
+        valor = math.inf
+    return -valor if (negativo and valor > 0) else valor
+
+
 def _parse_valor(bruto):
     """
     Aceita 'R$ 1.234,56', '1.234,56', '1234,56', '1,234.56', '1234.56',
@@ -160,21 +212,51 @@ def _parse_valor(bruto):
 
     Só para quantidades e estoque: aqui o ponto único é decimal, porque "1.500" numa
     coluna de quantidade costuma ser 1,5 kg. Dinheiro usa converter_valor_monetario.
+
+    Como no dinheiro, o sinal contábil depois do número ("2-", "150,00-") e o menos
+    tipográfico ("−2") são negativos, e "1E+03" é notação científica. Fração ("1/2",
+    "1 1/2 kg") vira o valor dela. Data, faixa ("1-2") e barra solta não são quantidade:
+    None, em vez de um número feito com os dígitos ("1/2" já deu 12).
     """
     if bruto is None:
         return None
     s = str(bruto).strip()
     # O apóstrofo da neutralização de fórmula (security_gatekeeper) não é sinal nem dígito:
     # sem tirá-lo, "'-2 un(s)" seria lido como +2 e a devolução viraria venda. O dinheiro já
-    # o ignora (_limpar_monetario).
-    if s.startswith("'"):
-        s = s[1:].strip()
+    # o ignora (_limpar_monetario). Sai também o de dentro da célula ("1,'-5"), que o
+    # núcleo abaixo sempre descartou: original e neutralizado têm de dar o mesmo número.
+    s = s.replace("'", "").strip()
     if s.lower() in ("", "nan", "none", "-", "--"):
         return None
 
-    s = s.replace("\xa0", "").replace(" ", "")
+    s = s.translate(_SINAIS_DE_MENOS).replace("\xa0", " ").strip()
+    if _RE_DATA_COMO_TEXTO.fullmatch(s):
+        return None
+    if "/" in s:
+        # Espaços colapsados antes das regex da barra: com um espaço só entre as partes, os \s*
+        # seguidos de _RE_NUMERO_ANTES_DA_UNIDADE não retrocedem (400 espaços levavam 40 s). As regex
+        # aceitam qualquer quantidade de espaço ali; o resultado só muda acima do teto da fração
+        # (64 caracteres), em que a fração com unidade e espaços demais passa a caber e ser lida.
+        s = re.sub(r"\s+", " ", s)
+        fracao = _parse_fracao(s)
+        if fracao is not None:
+            return fracao
+        # A barra da unidade ("2 UN/CX") não é fração: vale o número do começo, como sempre valeu.
+        antes_da_unidade = _RE_NUMERO_ANTES_DA_UNIDADE.match(s)
+        if antes_da_unidade is None:
+            return None
+        s = antes_da_unidade.group(1).strip()
+    s = s.replace(" ", "")
     s = re.sub(r"(?i)r\$", "", s)
+    if _RE_CIENTIFICO_QUANTIDADE.fullmatch(s):
+        numero = float(s.replace(",", "."))
+        return numero if math.isfinite(numero) else None
     negativo = s.startswith("-") or s.startswith("(")
+    if s.endswith("-") and not s.startswith("-"):
+        negativo, s = True, s[:-1]
+    # Hífen entre dígitos não é sinal: "1-2" é faixa ou código, não quantidade.
+    if re.search(r"[0-9.,]-+[0-9]", s):
+        return None
     s2 = re.sub(r"[^0-9.,]", "", s)
     if s2 == "":
         return None
@@ -209,7 +291,9 @@ def _converter_serie(serie: pd.Series) -> pd.Series:
 # Milhar só com grupos de 3 dígitos depois de um início sem zero: "0.125" nunca é milhar.
 _RE_MILHAR_PONTO = re.compile(r"[1-9][0-9]{0,2}(?:\.[0-9]{3})+")
 _RE_MILHAR_VIRGULA = re.compile(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+")
-_RE_DECIMAL = re.compile(r"[0-9]+[.,]?[0-9]*|[.,][0-9]+")
+# A mesma linguagem de sempre ("[0-9]+[.,]?[0-9]*|[.,][0-9]+"), escrita sem retrocesso quadrático:
+# uma célula com 16 mil dígitos levava 3 s.
+_RE_DECIMAL = re.compile(r"[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+")
 _RE_CASAS_DECIMAIS = re.compile(r"[0-9]+")
 _RE_CIENTIFICO = re.compile(r"[0-9]+(?:[.,][0-9]+)?[eE][+-]?[0-9]+")
 _RE_PONTO_DECIMAL = re.compile(r"[0-9,]*\.[0-9]+")
@@ -238,8 +322,10 @@ def _separar_sinal(corpo: str) -> tuple:
     return negativo, corpo.removeprefix("+")
 
 
-def _normalizar_separadores(corpo: str, ponto_decimal: bool):
-    """Texto aceito por float(), ou None se os separadores não formam um número."""
+def _normalizar_separadores(corpo: str, ponto_decimal: bool, virgula_milhar: bool = False):
+    """Texto aceito por float(), ou None se os separadores não formam um número.
+    `virgula_milhar`: a coluna é en-US pelo texto das células (_coluna_usa_virgula_de_milhar), então
+    "12,500" é doze mil e quinhentos; sem isso, como sempre, é doze e meio."""
     if _RE_CIENTIFICO.fullmatch(corpo):
         return corpo.replace(",", ".")
     virgula, ponto = corpo.rfind(","), corpo.rfind(".")
@@ -257,10 +343,13 @@ def _normalizar_separadores(corpo: str, ponto_decimal: bool):
         return corpo.replace(".", "") if _RE_MILHAR_PONTO.fullmatch(corpo) else None
     if _RE_MILHAR_PONTO.fullmatch(corpo) and not ponto_decimal:
         return corpo.replace(".", "")
+    # Numa coluna en-US pelo texto das células ("1,234.56"), "12,500" é milhar: doze mil e quinhentos.
+    if virgula_milhar and _RE_MILHAR_VIRGULA.fullmatch(corpo):
+        return corpo.replace(",", "")
     return corpo.replace(",", ".") if _RE_DECIMAL.fullmatch(corpo) else None
 
 
-def _interpretar_monetario(valor, ponto_decimal: bool = False):
+def _interpretar_monetario(valor, ponto_decimal: bool = False, virgula_milhar: bool = False):
     """Float finito, ou None quando o valor é nulo ou inválido."""
     if valor is None or isinstance(valor, bool):
         return None
@@ -268,7 +357,7 @@ def _interpretar_monetario(valor, ponto_decimal: bool = False):
         numero = float(valor)
         return numero if math.isfinite(numero) else None
     negativo, corpo = _separar_sinal(_limpar_monetario(valor))
-    texto = _normalizar_separadores(corpo, ponto_decimal)
+    texto = _normalizar_separadores(corpo, ponto_decimal, virgula_milhar)
     if texto is None:
         return None
     numero = float(texto)
@@ -277,7 +366,7 @@ def _interpretar_monetario(valor, ponto_decimal: bool = False):
     return -numero if (negativo and numero) else numero
 
 
-def converter_valor_monetario(valor, ponto_decimal: bool = False) -> float:
+def converter_valor_monetario(valor, ponto_decimal: bool = False, virgula_milhar: bool = False) -> float:
     """
     Converte um valor em dinheiro para float, sem nunca interromper o processamento:
     nulo ou inválido vira 0.0.
@@ -287,9 +376,11 @@ def converter_valor_monetario(valor, ponto_decimal: bool = False) -> float:
       "(10,00)"      -> -10.0       "10,00-" -> -10.0       "abc"       -> 0.0
 
     `ponto_decimal=True` lê "12.500" como 12.5, para colunas que mostram usar o ponto
-    como decimal (ver _coluna_usa_ponto_decimal). Um valor sozinho não tem como revelar isso.
+    como decimal (ver _coluna_usa_ponto_decimal); `virgula_milhar=True` lê "12,500" como
+    12500.0, para colunas en-US pelo texto (ver _coluna_usa_virgula_de_milhar). Um valor
+    sozinho não tem como revelar nenhum dos dois.
     """
-    numero = _interpretar_monetario(valor, ponto_decimal)
+    numero = _interpretar_monetario(valor, ponto_decimal, virgula_milhar)
     return 0.0 if numero is None else numero
 
 
@@ -305,21 +396,69 @@ def _coluna_usa_ponto_decimal(corpos: list) -> bool:
     return com_ponto and not com_virgula
 
 
-def _converter_serie_monetaria(serie: pd.Series, qualidade: Counter) -> pd.Series:
-    """Converte uma coluna em dinheiro e anota em `qualidade` o que pede revisão humana."""
-    corpos = [_separar_sinal(_limpar_monetario(v))[1] for v in serie]
+def _coluna_usa_virgula_de_milhar(brutos, corpos: list) -> bool:
+    """A coluna é en-US pelo TEXTO das células: alguma tem ponto decimal ("12.50", "1,234.56")
+    e nenhuma tem vírgula decimal que não possa ser milhar ("12,50", "1.234,56"). Só texto conta:
+    número de verdade (célula numérica do XLSX) não diz como o relatório escreve os valores, e
+    "12,500" e "12.500" são ambíguos."""
+    com_ponto = com_virgula = False
+    for bruto, corpo in zip(brutos, corpos):
+        if not isinstance(bruto, str):
+            continue
+        if _RE_VIRGULA_DECIMAL.fullmatch(corpo) and not _RE_MILHAR_VIRGULA.fullmatch(corpo):
+            com_virgula = True
+        elif _RE_PONTO_DECIMAL.fullmatch(corpo) and not _RE_MILHAR_PONTO.fullmatch(corpo):
+            com_ponto = True
+    return com_ponto and not com_virgula
+
+
+# Marca interna em `qualidade`: alguma coluna em dinheiro do arquivo é en-US pelo texto. Sai antes de
+# chegar à telemetria (_fechar_qualidade).
+_EN_US = "_en_us"
+
+
+def _converter_serie_monetaria(serie: pd.Series, qualidade: Counter, texto_do_csv: bool = False) -> pd.Series:
+    """Converte uma coluna em dinheiro e anota em `qualidade` o que pede revisão humana.
+
+    `texto_do_csv`: a coluna veio de um CSV, em que toda célula é o texto que o relatório escreveu.
+    Só aí o formato en-US ("1,234.56") pode ser provado e "12,500" lido como milhar. No XLSX as
+    células chegam como texto também (dtype=str), mas o número de verdade vira "32.9" e não diz
+    como o relatório escreve: lá vale a leitura de sempre."""
+    brutos = list(serie)
+    corpos = [_separar_sinal(_limpar_monetario(v))[1] for v in brutos]
     ponto_decimal = _coluna_usa_ponto_decimal(corpos)
+    virgula_milhar = texto_do_csv and _coluna_usa_virgula_de_milhar(brutos, corpos)
+    if virgula_milhar:
+        qualidade[_EN_US] += 1
     valores = []
-    for bruto, corpo in zip(serie, corpos):
-        numero = _interpretar_monetario(bruto, ponto_decimal)
+    for bruto, corpo in zip(brutos, corpos):
+        numero = _interpretar_monetario(bruto, ponto_decimal, virgula_milhar)
         if numero is None:
             if corpo.lower() not in _VALORES_EM_BRANCO:
                 qualidade["invalidos"] += 1
             numero = 0.0
         elif corpo.count(".") == 1 and _RE_MILHAR_PONTO.fullmatch(corpo):
             qualidade["lidos_como_decimal" if ponto_decimal else "lidos_como_milhar"] += 1
+        elif corpo.count(",") == 1 and _RE_MILHAR_VIRGULA.fullmatch(corpo):
+            qualidade["virgula_como_milhar" if virgula_milhar else "virgula_como_decimal"] += 1
         valores.append(numero)
     return pd.Series(valores, index=serie.index, dtype="float64")
+
+
+def _valor_informado(serie: pd.Series) -> pd.Series:
+    """A célula traz um número, mesmo que zero ("0,00"), e não vazio, "-" ou texto inválido. Separa
+    a venda de valor zero informado (brinde, bonificação) da célula em branco."""
+    return pd.Series([_interpretar_monetario(valor) is not None for valor in serie], index=serie.index, dtype=bool)
+
+
+def _fechar_qualidade(qualidade: Counter) -> dict:
+    """O que vai para a telemetria: "virgula_como_decimal" só quando o arquivo tem alguma coluna
+    en-US pelo texto. Num relatório todo brasileiro, "31,125" com 3 casas é decimal e não pede
+    revisão, como sempre foi."""
+    en_us = qualidade.pop(_EN_US, 0)
+    if not en_us:
+        qualidade.pop("virgula_como_decimal", None)
+    return dict(qualidade)
 
 
 # =====================================================================
@@ -411,12 +550,52 @@ ALIAS_COMPRAS = {
                        "qtde compra", "qtd compra", "qtde"],
 }
 
+# Títulos de reserva: rótulos comuns de ERP que os dicionários acima não reconhecem ("Quant.",
+# "Vlr. Total", "CMV"). Valem só como reserva, depois do dicionário principal, e por isso um
+# relatório que já era lido mantém o mesmo mapeamento:
+#   - comparam o título INTEIRO normalizado, nunca fragmento: "Quantia" não vira quantidade e
+#     "Vlr Total Desconto" não vira venda;
+#   - só preenchem o canônico que o dicionário principal deixou sem coluna;
+#   - só usam coluna que nenhum fragmento do dicionário principal reconhece, nem como duplicata.
+# Ficam de fora, por ambiguidade: "Valor" e "Valor Bruto" (unitário? sem desconto?), "Receita",
+# "Vendas" e "Un", que costuma ser a unidade de medida ("UN", "KG"), e não a quantidade.
+# "Total" sozinho é o total da linha num relatório por item.
+RESERVA_VENDAS = {
+    "valor_custo":    ("cmv", "cmv total"),
+    "valor_venda":    ("vlr total", "vl total", "valor liquido", "vlr liquido", "vl liquido",
+                       "total", "total r"),
+    "preco_unitario": ("vr unit", "vlr unit", "vl unit", "vr unitario", "vl unitario"),
+    "quantidade":     ("quant", "quant vendida", "quant vend"),
+}
+RESERVA_COMPRAS = {
+    "valor_nf":       ("custo total", "vlr total", "vl total", "total", "total r"),
+    "custo_unitario": ("vr unit", "vlr unit", "vl unit", "vl unitario"),
+    "qtde_comprada":  ("quantidade", "qtd", "quant"),
+}
 
-def _mapear_cabecalho(linha_norm: list, aliases: dict) -> dict:
+
+def _reserva_de(aliases: dict) -> dict:
+    """Títulos de reserva do dicionário principal; outro dicionário não tem reserva."""
+    if aliases is ALIAS_VENDAS:
+        return RESERVA_VENDAS
+    if aliases is ALIAS_COMPRAS:
+        return RESERVA_COMPRAS
+    return {}
+
+
+def _mapear_cabecalho(linha_norm: list, aliases: dict, reserva: dict = None,
+                      percentuais: frozenset = frozenset()) -> dict:
     """
     Para cada COLUNA da linha (já normalizada), encontra o 1º canônico cujo
     fragmento aparece como substring. Cada canônico é claimed no máximo 1x
     (1ª coluna vence — proteção contra duplicatas no relatório).
+
+    Depois, os títulos de reserva (RESERVA_VENDAS/RESERVA_COMPRAS) completam só os
+    canônicos que ficaram sem coluna, e só com coluna que o dicionário não reconhece.
+    `percentuais`: colunas cujo título tem "%" ("% Total", "Total (%)", "% CMV"), que a
+    normalização transforma em "total" ou "cmv" e a reserva nunca usa. Título de reserva repetido
+    na mesma linha ("Quant." sobre "Pedida" e "Quant." sobre "Vendida") é ambíguo e também não vale:
+    o cabeçalho em duas linhas, se houver, desfaz a dúvida.
     """
     mapa: dict = {}
     for idx, chave in enumerate(linha_norm):
@@ -430,6 +609,21 @@ def _mapear_cabecalho(linha_norm: list, aliases: dict) -> dict:
                     mapa[canonico] = idx
                     break
             if canonico in mapa and mapa[canonico] == idx:
+                break
+
+    reserva = _reserva_de(aliases) if reserva is None else reserva
+    faltantes = [canonico for canonico in reserva if canonico not in mapa]
+    if not faltantes:
+        return mapa
+    fragmentos = [frag for lista in aliases.values() for frag in lista]
+    repeticoes = Counter(chave for chave in linha_norm if chave)
+    livres = {idx: chave for idx, chave in enumerate(linha_norm)
+              if chave and idx not in percentuais and repeticoes[chave] == 1
+              and not any(frag in chave for frag in fragmentos)}
+    for canonico in faltantes:
+        for idx, chave in livres.items():
+            if chave in reserva[canonico] and idx not in mapa.values():
+                mapa[canonico] = idx
                 break
     return mapa
 
@@ -447,35 +641,36 @@ def _detectar_cabecalho(df_bruto: pd.DataFrame, aliases: dict, valida_fn,
     Em caso de falha, levanta ETLValidationError com DIAGNÓSTICO acionável
     (quais colunas foram reconhecidas) — nunca fabrica colunas: um relatório
     sem as colunas essenciais não vira KPI inventado (integridade do dado).
+
+    A busca usa primeiro só o dicionário principal, como sempre: os títulos de reserva
+    (RESERVA_VENDAS/RESERVA_COMPRAS) completam a linha escolhida e só entram na busca quando
+    nenhuma linha passa sem eles. Assim um cabeçalho em duas linhas que o dicionário já lia
+    ("Total" sobre "Líquido") não é trocado pela primeira linha sozinha.
     """
     limite = min(janela, len(df_bruto))
-    melhor = None
     melhor_parcial: dict = {}   # melhor mapeamento visto, mesmo sem passar na validação
-
-    # 1) cabeçalho de 1 linha
-    for i in range(limite):
-        linha = [_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
-        mapa = _mapear_cabecalho(linha, aliases)
-        if len(mapa) > len(melhor_parcial):
-            melhor_parcial = mapa
-        if valida_fn(mapa) and (melhor is None or len(mapa) > len(melhor[1])):
-            melhor = (i, mapa, 1)
-    if melhor is not None:
-        return melhor
-
-    # 2) cabeçalho composto (2 linhas)
-    for i in range(limite - 1):
-        l1 = [_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
-        l2 = [_norm_chave(v) for v in df_bruto.iloc[i + 1].tolist()]
-        # zip por menor comprimento — colunas extras ficam de fora
-        comb = [(a + " " + b).strip() for a, b in zip(l1, l2)]
-        mapa = _mapear_cabecalho(comb, aliases)
-        if len(mapa) > len(melhor_parcial):
-            melhor_parcial = mapa
-        if valida_fn(mapa) and (melhor is None or len(mapa) > len(melhor[1])):
-            melhor = (i, mapa, 2)
-    if melhor is not None:
-        return melhor
+    linhas = [df_bruto.iloc[i].tolist() for i in range(limite)]
+    simples = [[_norm_chave(v) for v in linha] for linha in linhas]
+    # zip por menor comprimento — colunas extras ficam de fora
+    compostas = [[(a + " " + b).strip() for a, b in zip(simples[i], simples[i + 1])]
+                 for i in range(limite - 1)]
+    com_percentual = [frozenset(j for j, v in enumerate(linha) if v is not None and "%" in str(v)) for linha in linhas]
+    percentuais = {1: com_percentual, 2: [com_percentual[i] | com_percentual[i + 1] for i in range(limite - 1)]}
+    reserva = _reserva_de(aliases)
+    for com_reserva in ((False, True) if reserva else (False,)):
+        # 1) cabeçalho de 1 linha; 2) cabeçalho composto (2 linhas)
+        for linhas_cab, candidatas in ((1, simples), (2, compostas)):
+            melhor = None
+            for i, titulos in enumerate(candidatas):
+                mapa = _mapear_cabecalho(titulos, aliases, reserva if com_reserva else {},
+                                         percentuais[linhas_cab][i])
+                if len(mapa) > len(melhor_parcial):
+                    melhor_parcial = mapa
+                if valida_fn(mapa) and (melhor is None or len(mapa) > len(melhor[1])):
+                    melhor = (i, mapa)
+            if melhor is not None:
+                i = melhor[0]
+                return i, _mapear_cabecalho(candidatas[i], aliases, reserva, percentuais[linhas_cab][i]), linhas_cab
 
     reconhecidas = ", ".join(sorted(melhor_parcial.keys())) if melhor_parcial else "nenhuma"
     raise ETLValidationError(
@@ -489,12 +684,176 @@ def _detectar_cabecalho(df_bruto: pd.DataFrame, aliases: dict, valida_fn,
 # =====================================================================
 # 5) DataFrame canônico + limpeza de linhas-lixo
 # =====================================================================
-# Linhas-rodapé / marca d'água típicas de PDV (regex case-insensitive).
-_PADRAO_LIXO = re.compile(
-    r"\b(?:total geral|totais|subtotal|movimenta|labsofti|software|"
-    r"resumo|periodo|usuario|filtro|impresso|pagina)\b",
+# Rodapé, título de seção e controle de impressão que o PDV exporta no meio dos itens. Duas partes:
+#
+# 1. O filtro de sempre (_PADRAO_LIXO_ANTIGO, até 11/2026) é o piso: a linha que ele tirava continua
+#    saindo. Ele casa palavra inteira sem acento no texto cru ("filtro", "software", "impresso",
+#    "resumo", "periodo", "pagina", "usuario"...) e com isso também apagava produtos. A exceção são
+#    as formas de nome de produto com "filtro", "software" ou "impresso" (_forma_de_produto):
+#    "Filtro de Café 103", "Software Antivírus", "Papel Impresso", "Cigarro sem Filtro". Com palavra
+#    de rodapé por perto, dois-pontos, data ou hora ("Filtro Loja 01", "FILTRO TODOS", "Relatório
+#    impresso às 10:35"), a linha continua rodapé; com "resumo", "periodo", "pagina" e "usuario" sem
+#    acento, sempre, como no filtro antigo.
+# 2. Os rodapés que o filtro de sempre deixava passar e a diretriz manda tirar, só nas formas
+#    inequívocas (_RE_RODAPE_EXPLICITO): "Total do Dia", "Subtotal", "Total Geral", "Página 2 de 5",
+#    "Movimentação do Dia" e os totais por agrupamento e por forma de pagamento. Produto que o filtro
+#    de sempre mantinha ("Transporte", "Venda Caixa Fechada", "Marcador de Página 3M") continua.
+#
+# A parte 2 e as exceções comparam o texto sem acento e em minúsculas, com a pontuação de dentro
+# preservada, porque é ela que separa "Filtro: Todos" (rodapé) de "Filtro de Café" (produto).
+_PADRAO_LIXO_ANTIGO = re.compile(
+    r"\b(?:total geral|totais|subtotal|movimenta|labsofti|software|resumo|periodo|"
+    r"usuario|filtro|impresso|pagina)\b",
     re.IGNORECASE,
 )
+_MESES = r"janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro"
+_AGRUPAMENTOS = (
+    r"dia|diari[oa]|data|semana|semanal|quinzena|mes|mensal|trimestre|ano|anual|periodo|pagina|pag|"
+    r"folha|turno|grupo|subgrupo|categoria|departamento|depto|secao|setor|familia|marca|laboratorio|"
+    r"fabricante|vendedor(?:a|es|as)?|frentista|bico|bomba|loja|caixa|pdv|ecf|operador|usuario|filial|"
+    r"empresa|cliente|fornecedor|relatorio|movimento|movimentacao|vendas?|compras?|comprado|entradas?|"
+    rf"itens|produtos|documento|cupom|cupons|nfe?|notas?|anterior|descontos?|acrescimos?|{_MESES}|"
+    # Totais por forma de pagamento no fechamento do caixa ("Total Dinheiro", "Total em Cartão").
+    r"dinheiro|cartao|cartoes|credito|debito|pix|cheques?|crediario|convenio|vale|ticket|"
+    r"formas? de pagamento|a prazo|a vista"
+)
+# O que vem antes de "total" num rodapé ("Valor Total do Dia", "Qtde Total Período").
+_ANTES_DO_TOTAL = r"(?:(?:valor|vlr|vl|vr|qtde?|qtd|quantidade) )?"
+_TOTAL = r"(?:total|tot\.?)"
+_PREPOSICAO = r"(?: (?:d[oa]s?|de|por|no|na|nos|nas|em|neste|nesta|deste|desta))?"
+# Parte 2, casada no início do texto (re.match). Sem quantificador aninhado: nada aqui retrocede de
+# forma exponencial (a linha que é só data vai por _linha_de_data).
+_RE_RODAPE_EXPLICITO = re.compile(
+    rf"(?:sub ?-? ?total(?:is)?|totais|totalizador(?:es)?|{_TOTAL} geral)\b"
+    rf"|{_ANTES_DO_TOTAL}{_TOTAL}{_PREPOSICAO} (?:{_AGRUPAMENTOS})\b"
+    rf"|{_ANTES_DO_TOTAL}{_TOTAL} (?:liquido|bruto|vendido|faturado|recebido|parcial|acumulado|final)\b"
+    # "Total", "Total:", "Total R$ 1.234,56", "Total 1.234,56": só número depois. "Total 12 Clean
+    # Mint" e "Total 100% Integral" são produtos.
+    rf"|{_ANTES_DO_TOTAL}{_TOTAL}\s*(?::.*|(?:r\$)?\s*-?[\d.,]*\s*-?)$"
+    rf"|{_ANTES_DO_TOTAL}{_TOTAL} em\s*\d{{1,2}}/\d{{1,2}}"
+    r"|soma\s*(?::.*|-?[\d.,]*\s*)$"
+    r"|movimenta(?:cao|coes)\b|movimento (?:d[oa]s?|de|no|na) (?:dia|mes|periodo|semana|ano|turno|caixa)\b"
+    r"|(?:vendas?|faturamento|receita) (?:d[oa]s?|no|na|neste|nesta) (?:dia|mes|periodo|semana|ano|turno|caixa)\b"
+    r"|saldo (?:anterior|final|inicial)\b|saldo (?:d[oa]|no|na) (?:dia|mes|periodo|caixa)\b"
+    # "Transporte: 1.234,56" e "Transporte 1.234,56" são o acumulado da página; "Transporte",
+    # "Transporte 2" e "Transporte 01" são o serviço vendido (verificação adversarial de 11/2026).
+    r"|a transportar\b|transportado\b"
+    r"|transporte\s*(?::\s*(?:r\$)?\s*-?[\d.,]*\d[\d.,]*|(?:r\$)?\s*-?\d+(?:\.\d{3})*,\d{2})\s*$"
+    r"|resumo\s*(?::.*)?$"
+    r"|periodo[.\s]*(?::|de\s+\d|\d{1,2}/)"
+    r"|(?:usuario|operador|filtros?|software|sistema)[.\s]*:"
+    r"|filtros? (?:aplicad|utilizad|selecionad|usad)"
+    r"|(?:impresso|emitido|gerado)\s*(?::|em\s*:?\s*\d{1,2}[/.-]\d{1,2}|por\b|pelo\b|pela\b|as\b|dia\b)"
+    r"|(?:data|hora|data e hora) (?:de |da )?(?:impressao|emissao)\b"
+    # Página com o total ("Folha 1/3", "Pág. 2 de 5") ou com marcador ("Página: 4", "Página nº 1").
+    # "Folha 40" e "FL 2" sozinhos podem ser produto e seguem a regra de sempre.
+    r"|(?:pag(?:ina)?|folha|fl)[.\s]*(?:(?:no?[.\s]*|:\s*)\d+\s*(?:(?:de|/)\s*\d+\s*)?|\d+\s*(?:de|/)\s*\d+\s*)$"
+    r"|(?:data|dia)\s*:?\s*\d{1,2}/\d{1,2}/\d{2,4}\b"
+)
+# Parte 2, em qualquer ponto do texto (re.search): marcas inequívocas de agregação e de impressão.
+_RE_RODAPE_EXPLICITO_EM_QUALQUER_PONTO = re.compile(
+    r"\b(?:total geral|sub ?-? ?total(?:is)?|totais|totalizador(?:es)?|labsofti)\b"
+    r"|\bpagina\s*\d+\s*(?:de|/)\s*\d+\b"
+    r"|\b(?:impresso|emitido|gerado)\s*(?:em|pelo|pela|dia|as)?\s*:?\s*\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}"
+    r"|\b(?:usuario|operador)[.\s]*:"
+    r"|\bdesenvolvido por\b|\bwww\.|\bhttps?:"
+)
+# Linha que é só data, com hora, intervalo ou dia da semana ("01/03/2026 - Segunda-feira",
+# "01/03/2026 a 31/03/2026"), conferida por partes, sem regex de retrocesso. "10/12/14 Conjunto
+# Infantil" é produto.
+_RE_DATA_COMPLETA = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
+_RE_PARTE_DE_DATA = re.compile(
+    r"\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}:\d{2}(?::\d{2})?|[-–]+|a|ate|as|hs?|"
+    r"(?:segunda|terca|quarta|quinta|sexta)(?:-feira)?|sabado|domingo|feira"
+)
+
+
+def _linha_de_data(texto: str) -> bool:
+    partes = [parte.rstrip(":.") for parte in re.split(r"[\s,;]+", texto) if parte.rstrip(":.")]
+    return (bool(partes) and _RE_DATA_COMPLETA.fullmatch(partes[0]) is not None
+            and all(_RE_PARTE_DE_DATA.fullmatch(parte) for parte in partes[1:]))
+
+
+# Parte 1: as palavras do filtro antigo que nunca são nome de produto.
+_RE_SEMPRE_RODAPE = re.compile(r"\b(?:total geral|totais|subtotal|movimenta|labsofti)\b")
+_GATILHOS_DO_FILTRO_ANTIGO = frozenset({"software", "resumo", "periodo", "usuario", "filtro", "impresso", "pagina"})
+# Só estas três têm resgate de produto ("Filtro de Café 103", "Software Antivírus", "Papel Impresso",
+# os exemplos da diretriz). "resumo", "periodo", "pagina" e "usuario" sem acento começam rodapés e
+# títulos de fechamento demais ("RESUMO DOS CAIXAS", "RESUMO TEF", "PERIODO ANALISADO", "NOME DO
+# USUARIO", "QUEBRA DE PAGINA") para um vocabulário fechado separar: com elas, vale o filtro antigo.
+_GATILHOS_COM_RESGATE = frozenset({"software", "filtro", "impresso"})
+_PREPOSICOES = frozenset({"de", "da", "do", "das", "dos", "no", "na", "nos", "nas", "em", "a", "o", "e", "p", "c",
+                          "com", "sem", "para", "por", "pelo", "pela", "pelos", "pelas", "ao", "aos", "ate", "entre",
+                          "num", "numa", "neste", "nesta", "deste", "desta", "nesse", "nessa", "desse", "dessa",
+                          "naquele", "naquela", "daquele", "daquela"})
+# Vocabulário de rodapé (sem acento, minúsculo; o plural e o singular também valem): com uma palavra
+# do filtro antigo e qualquer uma destas no mesmo texto, a linha continua rodapé, como sempre foi
+# ("Filtro Loja 01", "FILTRO TODOS"). A lista é fechada de propósito: a exceção de produto só vale
+# para o nome que não tem nada de rodapé.
+_VOCABULARIO_DE_RODAPE = frozenset("""
+    dia diario diaria data semana semanal quinzena mes mensal trimestre ano anual periodo pagina pag folha fl
+    turno grupo subgrupo categoria departamento depto secao setor familia marca laboratorio fabricante
+    vendedor vendedora vendedores vendedoras frentista bico bomba loja caixa pdv ecf operador filial
+    empresa cliente clientes fornecedor fornecedores relatorio movimento movimentacao venda vendas vendido
+    vendidos compra compras comprado entrada entradas saida saidas itens produtos documento cupom cupons
+    nf nfe nota notas anterior descontos desconto acrescimos acrescimo janeiro fevereiro marco abril maio
+    junho julho agosto setembro outubro novembro dezembro dinheiro cartao cartoes credito debito pix cheque
+    cheques crediario convenio vale ticket forma formas pagamento pagamentos recebimento recebimentos prazo
+    vista total tot subtotal soma saldo acumulado transporte transportar transportado valor vlr vl vr
+    faturamento faturado receita media bruto bruta liquido liquida qtde qtd quantidade geral parcial final
+    atual corrente seguinte referencia ref inicial fim proxima ultima continua continuacao emitido gerado
+    impressao emissao terminal sistema versao ltda eireli cnpj hora horas fiscal contabil gerencial
+    financeiro tributario impostos tributos operacoes cfop aplicado aplicados utilizado utilizados
+    selecionado selecionados usados admin administrador supervisor gerente fiscalizacao todos todas nenhum
+    nenhuma padrao ativo ativos criterio criterios faixa intervalo produto item codigo nome usuario resumo
+    fechamento abertura sangria suprimento reducao tef sat analitico sintetico consolidado apuracao analisado
+""".split())
+
+
+def _no_vocabulario_de_rodape(palavra: str) -> bool:
+    """A palavra, no singular ou no plural, está no vocabulário de rodapé ("caixas", "dias", "produto")."""
+    return (palavra in _VOCABULARIO_DE_RODAPE or palavra + "s" in _VOCABULARIO_DE_RODAPE
+            or (palavra.endswith("s") and palavra[:-1] in _VOCABULARIO_DE_RODAPE)
+            or (palavra.endswith("es") and palavra[:-2] in _VOCABULARIO_DE_RODAPE))
+_RE_FILTRO_RODAPE = re.compile(r"\bfiltros?\s*:|\bfiltros?\s+(?:aplicad|utilizad|selecionad|usad)")
+_RE_SOFTWARE_RODAPE = re.compile(
+    r"\bsoftware\s*:|\b(?:pelo|por|com|via|do|no)\s+software\b"
+    r"|\b(?:versao|ltda|eireli|desenvolvid\w*|licenciad\w*)\b|\bv\s?\d+[.,]\d|\(\d{2}\)|\bwww\.|\bhttps?:"
+)
+_RE_IMPRESSO_RODAPE = re.compile(
+    r"\bimpresso\s*(?::|por\b|pelo\b|pela\b|as\b|dia\b)|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\b\d{1,2}:\d{2}\b"
+)
+
+
+def _forma_de_produto(texto: str) -> bool:
+    """O texto (sem acento, minúsculo) usa "filtro", "software" ou "impresso" como parte de um nome
+    de produto, e não de rodapé: uma palavra só do filtro antigo, entre as que têm resgate, nenhuma
+    palavra do vocabulário de rodapé ao lado e a palavra na forma de produto. Na dúvida, rodapé, como
+    o filtro antigo."""
+    if _RE_SEMPRE_RODAPE.search(texto):
+        return False
+    palavras = re.findall(r"[a-z]+", texto)
+    ocorrencias = [palavra for palavra in palavras if palavra in _GATILHOS_DO_FILTRO_ANTIGO]
+    gatilhos = set(ocorrencias)
+    demais = [palavra for palavra in palavras if palavra not in gatilhos and palavra not in _PREPOSICOES]
+    if not ocorrencias or not demais or len(ocorrencias) > 1 or not gatilhos <= _GATILHOS_COM_RESGATE:
+        # A palavra sozinha (ou só com preposição), duas do filtro antigo, mesmo repetidas ("RESUMO
+        # NESTE RESUMO"), ou uma das que não têm resgate ("RESUMO DOS CAIXAS"): rodapé.
+        return False
+    if any(_no_vocabulario_de_rodape(palavra) for palavra in demais):
+        return False
+    if "filtro" in gatilhos and _RE_FILTRO_RODAPE.search(texto):
+        return False
+    if "software" in gatilhos and _RE_SOFTWARE_RODAPE.search(texto):
+        return False
+    if "impresso" in gatilhos and _RE_IMPRESSO_RODAPE.search(texto):
+        return False
+    return True
+
+
+# Decoração que o PDV põe em volta do rodapé ("*** TOTAL GERAL ***") e o apóstrofo da
+# neutralização de fórmula ("'=== TOTAL ===").
+_DECORACAO_DAS_PONTAS = " *=-_#'\".>:|[](){}~"
 
 # Strings que, se aparecerem como valor da coluna-chave, indicam que aquela
 # linha é um cabeçalho REPETIDO (quebra de página do PDV) — devem ser puladas.
@@ -503,6 +862,43 @@ _CABECALHOS_REPETIDOS = {
     "data", "data emissao", "data nf", "fornecedor",
     "valor nf", "vr total", "total nf",
 }
+
+# Colunas numéricas de cada relatório. Linha com todas elas vazias e chave sem nenhum dígito não é
+# item: é título de seção ("BEBIDAS") ou marca d'água. Produto sem venda ("Açúcar 1kg;-;-") fica.
+_NUMERICAS_VENDAS = ("quantidade", "valor_venda", "preco_unitario", "valor_custo", "estoque")
+_NUMERICAS_COMPRAS = ("qtde_comprada", "valor_nf", "produtos_total", "custo_unitario")
+
+
+def _celula_vazia(valor) -> bool:
+    return valor is None or (isinstance(valor, float) and math.isnan(valor)) or not str(valor).strip()
+
+
+def _texto_de_rodape(valor) -> str:
+    """Texto sem acento, minúsculo, com espaços colapsados e sem a decoração das pontas."""
+    texto = _strip_acentos(str(valor).replace("\ufeff", "").replace("\xa0", " ")).lower()
+    return re.sub(r"\s+", " ", texto).strip(_DECORACAO_DAS_PONTAS)
+
+
+# Rodapé é linha curta: o texto comparado pelas regras novas tem teto, e nenhuma célula grande custa
+# mais do que isso. O filtro antigo (linear) continua lendo o texto inteiro, como sempre.
+_TETO_DO_TEXTO_DE_RODAPE = 400
+
+
+def _e_rodape_explicito(valor) -> bool:
+    """Parte 2: os rodapés inequívocos que a diretriz manda tirar ("Total do Dia", "Subtotal")."""
+    texto = _texto_de_rodape(valor)[:_TETO_DO_TEXTO_DE_RODAPE]
+    return bool(_RE_RODAPE_EXPLICITO.match(texto) or _RE_RODAPE_EXPLICITO_EM_QUALQUER_PONTO.search(texto)
+                or _linha_de_data(texto))
+
+
+def _e_rodape(valor) -> bool:
+    """A célula-chave é rodapé, total, título de impressão ou marca d'água do PDV: o que o filtro de
+    sempre tirava, salvo nome de produto (parte 1), e os rodapés inequívocos da diretriz (parte 2)."""
+    if _e_rodape_explicito(valor):
+        return True
+    if not _PADRAO_LIXO_ANTIGO.search(str(valor)):
+        return False
+    return not _forma_de_produto(_texto_de_rodape(valor)[:_TETO_DO_TEXTO_DE_RODAPE])
 
 
 def _construir_df_canonico(df_bruto: pd.DataFrame, idx_cab: int,
@@ -521,18 +917,27 @@ def _construir_df_canonico(df_bruto: pd.DataFrame, idx_cab: int,
     return out
 
 
-def _filtrar_linhas_validas(df: pd.DataFrame, chave: str) -> pd.DataFrame:
+def _filtrar_linhas_validas(df: pd.DataFrame, chave: str, numericas: tuple = ()) -> pd.DataFrame:
     """
-    Descarta linhas onde a coluna-chave está vazia, é rodapé/marca d'água, OU
-    é um cabeçalho reimpresso (quebra de página típica do PDV).
+    Descarta linhas onde a coluna-chave está vazia, é rodapé/total/marca d'água
+    (_e_rodape), OU é um cabeçalho reimpresso (quebra de página típica do PDV), e os
+    títulos de seção: chave sem dígito e todas as colunas `numericas` presentes vazias.
     """
     if chave not in df.columns:
         raise ETLValidationError(f"Coluna-chave '{chave}' ausente após o mapeamento.")
     bruto = df[chave].map(lambda v: "" if v is None else str(v).strip())
     valido = bruto.map(lambda v: v.lower() not in ("", "nan", "none"))
-    nao_rodape = ~bruto.str.contains(_PADRAO_LIXO, na=False)
+    # Uma classificação por texto distinto: num relatório por cupom o mesmo nome se repete.
+    rodape = {texto: _e_rodape(texto) for texto in bruto.unique()}
+    nao_rodape = ~bruto.map(rodape).astype(bool)
     nao_cabec = ~bruto.map(_norm_chave).isin(_CABECALHOS_REPETIDOS)
-    return df[valido & nao_rodape & nao_cabec].reset_index(drop=True)
+    filtro = valido & nao_rodape & nao_cabec
+    colunas = [coluna for coluna in numericas if coluna in df.columns]
+    if colunas:
+        vazias = df[colunas].apply(lambda serie: serie.map(_celula_vazia)).all(axis=1)
+        titulo = vazias & ~bruto.str.contains(r"[0-9]", regex=True)
+        filtro &= ~titulo
+    return df[filtro].reset_index(drop=True)
 
 
 # =====================================================================
@@ -554,8 +959,10 @@ _RE_LINHA_CANCELADA = re.compile(r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )(?:CANC|ESTORN
 _RE_LINHA_DEVOLUCAO = re.compile(r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )(?:DEVOL|TROCA)")
 
 
-def _situacao_das_linhas(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int):
-    """Texto normalizado das colunas de status/operação de cada linha; None se não houver."""
+def _situacao_das_linhas(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int,
+                         outro_assunto=None):
+    """Texto normalizado das colunas de status/operação de cada linha; None se não houver.
+    `outro_assunto`: títulos a mais que não são da linha (nas compras, o status do pedido)."""
     titulos = [[_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
                for i in range(idx_cab, idx_cab + linhas_cab)]
     usadas = set(mapa.values())
@@ -563,7 +970,8 @@ def _situacao_das_linhas(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
     for indice, partes in enumerate(zip(*titulos)):
         chave = " ".join(partes).strip()
         if (indice not in usadas and _RE_COLUNA_SITUACAO.search(chave)
-                and not _RE_COLUNA_DE_OUTRO_ASSUNTO.search(chave)):
+                and not _RE_COLUNA_DE_OUTRO_ASSUNTO.search(chave)
+                and not (outro_assunto is not None and outro_assunto.search(chave))):
             colunas.append(indice)
     if not colunas:
         return None
@@ -641,24 +1049,27 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
     situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab)
     if situacao is not None:
         df["_situacao"] = situacao
-    df = _filtrar_linhas_validas(df, "produto")
+    df = _filtrar_linhas_validas(df, "produto", _NUMERICAS_VENDAS)
 
     # Conversões numéricas — NaN vira 0 (linha sem qtd/valor não impacta KPI)
     qualidade = Counter()
+    csv = bruto.attrs.get("format") == "csv"  # só o texto do CSV prova o formato en-US
     df["quantidade"] = _converter_serie(df["quantidade"]).fillna(0.0)
     if "valor_venda" in df.columns:
-        df["valor_venda"] = _converter_serie_monetaria(df["valor_venda"], qualidade)
+        df["_valor_informado"] = _valor_informado(df["valor_venda"])
+        df["valor_venda"] = _converter_serie_monetaria(df["valor_venda"], qualidade, csv)
     elif "preco_unitario" in df.columns:
         # Sem coluna de total: deriva o faturamento da linha (qtd x preço unitário).
         # Cálculo honesto a partir de colunas reais — não é dado inventado.
-        df["valor_venda"] = _converter_serie_monetaria(df["preco_unitario"], qualidade) * df["quantidade"]
+        df["_valor_informado"] = _valor_informado(df["preco_unitario"])
+        df["valor_venda"] = _converter_serie_monetaria(df["preco_unitario"], qualidade, csv) * df["quantidade"]
         logger.info("VENDAS '%s': faturamento derivado de quantidade x preço unitário.", nome)
     else:
         raise ETLValidationError(
             f"Relatório de VENDAS '{nome}' sem coluna de valor (nem total, nem preço unitário)."
         )
     if "valor_custo" in df.columns:
-        df["valor_custo"] = _converter_serie_monetaria(df["valor_custo"], qualidade)
+        df["valor_custo"] = _converter_serie_monetaria(df["valor_custo"], qualidade, csv)
     if "estoque" in df.columns:
         df["estoque"] = _converter_serie(df["estoque"]).fillna(0.0)
 
@@ -676,9 +1087,98 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
         )
     if "_situacao" in df.columns:
         df = _aplicar_situacao_das_vendas(df, nome)
-    df.attrs["qualidade"] = dict(qualidade)
+    df.attrs["qualidade"] = _fechar_qualidade(qualidade)
     df.attrs["cabecalhos"] = cabecalhos
+    df.attrs["celulas_recodificadas"] = int(bruto.attrs.get("celulas_recodificadas", 0))
     return df
+
+
+# Bonificação: mercadoria recebida sem pagamento. Mesma forma das marcas de cancelamento e
+# devolução: início de palavra e sem negação logo antes ("SEM BONIFICACAO" não é bonificação).
+_RE_LINHA_BONIFICACAO = re.compile(r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )(?<!COM )(?<!C )BONIFIC")
+# A operação é uma compra ou, na natureza escrita pelo fornecedor, uma venda ("Compra c/ bonificação",
+# "Compra bonificada", "Venda e bonificação"): a NF foi paga.
+_RE_LINHA_COMPRA = re.compile(r"(?<![A-Z0-9])(?:COMPRA|VENDA)")
+# Nas compras, a marca só vale como fato da própria nota. Com negação em qualquer ponto antes dela
+# ("NAO HOUVE DEVOLUCAO AO FORNECEDOR", "NOTA NAO FOI CANCELADA"), desfeita nas duas palavras seguintes
+# ("CANCELAMENTO REJEITADO", "DEVOLUCAO PENDENTE") ou, no cancelamento, com outro sujeito logo antes
+# ("PAGAMENTO ESTORNADO", "SALDO CANCELADO" do pedido), vale a regra de sempre.
+_RE_NEGACAO = re.compile(r"(?<![A-Z0-9])(?:NAO|SEM|NENHUMA?|NUNCA)(?![A-Z0-9])")
+_RE_MARCA_DESFEITA = re.compile(r"REJEITAD|NEGAD|RECUSAD|INDEFERID|PENDENTE|SOLICITAD|AGUARDAND|ANALISE|"
+                                r"ANDAMENTO|PARCIAL|NAO$")
+_RE_OUTRO_SUJEITO_DO_CANCELAMENTO = re.compile(
+    r"PAGAMENTO|PAGTO|PGTO|TITULOS?|BOLETOS?|PARCELAS?|DUPLICATAS?|COBRANCA|SALDO|PEDIDOS?|ITEM|ITENS|FRETE|"
+    r"ENTREGA|RESERVA|ORCAMENTO|COTACAO")
+
+
+def _marca_da_nota(padrao, texto: str, *, sujeito: bool = False) -> bool:
+    """A marca (cancelamento, devolução ou bonificação) está no texto como fato da própria nota."""
+    encontrado = padrao.search(texto)
+    if encontrado is None or _RE_NEGACAO.search(texto, 0, encontrado.start()):
+        return False
+    antes = texto[:encontrado.start()].split()
+    if sujeito and antes and _RE_OUTRO_SUJEITO_DO_CANCELAMENTO.fullmatch(antes[-1]):
+        return False
+    depois = texto[encontrado.end():]
+    palavras = depois.split()
+    if depois[:1] and not depois[:1].isspace():
+        palavras = palavras[1:]  # o resto da palavra marcada ("ELAMENTO" de "CANCELAMENTO")
+    return not any(_RE_MARCA_DESFEITA.match(palavra) for palavra in palavras[:2])
+# Devolução AO FORNECEDOR, nas compras: só o documento de devolução ("Devolução de compra",
+# "Devolução ao fornecedor") ou o CFOP de devolução de compra escrito como CFOP ("CFOP 5.202"). Não
+# contam "devolução de venda" (o cliente devolveu à loja), o status da NF original ("Devolvida",
+# "Devolvida ao fornecedor"), "troca" nem um número solto de operação ("5202"), e a linha segue a
+# regra de sempre.
+_RE_DEVOLUCAO_DE_COMPRA = re.compile(
+    r"(?<![A-Z0-9])(?<!NAO )(?<!SEM )DEVOLUC(?:AO|OES)\s+(?:DE\s+COMPRAS?|(?:AO|AOS|A|AS|PARA(?:\s+O|\s+OS)?)\s+FORNEC)"
+    r"|\bCFOP\s*[56]\s?(?:201|202|410|411)\b"
+)
+# Coluna de situação que não é da nota: o status do pedido ("Atendido - saldo cancelado") não diz
+# que a NF foi cancelada.
+_RE_COLUNA_DE_OUTRO_ASSUNTO_NAS_COMPRAS = re.compile(r"\b(?:pedido|pedidos|orcamento|cotacao)\b")
+
+
+def _consolidar_compras(df: pd.DataFrame, coluna_valor: str):
+    """
+    Compras líquidas. Retorna (df, resumo da consolidação). Só as marcas explícitas da coluna de
+    situação mudam alguma coisa; o resto segue a regra de sempre (entra a linha com valor positivo):
+      - nota fiscal cancelada, estornada ou inutilizada sai do cálculo;
+      - devolução ao fornecedor (_RE_DEVOLUCAO_DE_COMPRA) desconta o valor e a quantidade;
+      - bonificação (situação BONIFIC, numa linha que não diz compra nem venda) entra só na
+        quantidade: a mercadoria chegou sem pagamento, então não soma no total comprado.
+    Marca com negação antes dela, em qualquer ponto do texto ("NAO HOUVE DEVOLUCAO"), não conta.
+    Sem coluna de situação, o resultado é o de antes.
+    """
+    situacao = df["_situacao"] if "_situacao" in df.columns else pd.Series("", index=df.index)
+
+    def marcadas(padrao):
+        return situacao.map(lambda texto: bool(padrao.search(texto))).astype(bool)
+
+    def marcas_da_nota(padrao, sujeito=False):
+        return situacao.map(lambda texto: _marca_da_nota(padrao, texto, sujeito=sujeito)).astype(bool)
+
+    valor = df[coluna_valor]
+    qtde = df["qtde_comprada"] if "qtde_comprada" in df.columns else pd.Series(0.0, index=df.index)
+    canceladas = marcas_da_nota(_RE_LINHA_CANCELADA, sujeito=True)
+    devolucao = ~canceladas & marcas_da_nota(_RE_DEVOLUCAO_DE_COMPRA) & ((valor != 0) | (qtde != 0))
+    bonificacao = ~canceladas & ~devolucao & marcas_da_nota(_RE_LINHA_BONIFICACAO) & ~marcadas(_RE_LINHA_COMPRA)
+    compra = ~canceladas & ~devolucao & ~bonificacao & (valor > 0)
+    resumo = {
+        "linhas_canceladas": int(canceladas.sum()),
+        "valor_cancelado": float(valor[canceladas].abs().sum()),
+        "linhas_devolucao": int(devolucao.sum()),
+        "valor_devolucoes": float(valor[devolucao].abs().sum()),
+        "linhas_bonificacao": int(bonificacao.sum()),
+        "quantidade_bonificada": float(qtde[bonificacao].abs().sum()),
+    }
+    df = df.copy()
+    df.loc[devolucao, coluna_valor] = -valor[devolucao].abs()
+    df.loc[bonificacao, coluna_valor] = 0.0
+    if "qtde_comprada" in df.columns:
+        df.loc[devolucao, "qtde_comprada"] = -qtde[devolucao].abs()
+        df.loc[bonificacao, "qtde_comprada"] = qtde[bonificacao].abs()
+    df = df[compra | devolucao | bonificacao].drop(columns="_situacao", errors="ignore").reset_index(drop=True)
+    return df, resumo
 
 
 def carregar_compras(caminho: str):
@@ -686,6 +1186,7 @@ def carregar_compras(caminho: str):
     Retorna (df_compras, coluna_valor_usada).
     `coluna_valor_usada` ∈ {"produtos_total", "valor_nf"} — produtos_total
     tem preferência (valor "puro" dos itens; valor_nf inclui frete/imposto).
+    O total já sai líquido de NF cancelada e de devolução ao fornecedor (_consolidar_compras).
     """
     nome = os.path.basename(caminho)
     bruto = _ler_bruto(caminho)
@@ -694,38 +1195,52 @@ def carregar_compras(caminho: str):
 
     idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_COMPRAS, _validar_compras)
     df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
+    situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab,
+                                    outro_assunto=_RE_COLUNA_DE_OUTRO_ASSUNTO_NAS_COMPRAS)
+    if situacao is not None:
+        df["_situacao"] = situacao
     # Chave de validade de linha: fornecedor (NF-level) ou, na ausência dele,
     # produto (item-level) — alinhado ao validador.
     chave_linha = "fornecedor" if "fornecedor" in df.columns else "produto"
-    df = _filtrar_linhas_validas(df, chave_linha)
+    df = _filtrar_linhas_validas(df, chave_linha, _NUMERICAS_COMPRAS)
+    if chave_linha == "fornecedor" and "produto" in df.columns:
+        # Relatório por item com fornecedor e produto: o total inequívoco pode vir na coluna do
+        # produto ("Distribuidora A;SUBTOTAL;15;170,00") e somaria a nota duas vezes. Só os totais da
+        # diretriz: essa coluna nunca passou pelo filtro antigo, e "Transporte", "Filtro" e
+        # "Impresso em Papel Kraft" são itens comprados.
+        rodape_no_produto = df["produto"].map(lambda v: not _celula_vazia(v) and _e_rodape_explicito(v))
+        df = df[~rodape_no_produto.astype(bool)].reset_index(drop=True)
 
     qualidade = Counter()
+    csv = bruto.attrs.get("format") == "csv"  # só o texto do CSV prova o formato en-US
+    if "qtde_comprada" in df.columns:
+        df["qtde_comprada"] = _converter_serie(df["qtde_comprada"]).fillna(0.0)
     if "produtos_total" in df.columns:
         coluna_valor = "produtos_total"
-        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade)
+        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade, csv)
     elif "valor_nf" in df.columns:
         coluna_valor = "valor_nf"
-        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade)
+        df[coluna_valor] = _converter_serie_monetaria(df[coluna_valor], qualidade, csv)
     elif "custo_unitario" in df.columns and "qtde_comprada" in df.columns:
         # Sem coluna de total: deriva o total da linha (qtd x custo unitário).
         # Cálculo honesto a partir de colunas reais — não é dado inventado.
-        qtd = _converter_serie(df["qtde_comprada"]).fillna(0.0)
-        custo = _converter_serie_monetaria(df["custo_unitario"], qualidade)
+        custo = _converter_serie_monetaria(df["custo_unitario"], qualidade, csv)
         coluna_valor = "valor_total_compra"
-        df[coluna_valor] = qtd * custo
+        df[coluna_valor] = df["qtde_comprada"] * custo
         logger.info("COMPRAS '%s': total derivado de quantidade x custo unitário.", nome)
     else:
         raise ETLValidationError(
             f"Relatório de COMPRAS '{nome}' sem coluna de valor reconhecida "
             "(total de NF/compra/custo, nem custo unitário + quantidade)."
         )
-    df = df[df[coluna_valor] > 0].reset_index(drop=True)
+    df, consolidacao = _consolidar_compras(df, coluna_valor)
 
-    if "qtde_comprada" in df.columns:
-        df["qtde_comprada"] = _converter_serie(df["qtde_comprada"]).fillna(0.0)
     if "produto" in df.columns:
         df["_prod_norm"] = df["produto"].map(_normalizar_produto)
-    df.attrs["qualidade"] = dict(qualidade)
+    df.attrs["qualidade"] = _fechar_qualidade(qualidade)
+    df.attrs["celulas_recodificadas"] = int(bruto.attrs.get("celulas_recodificadas", 0))
+    if consolidacao["linhas_canceladas"] or consolidacao["linhas_devolucao"] or consolidacao["linhas_bonificacao"]:
+        df.attrs["consolidacao"] = consolidacao
     return df, coluna_valor
 
 
@@ -865,6 +1380,18 @@ def _alertas_de_valores(qualidade: Counter, situacao, produtos_abc: list) -> lis
             "12.500, foram lidos como decimal (doze e meio), porque a mesma coluna usa ponto decimal "
             "em outras linhas."
         )
+    if qualidade["virgula_como_decimal"]:
+        alertas.append(
+            f"Confira os valores: {qualidade['virgula_como_decimal']} valor(es) com vírgula e 3 casas, como "
+            "12,500, foram lidos como decimal (doze e meio). Se o relatório usa vírgula como separador de "
+            "milhar, esses valores ficaram mil vezes menores."
+        )
+    if qualidade["virgula_como_milhar"]:
+        alertas.append(
+            f"Confira os valores: {qualidade['virgula_como_milhar']} valor(es) com vírgula e 3 casas, como "
+            "12,500, foram lidos como milhar (doze mil e quinhentos), porque a mesma coluna usa ponto decimal "
+            "em outras linhas."
+        )
     if situacao and (situacao["linhas_canceladas"] or situacao["linhas_devolucao"]):
         alertas.append(
             f"Faturamento líquido: {situacao['linhas_canceladas']} linha(s) canceladas ou estornadas "
@@ -879,6 +1406,26 @@ def _alertas_de_valores(qualidade: Counter, situacao, produtos_abc: list) -> lis
     if not produtos_abc:
         alertas.append("Curva ABC não calculada: a receita líquida do período não é positiva.")
     return alertas
+
+
+def _alerta_de_compras(consolidacao: dict) -> str:
+    """Resumo da consolidação das compras (_consolidar_compras), só com o que aconteceu."""
+    partes = []
+    if consolidacao["linhas_canceladas"]:
+        partes.append(f"{consolidacao['linhas_canceladas']} nota(s) cancelada(s), estornada(s) ou inutilizada(s) "
+                      "ficaram fora do total comprado")
+    if consolidacao["linhas_devolucao"]:
+        partes.append(f"{consolidacao['linhas_devolucao']} devolução(ões) ao fornecedor descontaram "
+                      f"R$ {_reais(consolidacao['valor_devolucoes'])}")
+    if consolidacao["linhas_bonificacao"]:
+        partes.append(f"{consolidacao['linhas_bonificacao']} bonificação(ões) entraram só na quantidade comprada, "
+                      "sem valor")
+    return "Compras líquidas: " + "; ".join(partes) + "."
+
+
+def _reais(valor: float) -> str:
+    inteiro, _, centavos = f"{abs(valor):,.2f}".partition(".")
+    return ("-" if valor < 0 else "") + inteiro.replace(",", ".") + "," + centavos
 
 
 # =====================================================================
@@ -1031,6 +1578,22 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
     if qualidade:
         telemetria["valores_monetarios"] = dict(qualidade)
     alertas.extend(_alertas_de_valores(qualidade, situacao, curva_abc["produtos"]))
+
+    # Só aparecem quando aconteceram: relatório sem esses casos sai igual ao de antes.
+    consolidacao = df_c.attrs.get("consolidacao")
+    if consolidacao:
+        telemetria["compras_consolidacao"] = consolidacao
+        alertas.append(_alerta_de_compras(consolidacao))
+    recodificadas = {nome: quantidade for nome, quantidade in (
+        ("vendas", df_v.attrs.get("celulas_recodificadas", 0)),
+        ("compras", df_c.attrs.get("celulas_recodificadas", 0))) if quantidade}
+    if recodificadas:
+        telemetria["celulas_recodificadas"] = recodificadas
+        alertas.append(
+            f"Codificação do texto: {sum(recodificadas.values())} célula(s) misturavam acentos de UTF-8 e de "
+            "Windows-1252 (como \"CafÃ©\") e foram corrigidas antes do cálculo, para o mesmo produto não "
+            "virar dois. Confira os nomes no relatório."
+        )
 
     kpis = {
         "faturamento_total": faturamento_total,

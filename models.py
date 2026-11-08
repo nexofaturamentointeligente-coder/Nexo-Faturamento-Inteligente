@@ -1336,6 +1336,20 @@ class LeadAvaliacao(db.Model):
                                                 server_default=func.current_timestamp())
     atualizado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc,
                                                     onupdate=agora_utc, server_default=func.current_timestamp())
+    # Revisão 5e1b9c3a7d20: de onde o resumo saiu (versões, período, relatórios e contagens do envio,
+    # sem nome de produto), as marcas agregadas, quem registrou o lead e quando confirmou a autorização.
+    versao_regras: Mapped[Optional[str]] = mapped_column(String(40))
+    versao_triagem: Mapped[Optional[str]] = mapped_column(String(40))
+    periodo_inicio: Mapped[Optional[date]] = mapped_column(Date)
+    periodo_fim: Mapped[Optional[date]] = mapped_column(Date)
+    arquivos: Mapped[Optional[int]] = mapped_column(Integer)
+    meta_json: Mapped[Optional[str]] = mapped_column(Text)
+    itens_venda_sem_custo: Mapped[Optional[int]] = mapped_column(Integer)
+    itens_venda_abaixo_custo: Mapped[Optional[int]] = mapped_column(Integer)
+    registrado_por: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="SET NULL", name="fk_lead_avaliacao_registrado_por")
+    )
+    consentimento_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)
@@ -1343,6 +1357,13 @@ class LeadAvaliacao(db.Model):
     __table_args__ = (
         CheckConstraint("status IN (" + ", ".join(f"'{s}'" for s in STATUS_LEAD_AVALIACAO) + ")",
                         name="ck_lead_avaliacao_status"),
+        CheckConstraint("arquivos IS NULL OR arquivos >= 1", name="ck_lead_avaliacao_arquivos"),
+        CheckConstraint("(itens_venda_sem_custo IS NULL OR itens_venda_sem_custo >= 0) "
+                        "AND (itens_venda_abaixo_custo IS NULL OR itens_venda_abaixo_custo >= 0)",
+                        name="ck_lead_avaliacao_itens"),
+        CheckConstraint("periodo_inicio IS NULL OR periodo_fim IS NULL OR periodo_inicio <= periodo_fim",
+                        name="ck_lead_avaliacao_periodo"),
+        Index("ix_lead_avaliacao_registrado_por", "registrado_por"),
         CheckConstraint("score_saude_cadastral IS NULL OR (score_saude_cadastral >= 0 "
                         "AND score_saude_cadastral <= 100)", name="ck_lead_avaliacao_score"),
         CheckConstraint('"vazamento_total_r$" IS NULL OR "vazamento_total_r$" >= 0',
@@ -1388,11 +1409,43 @@ class BrainstormingDadosPdv(db.Model):
                                                               server_default=text("0"))
     criado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc,
                                                 server_default=func.current_timestamp())
+    # Revisão 5e1b9c3a7d20: a staging ampliada. Os arquivos do lead não são guardados; com estas
+    # somas do produto no ano (as mesmas do Raio-X), a triagem e as marcas são refeitas sem eles
+    # (avaliacao_cenario.retriar). chave_produto identifica o produto entre os anos
+    # (avaliacao_motor.chave_produto).
+    chave_produto: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantidade_com_custo: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=Decimal("0"),
+                                                          server_default=text("0"))
+    faturamento_com_custo: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                           server_default=text("0"))
+    custo_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                 server_default=text("0"))
+    perda: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                           server_default=text("0"))
+    vazamento_preco: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                     server_default=text("0"))
+    recuperavel: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                 server_default=text("0"))
+    linhas: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    meses: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    variacao: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    conflito_cadastral: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    estoque_negativo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    bloco_triagem: Mapped[Optional[str]] = mapped_column(String(10))
+    versao_regras: Mapped[Optional[str]] = mapped_column(String(40))
 
     lead = relationship("LeadAvaliacao", back_populates="dados_pdv")
 
     __table_args__ = (
         CheckConstraint("ano_exercicio BETWEEN 2000 AND 2100", name="ck_brainstorming_dados_pdv_ano"),
+        CheckConstraint("length(chave_produto) > 0", name="ck_brainstorming_dados_pdv_chave"),
+        CheckConstraint("quantidade_com_custo >= 0 AND faturamento_com_custo >= 0 AND custo_total >= 0 "
+                        "AND perda >= 0 AND vazamento_preco >= 0 AND recuperavel >= 0 AND linhas >= 0 "
+                        "AND meses >= 0", name="ck_brainstorming_dados_pdv_somas"),
+        CheckConstraint("bloco_triagem IS NULL OR bloco_triagem IN ('urgencia', 'atencao', 'eletiva')",
+                        name="ck_brainstorming_dados_pdv_bloco"),
+        UniqueConstraint("lead_id", "ano_exercicio", "chave_produto",
+                         name="uq_brainstorming_dados_pdv_lead_ano_produto"),
         CheckConstraint("length(trim(descricao_produto)) > 0", name="ck_brainstorming_dados_pdv_descricao"),
         CheckConstraint("custo_medio_registrado IS NULL OR custo_medio_registrado >= 0",
                         name="ck_brainstorming_dados_pdv_custo"),

@@ -143,17 +143,23 @@ flask leads expurgar-pdv --aplicar    # grava
 flask leads expurgar-pdv --dias 45
 ```
 
-A saída mostra só contagens. **Nenhum agendador está configurado**: sem um cron do Render ou o `pg_cron` do Supabase, o TTL não roda sozinho (decisão do dono, seção 5).
+A saída mostra só contagens.
+
+O agendamento diário veio na revisão `6a8f2d4c0e13`: o job `nexo_expurgo_leads_pdv` do `pg_cron`, no próprio banco, às 06:15 UTC. Sem a extensão, a revisão não agenda nada e emite um `WARNING`, que vai para o log do PostgreSQL e não aparece na saída do `flask db upgrade`; o expurgo segue pelo comando e pela própria tela `/admin/leads`, que roda a mesma regra ao ser aberta, no máximo uma vez por hora. Ver `Docs/AVALIACAO_DE_CENARIO.md`, seção 5.
 
 **Downgrade:** trava as duas tabelas e recusa se houver qualquer lead ou linha. Vazias, remove função, índices e tabelas.
 
-**Ainda não existe** formulário, rota ou processamento que grave nessas tabelas: esta etapa é só o esquema, a retenção e o expurgo.
+Esta revisão é só o esquema, a retenção e o expurgo. O restante está em `Docs/AVALIACAO_DE_CENARIO.md`:
+- o processamento no worker isolado;
+- a staging ampliada (revisão `5e1b9c3a7d20`);
+- a triagem;
+- a tela do consultor (`/admin/leads`).
 
 ## 3. Testes
 
-- `tests/test_security_gatekeeper.py` (40): assinaturas e disfarces, BOM não reconhecido, fórmula depois de separador interno, cópia XLSX compacta, recusa por tamanho com orientação própria, XLS verdadeiro, UTF-16, neutralização sem mudar número (inclusive quantidade com sinal e unidade) nem chave de produto, KPIs iguais aos da leitura de antes da Baia, idempotência, cópia neutralizada de CSV e XLSX conferida pelo motor, macros/ActiveX/OLE/vínculos descartados, oito variantes com conteúdo ativo fora dos caminhos de costume (aba renomeada, aba em UTF-16, OLE disfarçado, relação externa, DDE, nome definido), título que começa com `<`, cópia perto do teto, estrutura mínima, recusa sem deixar arquivo, teto de 50 MiB em blocos, log sem conteúdo, envio do cliente e do consultor pelo portal, Raio-X e o worker real (só no Linux).
+- `tests/test_security_gatekeeper.py` (40): assinaturas e disfarces, BOM não reconhecido, fórmula depois de separador interno, cópia XLSX compacta, recusa por tamanho com orientação própria, XLS verdadeiro, UTF-16, neutralização sem mudar número (inclusive quantidade com sinal e unidade) nem chave de produto, KPIs iguais aos da leitura de antes da Baia, idempotência, cópia neutralizada de CSV e XLSX conferida pelo motor, macros/ActiveX/OLE/vínculos descartados, onze variantes com conteúdo ativo fora dos caminhos de costume (aba renomeada, aba com outra extensão, aba em UTF-16, aba no lugar do tema, dos estilos em UTF-16 ou das propriedades, OLE fora de xl/embeddings, OLE com nome de printerSettings, relação externa, DDE fora de xl/externalLinks e nome definido com DDE), título que começa com `<`, cópia perto do teto, estrutura mínima, recusa sem deixar arquivo, teto de 50 MiB em blocos, log sem conteúdo, envio do cliente e do consultor pelo portal, Raio-X e o worker real (só no Linux).
 - `tests/test_leads_avaliacao.py` (8, SQLite): colunas e índices, cifrão, padrões, restrições, CASCADE, regra do expurgo, comando (simulação e aplicação) e downgrade.
-- `tests/test_leads_postgresql.py` (20 verificações em PostgreSQL real): RLS, políticas, privilégios, UUID e padrões do banco, cifrão pelo ORM e por SQL, restrições, política restritiva com uma linha gravada, GRANT e uma política permissiva intrusa, função endurecida e fora do alcance da Data API, mesmo resultado da função e da regra em SQLAlchemy (com o resumo mantido), expurgo concorrente com quem grava o lead, comando, CASCADE, downgrade recusado e aceito, novo upgrade.
+- `tests/test_leads_postgresql.py` (24 verificações em PostgreSQL real): RLS, políticas, privilégios, UUID e padrões do banco, cifrão pelo ORM e por SQL, restrições, política restritiva com uma linha gravada, GRANT e uma política permissiva intrusa, gravação pelo serviço da Avaliação de Cenário, função endurecida e fora do alcance da Data API, mesmo resultado da função e da regra em SQLAlchemy (com o resumo mantido), expurgo concorrente com quem grava o lead, comando, CASCADE, downgrade recusado e aceito, novo upgrade, e o job do expurgo num `pg_cron` simulado (agendado no upgrade, removido no downgrade e agendado de novo).
 - Ajustados: `tests/test_backup_restore.py` (32 tabelas e uma linha de cada tabela nova) e `tests/test_contratos_postgresql.py` (tabelas posteriores).
 
 ## 4. Aplicação (só com autorização)
@@ -163,11 +169,20 @@ A saída mostra só contagens. **Nenhum agendador está configurado**: sem um cr
 3. Aplicar: `flask db upgrade f4c2a8e1d9b6`.
 4. Conferir: as duas tabelas, RLS ligado, 4 políticas, nenhum privilégio de `anon`/`authenticated`, a função e `has_function_privilege('anon', 'expurgar_brainstorming_pdv(integer)', 'EXECUTE') = false`.
 
-O código da Baia não depende da migração e funciona antes dela. O código dos leads só é usado pelo comando `flask leads`.
+O código da Baia não depende da migração e funciona antes dela. A tela `/admin/leads` depende também da revisão `5e1b9c3a7d20`, a staging ampliada; antes dela, a tela mostra o aviso de migrações pendentes e não lê arquivo nenhum. A `6a8f2d4c0e13` só agenda o expurgo no `pg_cron`. Aplique as duas, nessa ordem. Ver `Docs/AVALIACAO_DE_CENARIO.md`, seção 8.
 
 ## 5. Pendências do dono
 
 - **LGPD dos leads:** base legal e aviso de privacidade para coletar nome, e-mail, WhatsApp e loja de quem ainda não é cliente; consentimento registrado; prazo de retenção do próprio `lead_avaliacao` (o expurgo só apaga os dados de PDV, o resumo e o contato ficam); atendimento a pedido de exclusão (apagar o lead leva os dados por CASCADE). Nada disso foi inventado aqui.
-- **Agendamento do expurgo:** cron do Render, `pg_cron` do Supabase ou execução manual.
+- **Agendamento do expurgo:** a revisão `6a8f2d4c0e13` agenda no `pg_cron`. Falta decidir entre duas opções:
+  - habilitar a extensão no Supabase (Database › Extensions) antes de aplicar a revisão;
+  - manter a execução manual ou um cron externo.
+- **Avaliação de Cenário:** as pendências da tela do consultor estão em `Docs/AVALIACAO_DE_CENARIO.md`, seção 9:
+  - LGPD do lead;
+  - limiares da triagem;
+  - `flag_omissao_erp`;
+  - capacidade no Render;
+  - captação pública;
+  - conversão do lead.
 - **TXT e XLS no portal:** a Baia já reconhece os dois, mas o portal aceita só .csv e .xlsx. Habilitar TXT exige mudar `ALLOWED_EXTENSIONS`, os campos de arquivo, o Guia e o NexoBot. Habilitar XLS exige um leitor BIFF (por exemplo `xlrd`), dependência nova a avaliar.
 - **Análises antigas:** ao reprocessar, um produto cujo nome comece com fórmula passa a aparecer com o apóstrofo. Os números não mudam.

@@ -38,7 +38,24 @@ from tests.test_contratos_postgresql import ROOT, TOOLS, _PrivateCluster, _safe_
 
 
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
-REVISAO_LEADS = "f4c2a8e1d9b6"
+# Head das tabelas de lead: a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging e
+# 6a8f2d4c0e13 agenda o expurgo no pg_cron.
+REVISAO_LEADS = "6a8f2d4c0e13"
+JOB_DO_EXPURGO = ("nexo_expurgo_leads_pdv", "15 6 * * *", "SELECT * FROM public.expurgar_brainstorming_pdv(30)")
+# O pg_cron do Supabase, reduzido ao que a revisão 6a8f2d4c0e13 usa: o ensaio prova o agendamento sem
+# instalar a extensão no cluster temporário.
+CRON_DE_ENSAIO = (
+    "CREATE SCHEMA cron",
+    "CREATE TABLE cron.job (jobid bigserial PRIMARY KEY, jobname text UNIQUE, schedule text NOT NULL, "
+    "command text NOT NULL)",
+    "CREATE FUNCTION cron.schedule(job_name text, schedule text, command text) RETURNS bigint LANGUAGE sql AS $$ "
+    "INSERT INTO cron.job (jobname, schedule, command) VALUES (job_name, schedule, command) "
+    "ON CONFLICT (jobname) DO UPDATE SET schedule = EXCLUDED.schedule, command = EXCLUDED.command "
+    "RETURNING jobid $$",
+    "CREATE FUNCTION cron.unschedule(job_name text) RETURNS boolean LANGUAGE sql AS $$ "
+    "WITH apagado AS (DELETE FROM cron.job WHERE jobname = job_name RETURNING 1) "
+    "SELECT EXISTS (SELECT 1 FROM apagado) $$",
+)
 TABELAS = ("lead_avaliacao", "brainstorming_dados_pdv")
 POLITICAS = {
     ("deny_api_access", "RESTRICTIVE", "anon,authenticated", "false", "false"),
@@ -51,7 +68,7 @@ CHECKS = (
     "schema_before_migration", "migration_reaches_head", "metadata_matches_models", "rls_enabled_without_force",
     "policies_for_api_and_server_roles", "api_roles_lose_default_privileges",
     "restrictive_policy_denies_even_with_grant", "uuid_and_defaults_from_database", "dollar_columns_via_orm",
-    "constraints_enforced",
+    "constraints_enforced", "purge_job_scheduled", "service_writes_on_postgresql",
     # 2. Função de expurgo
     "purge_function_hardened", "purge_function_not_executable_by_api_roles", "purge_matches_sqlalchemy_rule",
     "purge_respects_concurrent_writer",
@@ -59,6 +76,7 @@ CHECKS = (
     "purge_command_simulates_and_applies", "cascade_delete",
     # 4. Downgrade
     "downgrade_refused_with_leads", "downgrade_removes_tables_function_and_policies", "upgrade_again",
+    "purge_job_removed_on_downgrade", "purge_job_back_on_upgrade",
 )
 
 
@@ -115,6 +133,7 @@ class _ClusterDosLeads(_PrivateCluster):
     def _etapas(self):
         self._etapa_antes_da_migracao()
         self._etapa_migracao()
+        self._etapa_servico()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
         self._etapa_downgrade()
@@ -172,6 +191,7 @@ class _ClusterDosLeads(_PrivateCluster):
     def _linha(self, sessao, lead, idade):
         from models import BrainstormingDadosPdv
         sessao.add(BrainstormingDadosPdv(lead_id=lead.id, ano_exercicio=2026, descricao_produto="Produto fictício",
+                                         chave_produto=uuid.uuid4().hex[:16],
                                          quantidade=Decimal("2"), valor_venda_bruto=Decimal("20.00"),
                                          criado_em=datetime.now(timezone.utc) - idade))
 
@@ -197,6 +217,61 @@ class _ClusterDosLeads(_PrivateCluster):
             "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated",
             "GRANT USAGE ON SCHEMA public TO anon, authenticated",
         )
+        self.stage = "pg_cron de ensaio"
+        self._executar(*CRON_DE_ENSAIO)
+
+    def _jobs(self):
+        return [tuple(linha) for linha in self._sql("SELECT jobname, schedule, command FROM cron.job ORDER BY jobid")]
+
+    # ------------------------------------------------- 1b. agendamento e gravação pelo serviço
+    def _etapa_servico(self):
+        import avaliacao_cenario
+        from models import BrainstormingDadosPdv, LeadAvaliacao
+        from sqlalchemy import func, select
+        from sqlalchemy.exc import IntegrityError
+        from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
+
+        self.check("purge_job_scheduled", self._jobs() == [JOB_DO_EXPURGO], str(self._jobs()))
+
+        self.stage = "gravação do lead pelo serviço"
+        meses = (relatorio_do_mes(2024, 11, ["1;Cafe 500g;10;20,00;200,00;150,00", "2;Acucar 1kg;5;6,00;30,00;"]),
+                 relatorio_do_mes(2025, 1, ["1;Café 500g;8;20,00;150,00;120,00", "3;Leite 1L;5;5,00;25,00;30,00"]))
+        with tempfile.TemporaryDirectory(prefix="nexo-leads-pg-") as pasta:
+            caminhos = []
+            for numero, conteudo in enumerate(meses, 1):
+                caminho = Path(pasta) / f"arquivo_{numero:02d}.csv"
+                caminho.write_bytes(conteudo)
+                caminhos.append(str(caminho))
+            with self.app.app_context():
+                resultado = avaliar_como_o_worker(caminhos)
+        with self.app.app_context():
+            lead = avaliacao_cenario.registrar(
+                resultado, contato={"nome_contato": "Contato fictício", "email": "lead@example.invalid",
+                                    "whatsapp": None, "nome_loja": "Loja fictícia"}, meses_prata=24)
+            self.db.session.commit()
+            id_lead = lead.id
+            linhas = self.db.session.scalar(select(func.count()).select_from(BrainstormingDadosPdv))
+            gravado = self.db.session.get(LeadAvaliacao, id_lead)
+            resumo = (gravado.status, gravado.arquivos, gravado.vazamento_total_reais, gravado.itens_venda_sem_custo,
+                      gravado.itens_venda_abaixo_custo)
+            repetida = self.db.session.scalars(select(BrainstormingDadosPdv)).first()
+            try:
+                self.db.session.add(BrainstormingDadosPdv(
+                    lead_id=id_lead, ano_exercicio=repetida.ano_exercicio, chave_produto=repetida.chave_produto,
+                    descricao_produto="Repetido", quantidade=Decimal("1"), valor_venda_bruto=Decimal("1.00")))
+                self.db.session.commit()
+                unico = False
+            except IntegrityError:
+                self.db.session.rollback()
+                unico = True
+            avaliacao_cenario.retriar(id_lead)
+            self.db.session.commit()
+            refeito = self.db.session.get(LeadAvaliacao, id_lead).versao_triagem is not None
+        self._executar("DELETE FROM lead_avaliacao")
+        # Café 2025: 8 un a R$ 150,00 com tabela de R$ 20,00 (R$ 10,00); Leite: custo R$ 30,00 > R$ 25,00 (R$ 5,00).
+        self.check("service_writes_on_postgresql",
+                   linhas == 4 and resumo == ("concluido", 2, Decimal("15.00"), 1, 1) and unico and refeito,
+                   f"linhas={linhas} resumo={resumo} unico={unico} refeito={refeito}")
 
     def _etapa_migracao(self):
         from alembic.script import ScriptDirectory
@@ -229,8 +304,9 @@ class _ClusterDosLeads(_PrivateCluster):
         self.stage = "padrões do banco e colunas com cifrão"
         self._executar("INSERT INTO lead_avaliacao (nome_contato, email, nome_loja) "
                        "VALUES ('Fora da aplicação', 'fora@example.invalid', 'Loja')")
-        self._executar("INSERT INTO brainstorming_dados_pdv (lead_id, ano_exercicio, descricao_produto, quantidade, "
-                       "valor_venda_bruto) SELECT id, 2026, 'Produto', 1, 10 FROM lead_avaliacao")
+        self._executar("INSERT INTO brainstorming_dados_pdv (lead_id, ano_exercicio, chave_produto, descricao_produto, "
+                       "quantidade, valor_venda_bruto) SELECT id, 2026, 'c0ffee0000000001', 'Produto', 1, 10 "
+                       "FROM lead_avaliacao")
         [lead_bruto] = self._sql("SELECT id, status, criado_em IS NOT NULL, atualizado_em IS NOT NULL, "
                                  "vazamento_total_r$ FROM lead_avaliacao")
         [linha_bruta] = self._sql("SELECT id, flag_venda_sem_custo, flag_venda_abaixo_custo, flag_omissao_erp, "
@@ -366,8 +442,8 @@ class _ClusterDosLeads(_PrivateCluster):
         # O cenário da etapa dá (1, 5); a versão de um comando só daria (2, 6) e 'expirado' em A, e
         # a que não exigia linha velha daria (2, 5) e 'expirado' em B.
         esperou_a, saida_a, viva_a = self._corrida(
-            ("INSERT INTO brainstorming_dados_pdv (lead_id, ano_exercicio, descricao_produto, quantidade, "
-             "valor_venda_bruto) VALUES (:i, 2026, 'Envio novo', 1, 10)",
+            ("INSERT INTO brainstorming_dados_pdv (lead_id, ano_exercicio, chave_produto, descricao_produto, "
+             "quantidade, valor_venda_bruto) VALUES (:i, 2026, 'e0e0e0e0e0e0e0e0', 'Envio novo', 1, 10)",
              "UPDATE lead_avaliacao SET status = 'concluido' WHERE id = :i"))
         esperou_b, saida_b, viva_b = self._corrida(
             ("DELETE FROM brainstorming_dados_pdv WHERE lead_id = :i",
@@ -477,11 +553,13 @@ class _ClusterDosLeads(_PrivateCluster):
                    self._revisao() == REVISAO_ANTERIOR and not self._tabelas() & set(TABELAS)
                    and not self._funcao_existe() and self._politicas() == {}
                    and {"plano_nivel", "diagnostico_entrada"} <= self._tabelas(), f"revisão={self._revisao()}")
+        self.check("purge_job_removed_on_downgrade", self._jobs() == [], str(self._jobs()))
 
         self.stage = "novo upgrade"
         self._migrar(upgrade, "head")
         self.check("upgrade_again", self._revisao() == self.head and self._funcao_existe()
                    and self._politicas() == {t: POLITICAS for t in TABELAS} and self._diferencas_metadata() == [])
+        self.check("purge_job_back_on_upgrade", self._jobs() == [JOB_DO_EXPURGO], str(self._jobs()))
 
 
 def _worker_main(bin_dir, work_dir):

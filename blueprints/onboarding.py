@@ -16,7 +16,9 @@ Regras:
   - O que o plano não libera sai do resultado antes do template e do JSON
     (raio_x_servico.visao): o desfoque da tela é desenho sobre um marcador.
   - Mesma vaga única de upload/processamento das análises (etl_uploads.vaga_de_entrada) e
-    limite de 10 envios por hora por usuário, somando a página e a API.
+    limite de 10 envios por hora por usuário, somando a página e a API. Com a vaga ocupada
+    (a de entrada ou a do processo isolado, etl_runtime), a API responde 503 com Retry-After
+    e a página avisa para enviar de novo; nada é gravado.
 """
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
@@ -39,6 +41,10 @@ onboarding_bp = Blueprint("onboarding", __name__)
 limite_raio_x = limiter.shared_limit("10 per hour", scope="raio-x", key_func=chave_limite_usuario)
 
 MENSAGEM_OCUPADO = "Há outro envio ou processamento em andamento. Tente novamente em instantes."
+ESPERA_SEGUNDOS = 30
+# Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada: a resposta é
+# a mesma da vaga de entrada (etl_uploads._UPLOAD_ADMISSION).
+CODIGO_OCUPADO = "busy"
 
 
 @onboarding_bp.after_request
@@ -52,6 +58,14 @@ def _cabecalhos_api(resposta):
 
 def _erro_json(mensagem: str, status: int, **extra):
     return jsonify(erro=mensagem, resposta=mensagem, fonte="local", acao=None, destino=None, **extra), status
+
+
+def _ocupado_json():
+    """503 com Retry-After: a fila de espera do cliente. A vaga costuma liberar em segundos
+    (no máximo 2 minutos)."""
+    resposta, status = _erro_json(MENSAGEM_OCUPADO, 503)
+    resposta.headers["Retry-After"] = str(ESPERA_SEGUNDOS)
+    return resposta, status
 
 
 # =====================================================================
@@ -114,6 +128,9 @@ def _json_raio_x(contexto: dict) -> dict:
 def _executar_raio_x() -> int:
     """Lê os relatórios, confere de novo a assinatura e grava o resultado. Devolve quantos
     arquivos foram lidos. Erros de entrada saem como ETLInputError, com mensagem segura."""
+    # Até 2 minutos no processo isolado: a transação de leitura da requisição termina antes,
+    # sem segurar conexão do pooler; a gravação abre outra, curta, depois.
+    db.session.rollback()
     resultado, nomes = raio_x_servico.processar_envio(request.files.getlist("arquivos"))
     empresa = current_user.empresa
     # A leitura pode levar até 2 minutos: a situação da empresa é relida antes de gravar.
@@ -152,7 +169,10 @@ def diagnostico_enviar():
             quantidade = _executar_raio_x()
         except ETLInputError as erro:
             db.session.rollback()
-            flash(erro.safe_message, "danger")
+            if erro.code == CODIGO_OCUPADO:
+                flash(MENSAGEM_OCUPADO, "warning")
+            else:
+                flash(erro.safe_message, "danger")
         except SQLAlchemyError as erro:
             db.session.rollback()
             current_app.logger.warning("Raio-X não gravado (%s).", type(erro).__name__)
@@ -216,11 +236,13 @@ def api_diagnostico():
 def api_diagnostico_enviar():
     with vaga_de_entrada() as livre:
         if not livre:
-            return _erro_json(MENSAGEM_OCUPADO, 503)
+            return _ocupado_json()
         try:
             _executar_raio_x()
         except ETLInputError as erro:
             db.session.rollback()
+            if erro.code == CODIGO_OCUPADO:
+                return _ocupado_json()
             return _erro_json(erro.safe_message, 422, codigo=erro.code)
         except SQLAlchemyError as erro:
             db.session.rollback()

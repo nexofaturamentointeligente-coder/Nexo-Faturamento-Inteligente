@@ -61,6 +61,7 @@ As referências `db:<chave>` de `upload_relatorio.caminho_arquivo` e `guia_topic
 - Código/recursos e versões das dependências, arquivos de migração e configurações de implantação.
 - Segredos, papéis globais, senhas de roles, certificados, parâmetros de infraestrutura e configurações do projeto/integrações. `pg_dump` cobre um banco, não todos os objetos globais do cluster nem uma conta Supabase.
 - Se um inventário autorizado revelar Supabase Storage fora deste código, copiar os objetos separadamente: backup do banco recupera metadados do Storage, não os bytes dos buckets.
+- O job `nexo_expurgo_leads_pdv` do pg_cron (revisão `6a8f2d4c0e13`, expurgo diário dos dados de PDV dos leads) mora no esquema `cron` da extensão, fora das tabelas da aplicação. Depois de restaurar num banco com pg_cron, conferir `SELECT jobname, schedule FROM cron.job` e, se faltar, reagendar como a revisão faz; sem pg_cron, o expurgo segue pelo comando `flask leads expurgar-pdv --aplicar`.
 
 O cache de `storage.py` em `tempfile.gettempdir()/nexo_arquivos` é regenerável e não é fonte de recuperação. Use um cache vazio na homologação para evitar mascarar arquivos ausentes. O cache só é preenchido quando `storage.resolver()` recebe uma referência `db:` (testes e verificações manuais; a aplicação lê os bytes direto do banco), é reutilizado apenas por existir, sem conferir conteúdo, e guarda cópias em claro. PDFs são gerados em memória a partir dos relatórios/KPIs/ABC e do código; cópias exportadas fora do sistema precisam de guarda própria se houver necessidade de preservá-las.
 

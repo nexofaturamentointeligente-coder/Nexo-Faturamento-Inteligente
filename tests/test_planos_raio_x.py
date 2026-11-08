@@ -617,6 +617,34 @@ class RaioXPortalTests(_PlanosCase):
         corpo = self.cliente_http.get(API_AUDITORIA).get_json()
         self.assertEqual(corpo["auditoria"]["itens_abaixo_custo"][0]["perda"], 10.0)
 
+    def test_raio_x_gravado_antes_do_saneamento_abre_a_auditoria(self):
+        # Raio-X gravado pelo motor de 91e5fb0 (a referência do golden): sem os campos de CMV
+        # líquido. A tela e a API continuam abrindo, com os campos novos nulos.
+        from tests.test_raio_x_regression import EXPECTED
+        antigo = json.loads(EXPECTED.read_text(encoding="utf-8"))["raio_x"]["janeiro_fevereiro"]["resultado"]
+        self.assertNotIn("cmv_liquido", antigo["auditoria"])
+        self.assertEqual(antigo["versao"], "raio-x-2026-11.3")
+        self._mudar_plano("PRATA")
+        self._enviar_raio_x(("jan.csv", JANEIRO), ("fev.csv", FEVEREIRO))
+        linha = self._linha()
+        gravado = json.loads(linha.resultado)
+        linha.resultado = json.dumps({**antigo, "recomendacao": gravado["recomendacao"],
+                                      "nomes_arquivos": gravado["nomes_arquivos"]})
+        linha.versao_regras = antigo["versao"]
+        self.db.session.commit()
+        pagina = self.cliente_http.get(AUDITORIA)
+        self.assertEqual(pagina.status_code, 200)
+        self.assertNotIn("Líquida, com bonificações e devoluções", pagina.get_data(as_text=True))
+        corpo = self.cliente_http.get(API_AUDITORIA)
+        self.assertEqual(corpo.status_code, 200)
+        self.assertIsNone(corpo.get_json()["auditoria"]["cmv_liquido"])
+        self.assertEqual(self.cliente_http.get(PAGINA).status_code, 200)
+
+    def test_raio_x_novo_grava_a_versao_do_saneamento(self):
+        self._enviar_raio_x(("jan.csv", JANEIRO))
+        self.assertEqual(self._linha().versao_regras, raio_x.VERSAO_REGRAS)
+        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.4")
+
     def test_api_envia_e_le_o_raio_x(self):
         self.assertEqual(self.cliente_http.get(API).status_code, 404)
         resposta = self._enviar_raio_x(("jan.csv", JANEIRO), api=True)
@@ -673,9 +701,28 @@ class RaioXPortalTests(_PlanosCase):
         try:
             html = self._enviar_raio_x(("jan.csv", JANEIRO), seguir=True).get_data(as_text=True)
             self.assertIn("Há outro envio ou processamento em andamento", html)
-            self.assertEqual(self._enviar_raio_x(("jan.csv", JANEIRO), api=True).status_code, 503)
+            api = self._enviar_raio_x(("jan.csv", JANEIRO), api=True)
+            # A fila de espera do cliente: 503 com o tempo sugerido para tentar de novo.
+            self.assertEqual((api.status_code, api.headers.get("Retry-After")), (503, "30"))
         finally:
             etl_uploads._UPLOAD_ADMISSION.release()
+        self.assertIsNone(self._linha())
+
+    def test_processo_isolado_ocupado_responde_como_a_fila_de_espera(self):
+        # A vaga do processo isolado (etl_runtime._ADMISSION) ocupada: o _run_job real recusa antes
+        # de abrir processo; a API responde 503 com Retry-After e a página avisa, sem gravar nada.
+        import etl_runtime
+        real = lambda caminhos, limits=None: etl_runtime._run_job("raio_x", caminhos, limits=limits)
+        self.assertTrue(etl_runtime._ADMISSION.acquire(blocking=False))
+        try:
+            with patch("etl_runtime.run_raio_x", side_effect=real):
+                html = self._enviar_raio_x(("jan.csv", JANEIRO), seguir=True).get_data(as_text=True)
+                api = self._enviar_raio_x(("jan.csv", JANEIRO), api=True)
+        finally:
+            etl_runtime._ADMISSION.release()
+        self.assertIn("Há outro envio ou processamento em andamento", html)
+        self.assertEqual((api.status_code, api.headers.get("Retry-After")), (503, "30"))
+        self.assertEqual(api.get_json()["erro"], "Há outro envio ou processamento em andamento. Tente novamente em instantes.")
         self.assertIsNone(self._linha())
 
     def test_assinatura_suspensa_durante_a_leitura_nao_grava(self):

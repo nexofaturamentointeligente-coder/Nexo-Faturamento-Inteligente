@@ -4,7 +4,8 @@ Conhecimento" saiu do menu administrativo (PR #33, 28/10/2026).
 
 Em toda página administrativa — inclusive as do CMS do Guia, que continuam
 alcançáveis por URL — a sidebar renderiza exatamente Dashboard, Empresas,
-Contratos, Lixeira, Análises, Suporte e Configurações; nenhum link da sidebar (menu ou rodapé)
+Contratos, Lixeira, Análises, Avaliação de Cenário (11/2026, leads, só consultores),
+Suporte e Configurações; nenhum link da sidebar (menu ou rodapé)
 aponta para /admin/guia; fora das páginas do próprio CMS, "/admin/guia" não
 aparece em lugar nenhum da página; o item ativo é o da página corrente e, no
 CMS, nenhum; "Sair" segue único no rodapé. A sidebar do cliente não ganha o
@@ -22,7 +23,8 @@ import unittest
 
 from tests.deploy_support import DeployTestCase
 
-ROTULOS_ADMIN = ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"]
+ROTULOS_ADMIN = ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Avaliação de Cenário", "Suporte",
+                 "Configurações"]
 # O cliente das fixtures é BRONZE: o Raio-X do PDV é livre e a Auditoria de custos (PRATA) aparece
 # com o cadeado e o selo UPGRADE, cujo texto conta no rótulo (planos por nível, entitlements.py).
 ROTULOS_CLIENTE = ["Visão Geral", "Enviar relatórios", "Histórico", "Raio-X do PDV", "Auditoria de custos UPGRADE",
@@ -101,6 +103,7 @@ class NavegacaoAdminSemBaseDeConhecimentoTests(DeployTestCase):
             "/admin/analises": "Análises", "/admin/analises/nova": "Análises",
             "/admin/analises/gerenciar": "Análises", f"/admin/analises/gerenciar/{e}": "Análises",
             f"/admin/analise/{a}/upload": "Análises", f"/admin/analise/{a}/relatorio": "Análises",
+            "/admin/leads": "Avaliação de Cenário",
             "/admin/tickets": "Suporte", "/admin/suporte": "Suporte",
             "/admin/configuracoes": "Configurações",
             "/admin/guia": None, "/admin/guia/novo": None, f"/admin/guia/editar/{t}": None,

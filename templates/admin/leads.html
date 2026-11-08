@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}Avaliação de Cenário — NEXO Admin{% endblock %}
+{% block page_title %}Avaliação de Cenário{% endblock %}
+
+{% macro badge_lead(status) -%}
+{%- set cores = {'concluido': 'b-green', 'convertido': 'b-purple', 'expirado': 'b-muted'} -%}
+{%- set textos = {'pendente': 'PENDENTE', 'em_processamento': 'EM PROCESSAMENTO', 'concluido': 'CONCLUÍDA',
+                  'processamento_manual': 'REVISÃO MANUAL', 'convertido': 'CONVERTIDO', 'expirado': 'DADOS EXPIRADOS'} -%}
+<span class="nexo-badge {{ cores.get(status, 'b-amber') }}">{{ textos.get(status, status|upper) }}</span>
+{%- endmacro %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Avaliação de Cenário</h1>
+        <p class="sub">Leads avaliados a partir dos relatórios de vendas do PDV: saúde do cadastro, valor recuperável e a triagem em Urgência, Atenção e Eletiva. Os dados de PDV de cada lead saem em {{ retencao_dias }} dias; o resumo fica.</p>
+    </div>
+</div>
+
+{% if not disponivel %}
+<div class="aviso-contrato is-alerta" role="status">
+    <i class="bi bi-database-exclamation" aria-hidden="true"></i>
+    <div>
+        <strong>Falta aplicar as migrações da Avaliação de Cenário.</strong>
+        <p>A tela depende das revisões 5e1b9c3a7d20 e 6a8f2d4c0e13 no banco de dados. Até lá, nenhuma avaliação é lida nem gravada.</p>
+    </div>
+</div>
+{% else %}
+<section class="nexo-card mb-4" aria-labelledby="novaAvaliacaoTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="novaAvaliacaoTitulo"><i class="bi bi-funnel text-purple" aria-hidden="true"></i> Nova avaliação</h2>
+            <p class="sub">Relatórios de Vendas por produto com o período no cabeçalho, um por mês ou por ano civil, sem períodos repetidos: até {{ max_arquivos }} arquivos (3 anos).</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% set teto_bytes = config.MAX_CONTENT_LENGTH or 20971520 %}
+        <form method="POST" action="{{ url_for('leads.avaliar') }}" enctype="multipart/form-data" data-envio-unico data-envio-longo>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="row g-3">
+                <div class="col-12 col-md-6">
+                    <label class="nexo-label" for="leadContato">Nome do contato <span class="req" aria-hidden="true">*</span></label>
+                    <input type="text" class="form-control" id="leadContato" name="nome_contato" maxlength="120" autocomplete="off" required value="{{ formulario.get('nome_contato', '') }}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="nexo-label" for="leadLoja">Nome da loja <span class="req" aria-hidden="true">*</span></label>
+                    <input type="text" class="form-control" id="leadLoja" name="nome_loja" maxlength="120" autocomplete="off" required value="{{ formulario.get('nome_loja', '') }}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="nexo-label" for="leadEmail">E-mail <span class="req" aria-hidden="true">*</span></label>
+                    <input type="email" class="form-control" id="leadEmail" name="email" maxlength="254" autocomplete="off" required value="{{ formulario.get('email', '') }}">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="nexo-label" for="leadWhatsapp">WhatsApp</label>
+                    <input type="tel" class="form-control" id="leadWhatsapp" name="whatsapp" maxlength="25" autocomplete="off" aria-describedby="leadWhatsappDica" value="{{ formulario.get('whatsapp', '') }}">
+                    <p class="field-hint mt-1 mb-0" id="leadWhatsappDica">Com DDD. Opcional.</p>
+                </div>
+            </div>
+            <label class="dropzone mt-3" data-dz data-dz-multiplo data-max-arquivos="{{ max_arquivos }}" data-max-bytes="{{ teto_bytes }}">
+                <div class="dz-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></div>
+                <div class="dz-estado" id="dzEstadoLead" data-dz-estado data-vazio=""></div>
+                <div class="dz-title" id="dzNomeLead" data-dz-label data-vazio="Arraste os relatórios ou clique para selecionar">Arraste os relatórios ou clique para selecionar</div>
+                <div class="dz-hint" id="dzHintLead">De 1 a {{ max_arquivos }} arquivos .csv ou .xlsx, até {{ teto_bytes // 1048576 }} MB somados.</div>
+                <div class="dz-erro" data-dz-erro role="alert"></div>
+                <input type="file" name="arquivos" accept=".csv,.xlsx" multiple data-dz-input
+                       aria-labelledby="novaAvaliacaoTitulo dzEstadoLead dzNomeLead" aria-describedby="dzHintLead">
+            </label>
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="leadAutorizacao" name="autorizacao" value="1" required>
+                <label class="form-check-label" for="leadAutorizacao">O lead autorizou o uso destes relatórios nesta avaliação.</label>
+            </div>
+            <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Avaliar</button>
+        </form>
+        <p class="field-hint mt-3 mb-0">Os arquivos são lidos num processo isolado e descartados em seguida, sem guardar nem o nome deles: o NEXO grava os totais por produto e ano, por {{ retencao_dias }} dias, e o resumo da avaliação. Com muitos meses, a leitura pode levar até dois minutos.</p>
+    </div>
+</section>
+
+<section class="nexo-card" aria-labelledby="leadsTitulo">
+    <div class="nexo-card-head"><div><h2 id="leadsTitulo"><i class="bi bi-people text-purple" aria-hidden="true"></i> Leads avaliados</h2></div></div>
+    <div class="nexo-card-body">
+        {% if leads %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table" id="tabelaLeads">
+                <thead>
+                    <tr>
+                        <th>Loja e contato</th>
+                        <th>Situação</th>
+                        <th class="text-end">Saúde</th>
+                        <th class="text-end">Recuperável</th>
+                        <th>Plano sugerido</th>
+                        <th>Avaliado em</th>
+                        <th class="text-end col-acao">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lead in leads %}
+                    <tr>
+                        <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong><br><small class="t-mut text-break">{{ lead.nome_contato }}</small><br><small class="t-mut t-email">{{ lead.email }}</small></td>
+                        <td>{{ badge_lead(lead.status) }}</td>
+                        <td class="text-end fw-num">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}{% else %}—{% endif %}</td>
+                        <td class="text-end fw-num">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</td>
+                        <td>{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</td>
+                        <td>{{ m.horario(lead.consentimento_em or lead.criado_em) }}</td>
+                        <td class="text-end col-acao">
+                            <a class="btn-ghost btn-sm-x" href="{{ url_for('leads.detalhe', lead_id=lead.id) }}" aria-label="Abrir a avaliação de {{ lead.nome_loja }}"><i class="bi bi-eye" aria-hidden="true"></i> Abrir</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% if total_leads > leads | length %}<p class="field-hint mt-2 mb-0">Mostrando as {{ leads | length }} avaliações mais recentes de {{ m.num(total_leads) }}.</p>{% endif %}
+        {% else %}
+        <p class="t-mut mb-0">Nenhum lead avaliado ainda.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+{% endblock %}

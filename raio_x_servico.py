@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 _BLOCO = 64 * 1024
 CAMPOS_MARGEM = ("custo_total", "custo_medio", "margem_valor", "margem_percentual")
+CAMPOS_MARGEM_LIQUIDA = ("margem_liquida_valor", "margem_liquida_percentual")
+CAMPOS_CMV_LIQUIDO = ("cmv_liquido", "custo_bonificacoes", "custo_devolucoes")
 CAMPOS_FATIA = ("faturamento", "itens", "faturamento_sem_custo", "pct_faturamento_sem_custo", "custo_total",
                 "margem_valor", "margem_percentual", "perda_abaixo_custo", "vazamento_preco", "recuperavel",
                 "devolucoes")
@@ -66,8 +68,13 @@ def _gravar_limitado(arquivo, caminho: Path, limits, numero: int) -> str:
     return digest.hexdigest()
 
 
-def processar_envio(arquivos, limits=None) -> tuple[dict, list]:
-    """(resultado do Raio-X, nomes seguros dos arquivos), na ordem em que foram enviados."""
+def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio_x") -> tuple[dict, list]:
+    """(resultado do Raio-X, nomes seguros dos arquivos), na ordem em que foram enviados.
+
+    `executar` troca a operação do processo isolado (padrão: etl_runtime.run_raio_x; a Avaliação
+    de Cenário usa etl_runtime.run_avaliacao_cenario) e `origem` marca o log da Baia. O resto da
+    entrada (teto, assinatura, recusa de arquivo repetido e diretório temporário) é o mesmo."""
+    executar = etl_runtime.run_raio_x if executar is None else executar
     arquivos = [arquivo for arquivo in arquivos if arquivo is not None and arquivo.filename]
     if not arquivos:
         raise ETLInputError("raio_x_vazio", "Selecione ao menos um relatório de vendas (CSV ou XLSX).")
@@ -97,14 +104,14 @@ def processar_envio(arquivos, limits=None) -> tuple[dict, list]:
                     security_gatekeeper.inspecionar_arquivo(caminho, extensao, rotulo=f"Arquivo {numero}")
                 except security_gatekeeper.SecurityGatekeeperError as erro:
                     security_gatekeeper.registrar_recusa(erro, sha256=digest, tamanho=caminho.stat().st_size,
-                                                         extensao=extensao, origem="raio_x")
+                                                         extensao=extensao, origem=origem)
                     raise
                 if digest in vistos:
                     raise ETLInputError("raio_x_repetido", f"Arquivo {numero}: é igual a outro arquivo enviado.")
                 vistos.add(digest)
                 caminhos.append(str(caminho))
                 nomes.append(nome[:80])
-            resultado = etl_runtime.run_raio_x(caminhos, limits)
+            resultado = executar(caminhos, limits)
     except OSError:
         raise ETLInputError("upload_io", "Não foi possível preparar os arquivos enviados. Tente novamente.") from None
     return resultado, nomes
@@ -183,13 +190,21 @@ def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
             for campo in ("custo_total", "margem_valor", "margem_percentual"):
                 fatia[campo] = None
     auditoria = resultado["auditoria"]
+    # Raio-X gravado antes do saneamento de 11/2026 (raio-x-2026-11.3) não tem os campos líquidos:
+    # eles entram como nulos, a mesma forma do que o plano não libera, e a tela e a API não quebram.
+    for campo in CAMPOS_MARGEM_LIQUIDA + CAMPOS_CMV_LIQUIDO:
+        auditoria.setdefault(campo, None)
     if "auditoria_abaixo_custo" not in liberadas:
         auditoria["itens_abaixo_custo"] = None
     if not margem:
         auditoria["margem_por_item"] = None
         auditoria["margem_valor"] = auditoria["margem_percentual"] = None
+        for campo in CAMPOS_MARGEM_LIQUIDA:
+            auditoria[campo] = None
     if "diagnostico_cmv" not in liberadas:
         auditoria["custo_total"] = None
+        for campo in CAMPOS_CMV_LIQUIDO:
+            auditoria[campo] = None
     if "alerta_precificacao" not in liberadas:
         auditoria["precificacao"] = None
 

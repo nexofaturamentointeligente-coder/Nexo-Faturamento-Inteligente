@@ -414,6 +414,7 @@ class _PrivateDrill(unittest.TestCase):
         db.session.add(lead)
         db.session.flush()
         db.session.add(BrainstormingDadosPdv(lead_id=lead.id, ano_exercicio=2026, codigo_produto="P1",
+                                             chave_produto="0123456789abcdef",
                                              descricao_produto="Produto fictício", quantidade=3,
                                              valor_venda_bruto=30, custo_medio_registrado=12.5,
                                              flag_venda_abaixo_custo=True, vazamento_estimado_reais=4.5,

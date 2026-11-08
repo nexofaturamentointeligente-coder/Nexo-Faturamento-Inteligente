@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ lead.nome_loja }} · Avaliação de Cenário — NEXO Admin{% endblock %}
+{% block page_title %}Avaliação de Cenário{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1 class="text-break">{{ lead.nome_loja }}</h1>
+        <p class="sub text-break">{{ lead.nome_contato }} · <span class="t-email">{{ lead.email }}</span>{% if lead.whatsapp %} · WhatsApp {{ lead.whatsapp }}{% endif %}</p>
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('leads.lista') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar aos leads</a>
+    </div>
+</div>
+
+{% if lead.status == 'expirado' or not linhas_pdv %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-hourglass-bottom" aria-hidden="true"></i>
+    <div>
+        <strong>Dados de PDV indisponíveis.</strong>
+        <p>Os totais por produto e ano saem {{ retencao_dias }} dias depois do envio; o resumo abaixo fica. Para ver os itens de novo, envie os relatórios outra vez.</p>
+    </div>
+</div>
+{% elif expira_em %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-shield-lock" aria-hidden="true"></i>
+    <div>
+        <strong>Retenção dos dados de PDV.</strong>
+        <p>Os totais por produto e ano deste lead saem em {{ m.horario(expira_em) }}, se ele não virar cliente. O resumo da avaliação fica.</p>
+    </div>
+</div>
+{% if not triagem_atual %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+    <div>
+        <strong>Triagem feita com regras anteriores.</strong>
+        <p>Os blocos abaixo são os da versão {{ lead.versao_triagem or 'sem versão' }}; os motivos de cada produto só aparecem com as regras atuais. Use "Refazer a triagem" ou envie os relatórios de novo.</p>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Saúde do cadastro</span><span class="kpi-icon is-info"><i class="bi bi-heart-pulse" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}<small> / 100</small>{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Parte do faturamento com custo informado e cadastro sem conflito.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Valor recuperável</span><span class="kpi-icon is-amber"><i class="bi bi-cash-coin" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Vendas abaixo do preço de referência ou do custo, somadas por produto e ano.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Plano sugerido</span><span class="kpi-icon is-green"><i class="bi bi-award" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}{{ lead.arquivos or 0 }} relatório(s)</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com venda sem custo</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_sem_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos sem custo de aquisição cadastrado no PDV em algum ano.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com preço médio abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_abaixo_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos, em algum ano, por valor médio inferior ao custo médio registrado.</div>
+        </div>
+    </div>
+</div>
+
+{% for bloco in ['urgencia', 'atencao', 'eletiva'] %}
+{% set resumo = resumos[bloco] %}
+<section class="nexo-card mb-4" aria-labelledby="bloco{{ bloco }}">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="bloco{{ bloco }}">{{ rotulos_blocos[bloco] }}{% if resumo %} · {{ m.num(resumo.itens) }} produto(s){% endif %}</h2>
+            {% if resumo %}<p class="sub">Faturamento R$ {{ m.brl(resumo.faturamento) }} · recuperável R$ {{ m.brl(resumo.recuperavel) }}</p>{% endif %}
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if resumo and resumo.motivos %}
+        <ul class="mb-3">
+            {% for motivo, quantos in resumo.motivos.items() %}
+            <li>{{ rotulos_motivos.get(motivo, motivo) }}: {{ m.num(quantos) }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% if itens[bloco] %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th>Anos</th><th class="text-end">Faturamento</th><th class="text-end">Recuperável</th><th>Motivos</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in itens[bloco] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.nome }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}</td>
+                        <td class="t-mono">{{ item.anos | join(', ') }}</td>
+                        <td class="text-end fw-num">R$ {{ m.brl(item.faturamento) }}</td>
+                        <td class="text-end fw-num">R$ {{ m.brl(item.recuperavel) }}</td>
+                        <td>{{ item.motivos | join('; ') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% if resumo and resumo.itens > itens[bloco] | length %}<p class="field-hint mt-2 mb-0">Mostrando os {{ itens[bloco] | length }} de maior valor recuperável.</p>{% endif %}
+        {% elif not resumo or not resumo.itens %}
+        <p class="t-mut mb-0">Nenhum produto neste bloco.</p>
+        {% endif %}
+    </div>
+</section>
+{% endfor %}
+
+<section class="nexo-card mb-4" aria-labelledby="refazerTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="refazerTitulo"><i class="bi bi-arrow-repeat text-purple" aria-hidden="true"></i> Refazer a avaliação</h2>
+            <p class="sub">Refazer a triagem usa os dados gravados e as regras atuais ({{ versao_triagem_atual }}; a deste lead é {{ lead.versao_triagem or 'sem versão' }}); um novo envio troca os dados do lead pelos dos relatórios enviados.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if linhas_pdv and lead.status != 'expirado' %}
+        <form method="POST" action="{{ url_for('leads.retriar', lead_id=lead.id) }}" class="mb-4" data-envio-unico>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-ghost"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refazer a triagem</button>
+        </form>
+        {% endif %}
+        {% if lead.status != 'convertido' %}
+        {% set teto_bytes = config.MAX_CONTENT_LENGTH or 20971520 %}
+        <form method="POST" action="{{ url_for('leads.reenviar', lead_id=lead.id) }}" enctype="multipart/form-data" data-envio-unico data-envio-longo>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="dropzone" data-dz data-dz-multiplo data-max-arquivos="{{ max_arquivos }}" data-max-bytes="{{ teto_bytes }}">
+                <div class="dz-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></div>
+                <div class="dz-estado" id="dzEstadoReenvio" data-dz-estado data-vazio=""></div>
+                <div class="dz-title" id="dzNomeReenvio" data-dz-label data-vazio="Arraste os relatórios ou clique para selecionar">Arraste os relatórios ou clique para selecionar</div>
+                <div class="dz-hint" id="dzHintReenvio">De 1 a {{ max_arquivos }} arquivos .csv ou .xlsx, até {{ teto_bytes // 1048576 }} MB somados.</div>
+                <div class="dz-erro" data-dz-erro role="alert"></div>
+                <input type="file" name="arquivos" accept=".csv,.xlsx" multiple data-dz-input
+                       aria-labelledby="refazerTitulo dzEstadoReenvio dzNomeReenvio" aria-describedby="dzHintReenvio">
+            </label>
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="reenvioAutorizacao" name="autorizacao" value="1" required>
+                <label class="form-check-label" for="reenvioAutorizacao">O lead autorizou o uso destes relatórios nesta avaliação.</label>
+            </div>
+            <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Avaliar com os novos relatórios</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+{% endblock %}

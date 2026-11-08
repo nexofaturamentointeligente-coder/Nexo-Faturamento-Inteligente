@@ -67,6 +67,16 @@ def main():
                 for path in request["paths"]:
                     validate_input(path, Path(path).suffix.lower(), limits)
                 result = diagnosticar(request["paths"])
+            elif request["operation"] == "avaliacao_cenario" and request["paths"]:
+                # Avaliação de Cenário (lead): a mesma validação e a mesma leitura do Raio-X, mais a
+                # matriz produto x ano (avaliacao_motor). Quem grava é o processo pai.
+                from avaliacao_motor import avaliar_cenario
+                from raio_x import MAX_ARQUIVOS
+                if len(request["paths"]) > MAX_ARQUIVOS:
+                    raise ValueError("Operação inválida.")
+                for path in request["paths"]:
+                    validate_input(path, Path(path).suffix.lower(), limits)
+                result = avaliar_cenario(request["paths"])
             else:
                 raise ValueError("Operação inválida.")
         envelope = {"ok": True, "result": result}

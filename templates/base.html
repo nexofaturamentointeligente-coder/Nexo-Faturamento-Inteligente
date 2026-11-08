@@ -106,6 +106,9 @@
             <a class="nav-item {{ 'active' if request.endpoint in ['admin.analises', 'admin.analise_nova', 'admin.analise_upload', 'admin.analise_relatorio', 'admin.processar_analise', 'admin.analises_gerenciar', 'admin.analises_empresa'] }}" href="{{ url_for('admin.analises') }}">
                 <i class="bi bi-clipboard-data"></i> Análises
             </a>
+            <a class="nav-item {{ 'active' if (request.endpoint or '').startswith('leads.') }}" href="{{ url_for('leads.lista') }}">
+                <i class="bi bi-funnel"></i> Avaliação de Cenário
+            </a>
             <a class="nav-item {{ 'active' if request.endpoint in ['admin.tickets', 'admin.ticket_detalhe'] }}" href="{{ url_for('admin.tickets') }}">
                 <i class="bi bi-life-preserver"></i> Suporte
             </a>

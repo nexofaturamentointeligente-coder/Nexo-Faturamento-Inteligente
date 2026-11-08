@@ -331,6 +331,7 @@ class NavegadorCase(ContratosCase):
         s.commit()
         self.empresa_longa_id = longa.id_empresa
         self._raio_x_extenso()
+        self._lead_extenso()
 
     def _raio_x_extenso(self):
         """Raio-X do PDV com nomes longos e totais de nove dígitos (o mesmo teto dos cards do
@@ -352,6 +353,34 @@ class NavegadorCase(ContratosCase):
         raio_x_servico.salvar(self.empresa_id, self.cliente_id, resultado, raio_x.recomendar(resultado, 24),
                               [f"vendas-por-produto-loja-matriz-{mes:02d}-2025.csv" for mes in range(5, 13)])
         self.db.session.commit()
+
+    def _lead_extenso(self):
+        """Avaliação de Cenário com nomes longos e valores de nove dígitos, em dois anos, para as
+        telas do consultor: a lista e o detalhe com os blocos da triagem e as tabelas de itens."""
+        import tempfile
+        import avaliacao_cenario
+        from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
+        with tempfile.TemporaryDirectory(prefix="lead-navegador-") as pasta:
+            caminhos = []
+            for ano, mes in ((2024, 11), (2024, 12), (2025, 1), (2025, 2)):
+                linhas = []
+                for i, nome in enumerate(PRODUTOS_LONGOS, 1):
+                    queda = ano == 2025 and i % 2 == 1  # venda média cai 80% de um ano para o outro
+                    quantidade, valor = (300, 360_000) if queda else (1500, 1_800_000 + 100 * i)
+                    custo = "" if i == 2 else ("1900000,00" if i % 2 == 1 else "1000000,00")
+                    linhas.append(f"{i};{nome};{quantidade};1234,56;{valor},00;{custo}")
+                caminho = Path(pasta) / f"arquivo_{ano}_{mes:02d}.csv"
+                caminho.write_bytes(relatorio_do_mes(ano, mes, linhas))
+                caminhos.append(str(caminho))
+            resultado = avaliar_como_o_worker(caminhos)
+        lead = avaliacao_cenario.registrar(resultado, contato={
+            "nome_contato": "Maria Aparecida dos Santos Oliveira Pereira da Silva Albuquerque",
+            "email": "maria.aparecida.santos.oliveira@supermercado-ficticio-irmaos-albuquerque.example.invalid",
+            "whatsapp": "5511912345678",
+            "nome_loja": "Supermercado Fictício Irmãos Albuquerque & Filhos Comércio de Alimentos Ltda – Filial Centro",
+        }, registrado_por=self.admin_id, meses_prata=24)
+        self.db.session.commit()
+        self.lead_id = lead.id
 
     # ------------------------------------------------------------ navegador
     def _rota(self, rota):
@@ -474,7 +503,9 @@ class NavegadorCase(ContratosCase):
                 f"{base}/detalhes",
                 # Formulários com linha de botões "Voltar / Confirmar": os dois precisam caber.
                 f"{base}/contratos/{self.contrato_longo_id}/prorrogar", f"{base}/contratos/{self.contrato_longo_id}/cobertura",
-                f"{base}/regras-contratuais/ativar"]
+                f"{base}/regras-contratuais/ativar",
+                # Avaliação de Cenário: formulário de envio, lista e detalhe com as tabelas da triagem.
+                "/admin/leads", f"/admin/leads/{self.lead_id}"]
 
     def paginas_cliente(self):
         return ["/cliente/dashboard", f"/cliente/analise/{self.analise_id}", "/cliente/historico", "/cliente/upload",
@@ -580,17 +611,18 @@ class OverflowNavegadorTests(NavegadorCase):
         self.assertEqual(pagina.locator("#buscaEmpresa").input_value(), "")
 
     def test_sidebar_item_longo_nao_encosta_no_indicador(self):
-        """O rótulo mais largo de cada menu (admin: "Dashboard", 75,9 px na Inter; cliente:
+        """O rótulo mais largo de cada menu (admin: "Avaliação de Cenário", desde 11/2026; cliente:
         "Enviar relatórios") nunca encosta no ponto do item ativo."""
-        for email, caminho, rotulo in (("admin-test@example.invalid", "/admin/dashboard", "Dashboard"),
+        for email, caminho, rotulo in (("admin-test@example.invalid", "/admin/leads", "Avaliação de Cenário"),
                                        ("cliente-test@example.invalid", "/cliente/upload", "Enviar relatórios")):
             pagina = self.abrir(1440, 900)
             self.entrar(pagina, email)
             self.ir(pagina, caminho)
             if email.startswith("admin"):
-                # Pré-condição: a premissa "Dashboard é o rótulo mais largo" só vale com estes seis itens.
+                # Pré-condição: a premissa "Avaliação de Cenário é o rótulo mais largo" só vale com estes itens.
                 self.assertEqual([r.strip() for r in pagina.locator(".sidebar-nav .nav-item").all_text_contents()],
-                                 ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"])
+                                 ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Avaliação de Cenário",
+                                  "Suporte", "Configurações"])
             m = self.medir(pagina)
             self.assertEqual(m["sidebar"]["rotulo"], rotulo, m["sidebar"])
             self.assertTrue(m["sidebar"]["fluxo"], "o indicador deve ser um item do flex, não absoluto")
@@ -604,7 +636,8 @@ class OverflowNavegadorTests(NavegadorCase):
         rotulos = pagina.locator(".sidebar-nav .nav-item").all_text_contents()
         rotulos = [r.strip() for r in rotulos]
         self.assertNotIn("Base de Conhecimento", rotulos, rotulos)
-        self.assertEqual(rotulos, ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Suporte", "Configurações"])
+        self.assertEqual(rotulos, ["Dashboard", "Empresas", "Contratos", "Lixeira", "Análises", "Avaliação de Cenário",
+                                   "Suporte", "Configurações"])
 
     def test_upload_acessivel_pelo_teclado_e_sem_envio_vazio(self):
         pagina = self.abrir(1366, 768)

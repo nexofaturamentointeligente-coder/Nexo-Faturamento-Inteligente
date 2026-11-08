@@ -3,19 +3,24 @@
     flask leads expurgar-pdv              # simulação: conta o que sairia e desfaz tudo
     flask leads expurgar-pdv --aplicar    # apaga as linhas e marca os leads expirados
     flask leads expurgar-pdv --dias 45    # outro prazo (mínimo de 1 dia)
+    flask leads retriar <id do lead>      # refaz marcas e triagem a partir dos dados gravados
 
 Regra: as linhas de brainstorming_dados_pdv com mais de `dias` dias, de leads que não
 converteram, saem; o lead que fica sem nenhuma linha passa a 'expirado'. O resumo em
 lead_avaliacao (score, vazamento total, plano recomendado e prioridades) fica.
 
-No PostgreSQL quem expurga é a função expurgar_brainstorming_pdv da revisão f4c2a8e1d9b6, a
-mesma que um agendador dentro do banco chamaria; nos demais bancos (o SQLite de testes e de
-desenvolvimento), a mesma regra em SQLAlchemy. Nenhum agendador está configurado: rodar
-contra produção só com autorização. A saída mostra só contagens, nunca dados pessoais.
+No PostgreSQL quem expurga é a função expurgar_brainstorming_pdv da revisão f4c2a8e1d9b6; nos
+demais bancos (o SQLite de testes e de desenvolvimento), a mesma regra em SQLAlchemy.
+
+Agendamento: a revisão 6a8f2d4c0e13 agenda a função todo dia às 03:15 de Brasília no pg_cron do
+próprio banco, onde a extensão estiver habilitada (no Supabase, Database › Extensions). Sem
+pg_cron, este comando é o caminho (um cron externo pode chamá-lo). Rodar contra produção só com
+autorização. A saída mostra só contagens, nunca dados pessoais.
 """
 
 from dataclasses import dataclass
 from datetime import timedelta
+import json
 
 import click
 from sqlalchemy import delete, exists, select, text, update
@@ -105,3 +110,28 @@ def registrar_comandos(app):
         click.echo(f"Linhas de PDV com mais de {dias} dias {'removidas' if aplicar else 'a remover'}: "
                    f"{resultado.linhas_removidas}; leads {'expirados' if aplicar else 'a expirar'}: "
                    f"{resultado.leads_expirados}")
+
+    @leads.command("retriar")
+    @click.argument("lead_id")
+    def retriar(lead_id):
+        """Refaz as marcas e a triagem de um lead a partir dos dados de PDV gravados (sem os arquivos)."""
+        import uuid
+        import avaliacao_cenario
+        try:
+            identificador = uuid.UUID(lead_id)
+        except ValueError:
+            raise click.BadParameter("Identificador de lead inválido.", param_hint="LEAD_ID") from None
+        try:
+            lead = avaliacao_cenario.retriar(identificador)
+            db.session.commit()
+        except avaliacao_cenario.LeadIndisponivel as erro:
+            db.session.rollback()
+            raise click.ClickException(str(erro)) from None
+        except Exception:
+            db.session.rollback()
+            raise
+        blocos = {nome: json.loads(getattr(lead, f"resumo_{nome}_json"))["itens"]
+                  for nome in ("urgencia", "atencao", "eletiva")}
+        click.echo(f"Triagem refeita ({lead.versao_triagem}): urgência {blocos['urgencia']}, atenção "
+                   f"{blocos['atencao']}, eletiva {blocos['eletiva']}; itens com venda sem custo "
+                   f"{lead.itens_venda_sem_custo}, abaixo do custo {lead.itens_venda_abaixo_custo}.")

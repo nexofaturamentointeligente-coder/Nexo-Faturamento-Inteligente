@@ -145,6 +145,88 @@ def _csv_signature(path):
         _reject("csv_incompatible", "O conteúdo do arquivo não é compatível com o formato CSV.")
 
 
+# Um arquivo UTF-8 com um único byte de outra codificação (um "é" de Windows-1252 colado de
+# outro sistema) não decodifica como UTF-8 e cai inteiro para cp1252 (ou latin1): os acentos
+# certos viram "Ã©". Cada sequência UTF-8 desfeita assim é refeita célula a célula; o byte
+# estranho fica como o cp1252 o lê. Sem isso, "Café" de um mês e "CafÃ©" de outro viram dois
+# produtos, e a chave do produto (sem acento) ainda sai "CAFA".
+def _continuacoes_utf8(encoding):
+    """Como `encoding` lê os bytes de continuação do UTF-8 (0x80 a 0xBF)."""
+    caracteres = []
+    for byte in range(0x80, 0xC0):
+        try:
+            caracteres.append(bytes([byte]).decode(encoding))
+        except UnicodeDecodeError:
+            pass  # indefinido no cp1252: um arquivo com ele nem é lido como cp1252
+    return "".join(caracteres)
+
+
+def _padrao_utf8_desfeito(encoding):
+    continuacao = "[" + re.escape(_continuacoes_utf8(encoding)) + "]"
+    return re.compile(f"[Â-ß]{continuacao}|[à-ï]{continuacao}{{2}}"
+                      f"|[ð-ô]{continuacao}{{3}}")
+
+
+_UTF8_DESFEITO = {encoding: _padrao_utf8_desfeito(encoding) for encoding in ("cp1252", "latin1")}
+
+
+# Caractere que uma sequência UTF-8 desfeita costuma esconder num texto em português: Latin-1 (letras
+# acentuadas, ç, º, NBSP) e a pontuação do Windows-1252 (aspas curvas, travessão, reticências, €, •, ™).
+# "É" + NBSP de um CSV cp1252 legítimo também forma UTF-8 válido, mas dá "ɠ" (U+0260), e fica como está.
+_PONTUACAO_CP1252 = frozenset("€‚„…†‡‰‹›‘’“”•–—™")
+
+
+def _caractere_plausivel(caractere):
+    return "\xa0" <= caractere <= "ÿ" or caractere in _PONTUACAO_CP1252
+
+
+def _utf8_refeito(trecho, encoding):
+    """O caractere da sequência UTF-8 lida como `encoding`, ou None se ela não for plausível.
+
+    O BOM lido como texto ("ï»¿") fica como está: é o resto de BOM que a Baia trata à parte
+    (security_gatekeeper._RESTOS_DE_BOM), e a cópia neutralizada o regrava byte a byte."""
+    try:
+        refeito = trecho.encode(encoding).decode("utf-8")
+    except UnicodeError:
+        return None
+    return refeito if _caractere_plausivel(refeito) else None
+
+
+def _refazer_utf8(texto, encoding):
+    """O texto com cada sequência UTF-8 plausível lida como `encoding` refeita ("CafÃ©" -> "Café").
+
+    "Ã" + NBSP depois de letra ("MAÇÃ VERDE" num CSV cp1252 legítimo) daria "à" no meio da
+    palavra, o que o português não tem: fica como está."""
+    def refazer(encontrado):
+        trecho = encontrado.group()
+        refeito = _utf8_refeito(trecho, encoding)
+        if refeito is None:
+            return trecho
+        inicio = encontrado.start()
+        if refeito == "à" and inicio > 0 and texto[inicio - 1].isalpha():
+            return trecho
+        return refeito
+    return _UTF8_DESFEITO[encoding].sub(refazer, texto)
+
+
+def _reparar_codificacao(rows, encoding, budget):
+    """Refaz no lugar o UTF-8 desfeito das células; devolve quantas mudaram. A decisão é da célula,
+    e não da proporção do arquivo: o mesmo nome sai igual em todos os meses de um envio, e o que
+    não é UTF-8 plausível (ver _caractere_plausivel) fica como o cp1252 o lê."""
+    if encoding not in _UTF8_DESFEITO:
+        return 0
+    reparadas = 0
+    for row in rows:
+        budget.check()
+        for index, cell in enumerate(row):
+            if cell and not cell.isascii():
+                novo = _refazer_utf8(cell, encoding)
+                if novo != cell:
+                    row[index] = novo
+                    reparadas += 1
+    return reparadas
+
+
 def _csv_input(path, budget, materialize):
     _csv_signature(path)
     selected = None
@@ -180,10 +262,12 @@ def _csv_input(path, budget, materialize):
                 "separator": separator}
     if not materialize:
         return metadata
+    reparadas = _reparar_codificacao(values, encoding, budget)
     rectangular = [row + [None] * (columns - len(row)) for row in values]
     frame = _trim(pd.DataFrame(rectangular, dtype=object))
     # A Baia de Segurança regrava o CSV neutralizado com o mesmo separador, quando possível.
-    frame.attrs.update({"format": "csv", "separator": separator, "encoding": encoding})
+    frame.attrs.update({"format": "csv", "separator": separator, "encoding": encoding,
+                        "celulas_recodificadas": reparadas})
     return frame
 
 

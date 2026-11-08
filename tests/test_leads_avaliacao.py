@@ -6,7 +6,7 @@ tests/test_leads_postgresql.py. Os dados são fictícios.
 """
 
 import contextlib
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import io
 import uuid
@@ -17,7 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from tests.deploy_support import ROOT, DeployTestCase
 
 AGORA = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
-REVISAO = "f4c2a8e1d9b6"
+# Última revisão das tabelas de lead (a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging e
+# 6a8f2d4c0e13 agenda o expurgo no pg_cron, sem efeito no SQLite).
+REVISAO = "6a8f2d4c0e13"
+REVISAO_QUE_RECUSA = "5e1b9c3a7d20"
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
 
 
@@ -36,8 +39,9 @@ class _LeadsCase(DeployTestCase):
     def linha(self, lead, dias_atras, **campos):
         from models import BrainstormingDadosPdv
         dados = {"lead_id": lead.id, "ano_exercicio": 2026, "codigo_produto": "P1",
-                 "descricao_produto": "Produto fictício", "quantidade": Decimal("3"),
-                 "valor_venda_bruto": Decimal("30.00"), "criado_em": AGORA - timedelta(days=dias_atras)}
+                 "chave_produto": uuid.uuid4().hex[:16], "descricao_produto": "Produto fictício",
+                 "quantidade": Decimal("3"), "valor_venda_bruto": Decimal("30.00"),
+                 "criado_em": AGORA - timedelta(days=dias_atras)}
         dados.update(campos)
         linha = BrainstormingDadosPdv(**dados)
         self.db.session.add(linha)
@@ -57,20 +61,34 @@ class EsquemaTests(_LeadsCase):
         self.assertEqual(colunas, {
             "id", "nome_contato", "email", "whatsapp", "nome_loja", "score_saude_cadastral", "vazamento_total_r$",
             "status", "plano_recomendado_codigo", "resumo_urgencia_json", "resumo_atencao_json",
-            "resumo_eletiva_json", "criado_em", "atualizado_em"})
+            "resumo_eletiva_json", "criado_em", "atualizado_em",
+            # 5e1b9c3a7d20
+            "versao_regras", "versao_triagem", "periodo_inicio", "periodo_fim", "arquivos", "meta_json",
+            "itens_venda_sem_custo", "itens_venda_abaixo_custo", "registrado_por", "consentimento_em"})
         colunas = {c["name"] for c in inspetor.get_columns("brainstorming_dados_pdv")}
         self.assertEqual(colunas, {
             "id", "lead_id", "ano_exercicio", "codigo_produto", "descricao_produto", "quantidade",
             "valor_venda_bruto", "custo_medio_registrado", "flag_venda_sem_custo", "flag_venda_abaixo_custo",
-            "flag_omissao_erp", "vazamento_estimado_r$", "criado_em"})
+            "flag_omissao_erp", "vazamento_estimado_r$", "criado_em",
+            # 5e1b9c3a7d20
+            "chave_produto", "quantidade_com_custo", "faturamento_com_custo", "custo_total", "perda",
+            "vazamento_preco", "recuperavel", "linhas", "meses", "variacao", "conflito_cadastral",
+            "estoque_negativo", "bloco_triagem", "versao_regras"})
         [fk] = inspetor.get_foreign_keys("brainstorming_dados_pdv")
         self.assertEqual((fk["name"], fk["referred_table"], fk["options"].get("ondelete")),
                          ("fk_brainstorming_dados_pdv_lead", "lead_avaliacao", "CASCADE"))
-        [fk] = inspetor.get_foreign_keys("lead_avaliacao")
-        self.assertEqual((fk["referred_table"], fk["referred_columns"]), ("plano_nivel", ["codigo"]))
+        fks = {fk["referred_table"]: fk for fk in inspetor.get_foreign_keys("lead_avaliacao")}
+        self.assertEqual(set(fks), {"plano_nivel", "usuario"})
+        self.assertEqual(fks["plano_nivel"]["referred_columns"], ["codigo"])
+        self.assertEqual((fks["usuario"]["referred_columns"], fks["usuario"]["options"].get("ondelete")),
+                         (["id_usuario"], "SET NULL"))
         indices = {i["name"] for t in ("lead_avaliacao", "brainstorming_dados_pdv") for i in inspetor.get_indexes(t)}
         self.assertTrue({"ix_lead_avaliacao_plano", "ix_lead_avaliacao_status", "ix_lead_avaliacao_email",
-                         "ix_brainstorming_dados_pdv_lead", "ix_brainstorming_dados_pdv_criado_em"} <= indices)
+                         "ix_lead_avaliacao_registrado_por", "ix_brainstorming_dados_pdv_lead",
+                         "ix_brainstorming_dados_pdv_criado_em"} <= indices)
+        unicos = {u["name"]: u["column_names"] for u in inspetor.get_unique_constraints("brainstorming_dados_pdv")}
+        self.assertEqual(unicos.get("uq_brainstorming_dados_pdv_lead_ano_produto"),
+                         ["lead_id", "ano_exercicio", "chave_produto"])
 
     def test_valores_com_cifrao_no_nome_da_coluna_e_padroes(self):
         lead = self.lead(status="pendente", vazamento_total_reais=Decimal("1234.56"),
@@ -107,6 +125,12 @@ class EsquemaTests(_LeadsCase):
             "loja vazia": {"nome_loja": ""},
             "whatsapp curto": {"whatsapp": "123"},
             "plano inexistente": {"plano_recomendado_codigo": "DIAMANTE"},
+            # 5e1b9c3a7d20
+            "nenhum relatório": {"arquivos": 0},
+            "itens sem custo negativos": {"itens_venda_sem_custo": -1},
+            "itens abaixo do custo negativos": {"itens_venda_abaixo_custo": -1},
+            "período invertido": {"periodo_inicio": date(2025, 2, 1), "periodo_fim": date(2025, 1, 31)},
+            "consultor inexistente": {"registrado_por": 987654321},
         }
         for caso, campos in invalidos.items():
             with self.subTest(caso=caso):
@@ -114,10 +138,20 @@ class EsquemaTests(_LeadsCase):
                     self.lead(**campos)
                 self.db.session.rollback()
         lead = self.lead()
+        # Gravada antes do laço: cada caso desfaz o que fez, e esta linha precisa continuar lá.
+        repetida = self.linha(lead, 1, chave_produto="a1b2c3d4e5f60718")
+        self.db.session.commit()
         for caso, campos in {"ano": {"ano_exercicio": 1999}, "descrição vazia": {"descricao_produto": " "},
                              "custo negativo": {"custo_medio_registrado": Decimal("-1")},
                              "vazamento negativo": {"vazamento_estimado_reais": Decimal("-1")},
-                             "lead inexistente": {"lead_id": uuid.uuid4()}}.items():
+                             "lead inexistente": {"lead_id": uuid.uuid4()},
+                             # 5e1b9c3a7d20
+                             "chave vazia": {"chave_produto": ""},
+                             "soma negativa": {"perda": Decimal("-0.01")},
+                             "meses negativos": {"meses": -1},
+                             "bloco desconhecido": {"bloco_triagem": "imediata"},
+                             "produto repetido no ano": {"chave_produto": repetida.chave_produto,
+                                                         "lead_id": repetida.lead_id}}.items():
             with self.subTest(caso=caso):
                 with self.assertRaises(IntegrityError):
                     self.linha(lead, 1, **campos)
@@ -251,8 +285,13 @@ class DowngradeTests(_LeadsCase):
             self._migrar("downgrade", REVISAO_ANTERIOR)
         self.assertEqual(saida.exception.code, 1)
         self.assertIn("Downgrade da Avaliação de Cenário recusado", registro.output[0])
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        # O SQLite não tem DDL transacional no Alembic: o passo sem efeito da 6a8f2d4c0e13 pode ficar
+        # registrado antes da recusa da 5e1b9c3a7d20. No PostgreSQL a recusa desfaz tudo (ensaio próprio).
+        self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
+                      (REVISAO, REVISAO_QUE_RECUSA))
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
+        colunas = {c["name"] for c in inspect(self.db.engine).get_columns("brainstorming_dados_pdv")}
+        self.assertIn("chave_produto", colunas)
         self.db.session.execute(text("DELETE FROM lead_avaliacao"))
         self.db.session.commit()
         self._migrar("downgrade", REVISAO_ANTERIOR)
