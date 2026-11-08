@@ -443,6 +443,11 @@ html[data-theme="light"] .nexo-modal .btn-outline-light { border-color: var(--bo
 html[data-theme="light"] .nexo-modal .btn-outline-light:hover { background: var(--lilas-opaco); border-color: var(--glass-border-2); color: var(--roxo-forte); }
 html[data-theme="light"] .nexo-modal .btn-danger { background: linear-gradient(135deg, #b91c1c 0%, #dc2626 100%); }
 html[data-theme="light"] .nexo-modal .text-muted { color: var(--text-muted) !important; }
+html[data-theme="light"] .termos-modal .field-hint { color: var(--text-muted); }
+html[data-theme="light"] .termos-modal .form-check-input { background-color: var(--surface); border-color: var(--campo-borda); }
+html[data-theme="light"] .termos-modal .form-check-input:checked { background-color: var(--primary-3); border-color: var(--primary-3); }
+html[data-theme="light"] .termos-modal .form-check-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.28); }
+html[data-theme="light"] .termos-modal .form-check-input:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
 html[data-theme="light"] .nexo-modal .btn:focus-visible { outline-color: var(--primary-2); }
 /* O X branco do Bootstrap some sobre o claro. */
 html[data-theme="light"] .btn-close-white { filter: none; }

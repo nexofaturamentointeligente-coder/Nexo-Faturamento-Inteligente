@@ -2185,6 +2185,53 @@ input, textarea, select, option,
 }
 .config-documento form { margin-top: 14px; }
 .config-documento textarea { min-height: 260px; font-size: 0.88rem; }
+.config-alteracao { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; padding: 0; border: 0; }
+.config-alteracao legend { width: 100%; float: none; margin-bottom: 4px; }
+.config-historico { margin-top: 18px; }
+.config-historico summary { margin-top: 0; }
+.config-historico-lista { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px; }
+.config-historico-lista > li { min-width: 0; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: var(--radius-sm); }
+.config-historico-topo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 0.88rem; }
+
+/* ---- Aceite dos Termos de Uso e da Política de Privacidade (modal bloqueante) ----
+   O servidor já entrega o modal aberto (d-block) e o fundo (modal-backdrop show); a página
+   atrás fica inert. Sem JavaScript continua igual, e nada aqui o fecha. */
+body.termos-bloqueio { overflow: hidden; }
+.termos-modal { overflow-y: auto; }
+.termos-modal .modal-title { display: flex; align-items: center; gap: 8px; margin: 0; }
+.termos-modal .modal-title .bi { color: var(--primary-2); }
+.termos-aviso { margin-bottom: 14px; }
+.termos-documento { min-width: 0; margin-top: 18px; }
+.termos-documento + .termos-documento { padding-top: 18px; border-top: 1px solid var(--glass-border); }
+.termos-documento h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 1rem; font-weight: 700; }
+.termos-documento-texto {
+  margin-top: 10px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.88rem;
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+}
+.termos-documento-texto:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.termos-rodape { flex-direction: column; align-items: stretch; }
+.termos-form { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 0; }
+.termos-form .form-check { margin: 0; }
+.termos-saidas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.termos-saidas .field-hint { flex: 1 1 100%; }
+/* Sobre o fundo do modal, a dica padrão fica abaixo de 4,5:1 (mesma cor do .text-muted dos modais). */
+.termos-modal .field-hint { color: #b2adcf; }
+/* A caixa do aceite fica fora do .app-shell: as mesmas regras da caixa do painel. */
+.termos-modal .form-check-input {
+  width: 1.15em; height: 1.15em; margin-top: 0.2em;
+  background-color: rgba(9, 7, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.42);
+}
+.termos-modal .form-check-input:checked { background-color: var(--primary-3); border-color: var(--primary); }
+.termos-modal .form-check-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.25); }
+.termos-modal .form-check-input:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.termos-modal .form-check-label { color: var(--text); }
+/* Pouca altura (celular deitado, zoom de 200%): o diálogo de altura fixa espremeria o texto e
+   cortaria o rodapé com as saídas. Ele cresce, e quem rola é o próprio modal. */
+@media (max-height: 600px) {
+  .termos-modal .modal-dialog-scrollable { height: auto; }
+  .termos-modal .modal-dialog-scrollable .modal-content { max-height: none; overflow: visible; }
+  .termos-modal .modal-dialog-scrollable .modal-body { overflow: visible; }
+}
 .usuario-corrigir-email summary { width: fit-content; cursor: pointer; color: var(--bs-link-color); font-size: 0.82rem; font-weight: 600; }
 .usuario-corrigir-email summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
 .usuario-corrigir-email form { max-width: 420px; }

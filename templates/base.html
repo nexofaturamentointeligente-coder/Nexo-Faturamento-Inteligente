@@ -54,7 +54,7 @@
     {% block extra_head %}{% endblock %}
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body{% if bloqueio_termos %} class="termos-bloqueio"{% endif %}>
 
 {# ===================================================================
    Layout interno (sidebar + topbar) para usuário autenticado.
@@ -67,9 +67,11 @@
    .claude/prompt_context.md regra 4).
    =================================================================== #}
 {% if current_user.is_authenticated %}
-{# Primeiro item da ordem de Tab: pula sidebar, topbar e sino direto para o conteúdo. #}
-<a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
-<div class="app-shell" id="appShell">
+{# Primeiro item da ordem de Tab: pula sidebar, topbar e sino direto para o conteúdo.
+   Com o aceite dos termos pendente, o portal fica inerte atrás do modal (sem JavaScript
+   também): nada dele recebe foco nem clique, e o servidor nem desenhou a página pedida. #}
+{% if not bloqueio_termos %}<a class="skip-link" href="#conteudo">Pular para o conteúdo</a>{% endif %}
+<div class="app-shell" id="appShell"{% if bloqueio_termos %} inert{% endif %}>
 
     <aside class="sidebar" id="sidebar">
         {# Fechar a gaveta no celular: fica ao lado dela, sobre o véu (oculto no desktop). #}
@@ -107,7 +109,7 @@
             <a class="nav-item {{ 'active' if request.endpoint in ['admin.tickets', 'admin.ticket_detalhe'] }}" href="{{ url_for('admin.tickets') }}">
                 <i class="bi bi-life-preserver"></i> Suporte
             </a>
-            <a class="nav-item {{ 'active' if request.endpoint in ['admin.configuracoes', 'admin.configuracoes_documento'] }}" href="{{ url_for('admin.configuracoes') }}">
+            <a class="nav-item {{ 'active' if request.endpoint in ['admin.configuracoes', 'admin.configuracoes_documento', 'admin.termos_aceites'] }}" href="{{ url_for('admin.configuracoes') }}">
                 <i class="bi bi-gear"></i> Configurações
             </a>
             {# A Base de Conhecimento (CMS do Guia) saiu do menu administrativo em 28/10/2026
@@ -293,8 +295,9 @@
 {% endif %}
 
             {# Flashes globais pertencem somente às páginas autenticadas.
-               A tela de login renderiza seus próprios erros dentro do card. #}
-            {% if current_user.is_authenticated %}
+               A tela de login renderiza seus próprios erros dentro do card, e o modal
+               do aceite dos termos, dentro dele. #}
+            {% if current_user.is_authenticated and not bloqueio_termos %}
                 {% with messages = get_flashed_messages(with_categories=true) %}
                     {% if messages %}
                     <div class="flash-stack">
@@ -325,6 +328,11 @@
 </div>
 {% else %}
 </div>
+{% endif %}
+
+{% if bloqueio_termos %}
+{% from "_macros.html" import modal_termos %}
+{{ modal_termos(termos_documentos, termos_proximo) }}
 {% endif %}
 
     <!-- Bootstrap bundle (Popper incluso). SEC-009: SRI em todo script de CDN. -->
@@ -1027,7 +1035,7 @@
       };
     </script>
 
-    {% if current_user.is_authenticated %}
+    {% if current_user.is_authenticated and not bloqueio_termos %}
     {# ---------------- Tempo real: sininho ao vivo (Socket.IO) ---------------- #}
     <div class="nexo-toast-wrap" id="nexoToasts" aria-live="polite" aria-atomic="true"></div>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO" crossorigin="anonymous"></script>
@@ -1134,7 +1142,7 @@
     </script>
     {% endif %}
 
-    {% if current_user.is_authenticated and current_user.is_cliente %}
+    {% if current_user.is_authenticated and current_user.is_cliente and not bloqueio_termos %}
     {# ---------------- NexoBot — widget de suporte flutuante ----------------
        O catálogo de páginas permitidas vem do backend (mesma lista que valida
        as ações da API). Comportamento em static/js/nexobot.js. #}
@@ -1169,6 +1177,16 @@
         </div>
     </div>
     <script src="{{ url_for('static', filename='js/nexobot.js') }}" defer></script>
+    {% endif %}
+
+    {% if bloqueio_termos %}
+    {# O foco começa no modal, para o leitor de tela anunciar o título e a orientação. #}
+    <script nonce="{{ csp_nonce }}">
+      (function () {
+        var modal = document.getElementById('modalTermos');
+        if (modal) modal.focus();
+      })();
+    </script>
     {% endif %}
 
     {% block extra_js %}{% endblock %}

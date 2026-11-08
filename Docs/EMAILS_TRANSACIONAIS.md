@@ -423,9 +423,12 @@ a caixa não aparece nos cabeçalhos; sem caixa configurada, nenhum e-mail sai. 
 servidor recusar só a caixa da cópia, o envio conta como falha, com a categoria
 `smtp_destinatario_recusado`. A troca do e-mail de acesso avisa o endereço antigo e o
 lembrete de renovação sai pelo botão em Contratos ou pelo comando
-`flask contratos lembretes-renovacao`. Os avisos de senha e de e-mail alterados não
-têm opção de desligar; o de chamado resolvido e o lembrete de renovação respeitam as
-preferências do usuário.
+`flask contratos lembretes-renovacao`. O lembrete de aceite dos Termos de Uso e da
+Política de Privacidade (`lembrete_aceite`) sai pelo botão “Enviar Lembrete por E-mail”
+em `/admin/termos-aceites`, só para quem ainda está pendente, com os nomes e as versões
+pendentes e o link do portal, nunca o texto. Os avisos de senha e de e-mail alterados e o
+lembrete de aceite não têm opção de desligar; o de chamado resolvido e o lembrete de
+renovação respeitam as preferências do usuário.
 
 A detecção da hospedagem que bloqueia SMTP fica só em `config.py`
 (`HOSPEDAGEM_BLOQUEIA_SMTP`); o módulo de e-mails lê esse indicador neutro e, na

@@ -290,6 +290,7 @@ class Config:
     CONTRATO_ALERTA_VENCIMENTO_DIAS = 30  # visão geral: vigência terminando
     CONTRATO_ALERTA_SUSPENSAO_DIAS = 15   # visão geral: suspensão terminando
     CONTRATO_AVISO_RENOVACAO_DIAS = 14    # lembrete ao cliente: vigência terminando
+    TERMOS_ALERTA_PENDENCIA_DIAS = 7      # aviso ao admin: aceite pendente depois de publicar
 
     # === IA (Claude / Anthropic) — geração automatizada da devolutiva ===
     # Sem a chave, o motor cai no fallback determinístico local (não quebra).

@@ -133,16 +133,16 @@
                 <article class="config-documento">
                     <div class="config-documento-topo">
                         <h4>{{ doc.rotulo }}</h4>
-                        {% if doc.vigente %}<span class="nexo-badge b-purple">Versão atual: {{ doc.vigente.versao }}</span>{% else %}<span class="nexo-badge b-muted">Não publicado</span>{% endif %}
+                        {% if doc.vigente %}<span class="nexo-badge b-purple">Versão atual: {{ doc.vigente.rotulo_versao }}</span>{% else %}<span class="nexo-badge b-muted">Não publicado</span>{% endif %}
                     </div>
                     {% if doc.vigente %}
                     <dl class="dados-contrato">
                         <div><dt>Publicada em</dt><dd>{{ m.horario(doc.vigente.publicado_em) }}</dd></div>
-                        <div><dt>Aceite inicial</dt><dd>{% if doc.aceite_inicial %}{{ m.horario(doc.aceite_inicial.aceito_em) }} (versão {{ doc.aceite_inicial.versao }}){% else %}Nenhum aceite registrado{% endif %}</dd></div>
-                        <div><dt>Versão aceita</dt><dd>{% if doc.aceite_recente %}Versão {{ doc.aceite_recente.versao }}, em {{ m.horario(doc.aceite_recente.aceito_em) }}{% else %}Nenhuma{% endif %}</dd></div>
+                        <div><dt>Aceite inicial</dt><dd>{% if doc.aceite_inicial %}{{ m.horario(doc.aceite_inicial.aceito_em) }} ({{ doc.aceite_inicial.rotulo }}){% else %}Nenhum aceite registrado{% endif %}</dd></div>
+                        <div><dt>Versão aceita</dt><dd>{% if doc.aceite_recente %}{{ doc.aceite_recente.rotulo }}, em {{ m.horario(doc.aceite_recente.aceito_em) }}{% else %}Nenhuma{% endif %}</dd></div>
                     </dl>
                     <details>
-                        <summary>Ler a versão {{ doc.vigente.versao }}</summary>
+                        <summary>Ler a {{ doc.vigente.rotulo_versao }}</summary>
                         <div class="config-documento-texto" tabindex="0">{{ doc.vigente.conteudo }}</div>
                     </details>
                     {% if doc.aceitou_vigente %}
@@ -152,7 +152,7 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="tipo" value="{{ doc.tipo }}">
                         <input type="hidden" name="versao" value="{{ doc.vigente.versao }}">
-                        <button type="submit" class="btn-nexo"><i class="bi bi-check2-square" aria-hidden="true"></i> Li e aceito a versão {{ doc.vigente.versao }}</button>
+                        <button type="submit" class="btn-nexo"><i class="bi bi-check2-square" aria-hidden="true"></i> Li e aceito a {{ doc.vigente.rotulo_versao }}</button>
                     </form>
                     {% endif %}
                     {% else %}

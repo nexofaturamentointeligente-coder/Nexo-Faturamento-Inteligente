@@ -99,7 +99,8 @@ REGISTROS = (
         passos=(
             "Abra o link de definição de senha ou entre com a senha temporária, se foi esse o seu caso.",
             "Digite a nova senha (mínimo de 12 caracteres) e repita no campo de confirmação.",
-            "Salve. Se você veio pelo link do e-mail, o portal volta à tela de login para você entrar com o e-mail e a nova senha; se entrou com a senha temporária, a Visão Geral e as demais páginas são liberadas na hora.",
+            "Salve. Se você veio pelo link do e-mail, o portal volta à tela de login para você entrar com o e-mail e a nova senha; se entrou com a senha temporária, a Visão Geral e as demais páginas são liberadas na hora, ou depois do "
+            "aceite dos Termos de Uso e da Política de Privacidade, se a NEXO já os tiver publicado.",
         ),
         perguntas=(
             "Como faço o primeiro login?", "Por que preciso trocar a senha no primeiro acesso?",

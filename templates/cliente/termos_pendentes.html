@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{# Resposta da trava de aceite (termos_legais.trava_de_aceite) no lugar de qualquer página do
+   portal: o conteúdo pedido não é renderizado, e o modal vem do base.html. #}
+{% block title %}Termos de Uso e Política de Privacidade — NEXO{% endblock %}
+{% block page_title %}Aceite pendente{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Aceite pendente</h1>
+        <p class="sub">Confirme a leitura dos documentos para continuar.</p>
+    </div>
+</div>
+{% endblock %}

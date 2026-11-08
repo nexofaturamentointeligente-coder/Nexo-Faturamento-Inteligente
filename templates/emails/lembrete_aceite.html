@@ -1,0 +1,23 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<h1 style="margin:0 0 8px;font-size:20px;color:#ffffff;">Há documentos aguardando a sua confirmação 📄</h1>
+<p style="margin:0 0 12px;color:#c4c6d2;">
+  Olá{% if usuario and usuario.nome %}, {{ usuario.nome.split(' ')[0] }}{% endif %}! A NEXO publicou os documentos
+  abaixo, e eles ainda aguardam a sua confirmação. Para continuar usando o portal, entre, leia e confirme:
+</p>
+<ul style="margin:0 0 18px;padding-left:20px;color:#ffffff;">
+  {% for documento in documentos %}<li style="margin:0 0 4px;">{{ documento }}</li>{% endfor %}
+</ul>
+
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 22px;">
+  <tr><td style="border-radius:10px;background:linear-gradient(135deg,#7c3aed 0%,#a855f7 100%);">
+    <a href="{{ link_url }}" style="display:inline-block;padding:13px 28px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">
+      Abrir o portal →
+    </a>
+  </td></tr>
+</table>
+
+<p style="margin:0;color:#9aa0b7;font-size:12px;line-height:1.5;">
+  O texto completo aparece logo ao entrar. Se não quiser aceitar, no mesmo lugar você pode exportar os seus dados ou pedir a exclusão.
+</p>
+{% endblock %}

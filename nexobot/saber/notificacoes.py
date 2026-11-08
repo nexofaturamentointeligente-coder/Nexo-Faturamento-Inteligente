@@ -118,8 +118,9 @@ REGISTROS = (
         categoria="Notificações",
         resumo=(
             "E-mails transacionais: boas-vindas com o link de definição de senha, link de recuperação de senha, "
-            "avisos de senha e de e-mail alterados, aviso de análise publicada, aviso de chamado resolvido e "
-            "lembrete de renovação do contrato. Eles complementam o sininho; o envio depende da integração de "
+            "avisos de senha e de e-mail alterados, aviso de análise publicada, aviso de chamado resolvido, "
+            "lembrete de renovação do contrato e lembrete de aceite dos Termos de Uso e da Política de "
+            "Privacidade, que a equipe NEXO envia. Eles complementam o sininho; o envio depende da integração de "
             "e-mail configurada no servidor."
         ),
         explicacao=(

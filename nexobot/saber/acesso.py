@@ -108,8 +108,8 @@ REGISTROS = (
         tipo="procedimento",
         resumo=(
             "Em Configurações, no menu lateral, você altera o nome do responsável, o telefone de contato, a senha "
-            "e o e-mail de acesso, exporta os dados da empresa, lê e aceita os Termos de Uso e a Política de "
-            "Privacidade, pede a exclusão dos dados e escolhe os avisos que quer receber."
+            "e o e-mail de acesso, exporta os dados da empresa, lê os Termos de Uso e a Política de Privacidade "
+            "e vê quais versões aceitou, pede a exclusão dos dados e escolhe os avisos que quer receber."
         ),
         explicacao=(
             "Trocar a senha ou o e-mail exige a senha atual e encerra as outras sessões abertas. A exportação gera "
@@ -117,7 +117,10 @@ REGISTROS = (
             "análises concluídas do seu Histórico, enquanto o prazo de exportação estiver aberto. Solicitar a exclusão abre um chamado para a equipe NEXO: nada é apagado "
             "automaticamente.\n\n"
             "Os lembretes de renovação e os alertas de chamados podem ser desligados; os avisos de segurança, não. "
-            "O tema claro ou escuro é escolhido no botão do topo da tela e fica guardado no navegador."
+            "O tema claro ou escuro é escolhido no botão do topo da tela e fica guardado no navegador.\n\n"
+            "Quando a NEXO publica os Termos de Uso ou a Política de Privacidade, ou uma versão nova deles, o "
+            "portal mostra o texto logo ao entrar e só libera as páginas depois que você marca “Li e concordo”. "
+            "Enquanto isso, você ainda pode sair, exportar os seus dados ou pedir a exclusão deles."
         ),
         perguntas=(
             "Onde ficam as configurações?", "Como altero meu nome?", "Como troco meu e-mail de acesso?",
