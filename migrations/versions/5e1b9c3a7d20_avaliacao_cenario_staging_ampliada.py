@@ -102,8 +102,10 @@ def upgrade():
 def downgrade():
     conexao = op.get_bind()
     if conexao.dialect.name == "postgresql":
-        # Uma escrita em andamento não aparece na contagem: espera por ela, na ordem da aplicação.
-        op.execute("LOCK TABLE lead_avaliacao, brainstorming_dados_pdv IN ACCESS EXCLUSIVE MODE")
+        # Uma escrita em andamento não aparece na contagem: espera por ela. usuario vem primeiro, na ordem
+        # das requisições (como na c7d41e9a2b60): remover a FK de registrado_por trava usuario, e travá-lo
+        # depois das tabelas de lead poderia entrar em deadlock com quem leu usuario e vai ler os leads.
+        op.execute("LOCK TABLE usuario, lead_avaliacao, brainstorming_dados_pdv IN ACCESS EXCLUSIVE MODE")
     leads = conexao.execute(sa.text("SELECT COUNT(*) FROM lead_avaliacao")).scalar()
     dados = conexao.execute(sa.text("SELECT COUNT(*) FROM brainstorming_dados_pdv")).scalar()
     if leads or dados:

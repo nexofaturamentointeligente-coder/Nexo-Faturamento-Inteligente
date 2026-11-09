@@ -1350,6 +1350,10 @@ class LeadAvaliacao(db.Model):
         ForeignKey("usuario.id_usuario", ondelete="SET NULL", name="fk_lead_avaliacao_registrado_por")
     )
     consentimento_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    # Revisão 7c4e2a9b5d31 (Etapa 2): a contagem de produtos com omissão no ERP e os limiares usados na
+    # triagem (só números, triagem_cenario.Limiares.para_dict). Nulas nos leads de antes dela.
+    itens_omissao_erp: Mapped[Optional[int]] = mapped_column(Integer)
+    limiares_triagem_json: Mapped[Optional[str]] = mapped_column(Text)
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)
@@ -1363,6 +1367,7 @@ class LeadAvaliacao(db.Model):
                         name="ck_lead_avaliacao_itens"),
         CheckConstraint("periodo_inicio IS NULL OR periodo_fim IS NULL OR periodo_inicio <= periodo_fim",
                         name="ck_lead_avaliacao_periodo"),
+        CheckConstraint("itens_omissao_erp IS NULL OR itens_omissao_erp >= 0", name="ck_lead_avaliacao_omissao"),
         Index("ix_lead_avaliacao_registrado_por", "registrado_por"),
         CheckConstraint("score_saude_cadastral IS NULL OR (score_saude_cadastral >= 0 "
                         "AND score_saude_cadastral <= 100)", name="ck_lead_avaliacao_score"),
@@ -1433,6 +1438,30 @@ class BrainstormingDadosPdv(db.Model):
     estoque_negativo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     bloco_triagem: Mapped[Optional[str]] = mapped_column(String(10))
     versao_regras: Mapped[Optional[str]] = mapped_column(String(40))
+    # Revisão 7c4e2a9b5d31 (Etapa 2, lead-2026-11.3): o que a triagem e a matriz por categoria precisam
+    # e os arquivos não guardados não refazem (avaliacao_motor.COLUNAS). Nas linhas de antes dela, o
+    # padrão do servidor; a versão das regras separa as duas (o diagnóstico não as usa).
+    faturamento_em_relatorio_com_custo: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False,
+                                                                        default=Decimal("0"), server_default=text("0"))
+    meses_com_custo: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    meses_margem_negativa: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    ultimo_mes_negativo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    meses_completos: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    quantidade_mesmos_meses: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=Decimal("0"),
+                                                             server_default=text("0"))
+    estoque_final: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 3))
+    categoria_produto: Mapped[Optional[str]] = mapped_column(String(80))
+    ncm_ausente: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    categoria_ausente: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    custo_bonificacoes: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                        server_default=text("0"))
+    custo_devolucoes: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                      server_default=text("0"))
+    devolucoes_com_custo: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"),
+                                                          server_default=text("0"))
+    # Relatórios do ano desde a primeira venda do produto no ano: a base do giro de um lançamento.
+    relatorios_desde_primeira_venda: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                                                 server_default=text("0"))
 
     lead = relationship("LeadAvaliacao", back_populates="dados_pdv")
 
@@ -1450,6 +1479,15 @@ class BrainstormingDadosPdv(db.Model):
         CheckConstraint("custo_medio_registrado IS NULL OR custo_medio_registrado >= 0",
                         name="ck_brainstorming_dados_pdv_custo"),
         CheckConstraint('"vazamento_estimado_r$" >= 0', name="ck_brainstorming_dados_pdv_vazamento"),
+        CheckConstraint("faturamento_em_relatorio_com_custo >= 0 AND quantidade_mesmos_meses >= 0 "
+                        "AND custo_bonificacoes >= 0 AND custo_devolucoes >= 0 AND devolucoes_com_custo >= 0",
+                        name="ck_brainstorming_dados_pdv_etapa2_somas"),
+        CheckConstraint("meses_margem_negativa >= 0 AND meses_margem_negativa <= meses_com_custo "
+                        "AND meses_com_custo <= meses AND meses_completos >= 0 AND meses_completos <= meses "
+                        "AND relatorios_desde_primeira_venda >= 0",
+                        name="ck_brainstorming_dados_pdv_etapa2_meses"),
+        CheckConstraint("categoria_produto IS NULL OR length(trim(categoria_produto)) > 0",
+                        name="ck_brainstorming_dados_pdv_categoria"),
         Index("ix_brainstorming_dados_pdv_lead", "lead_id"),
         Index("ix_brainstorming_dados_pdv_criado_em", "criado_em"),
     )

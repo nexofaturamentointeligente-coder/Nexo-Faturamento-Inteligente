@@ -17,7 +17,9 @@ Complementa tests/test_leads_avaliacao.py (SQLite); aqui só o que depende do Po
   2. a função expurgar_brainstorming_pdv: SECURITY INVOKER, search_path fixo, EXECUTE fora
      do alcance de PUBLIC, anon e authenticated, e o mesmo resultado da regra em SQLAlchemy;
   3. o comando `flask leads expurgar-pdv` (simulação e aplicação) e o CASCADE;
-  4. downgrade recusado com leads, aceito sem eles (levando função e políticas) e novo upgrade.
+  4. downgrade recusado com leads, aceito sem eles (levando função e políticas) e novo upgrade;
+  5. Etapa 2 (7c4e2a9b5d31): as CHECKs novas no banco e o downgrade dela recusado com dados das
+     regras lead-2026-11.3, aceito sem eles (colunas e CHECKs saem; as linhas antigas ficam).
 """
 
 import contextlib
@@ -38,9 +40,21 @@ from tests.test_contratos_postgresql import ROOT, TOOLS, _PrivateCluster, _safe_
 
 
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
-# Head das tabelas de lead: a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging e
-# 6a8f2d4c0e13 agenda o expurgo no pg_cron.
-REVISAO_LEADS = "6a8f2d4c0e13"
+# Head das tabelas de lead: a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging,
+# 6a8f2d4c0e13 agenda o expurgo no pg_cron e 7c4e2a9b5d31 (Etapa 2) acrescenta as colunas de cadastro,
+# ajustes e limiares.
+REVISAO_LEADS = "7c4e2a9b5d31"
+REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
+COLUNAS_DA_ETAPA_2 = {
+    "brainstorming_dados_pdv": {
+        "faturamento_em_relatorio_com_custo", "custo_bonificacoes", "custo_devolucoes", "devolucoes_com_custo",
+        "quantidade_mesmos_meses", "meses_com_custo", "meses_margem_negativa", "meses_completos",
+        "relatorios_desde_primeira_venda",
+        "ultimo_mes_negativo", "ncm_ausente", "categoria_ausente", "estoque_final", "categoria_produto"},
+    "lead_avaliacao": {"itens_omissao_erp", "limiares_triagem_json"},
+}
+CHECKS_DA_ETAPA_2 = {"ck_brainstorming_dados_pdv_etapa2_somas", "ck_brainstorming_dados_pdv_etapa2_meses",
+                     "ck_brainstorming_dados_pdv_categoria", "ck_lead_avaliacao_omissao"}
 JOB_DO_EXPURGO = ("nexo_expurgo_leads_pdv", "15 6 * * *", "SELECT * FROM public.expurgar_brainstorming_pdv(30)")
 # O pg_cron do Supabase, reduzido ao que a revisão 6a8f2d4c0e13 usa: o ensaio prova o agendamento sem
 # instalar a extensão no cluster temporário.
@@ -77,6 +91,8 @@ CHECKS = (
     # 4. Downgrade
     "downgrade_refused_with_leads", "downgrade_removes_tables_function_and_policies", "upgrade_again",
     "purge_job_removed_on_downgrade", "purge_job_back_on_upgrade",
+    # 5. Etapa 2
+    "etapa2_constraints_enforced", "etapa2_downgrade_refused_with_new_data", "etapa2_downgrade_and_upgrade_again",
 )
 
 
@@ -134,6 +150,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_antes_da_migracao()
         self._etapa_migracao()
         self._etapa_servico()
+        self._etapa_avaliacao_etapa_2()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
         self._etapa_downgrade()
@@ -229,31 +246,18 @@ class _ClusterDosLeads(_PrivateCluster):
         from models import BrainstormingDadosPdv, LeadAvaliacao
         from sqlalchemy import func, select
         from sqlalchemy.exc import IntegrityError
-        from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
+        import triagem_cenario
 
         self.check("purge_job_scheduled", self._jobs() == [JOB_DO_EXPURGO], str(self._jobs()))
 
         self.stage = "gravação do lead pelo serviço"
-        meses = (relatorio_do_mes(2024, 11, ["1;Cafe 500g;10;20,00;200,00;150,00", "2;Acucar 1kg;5;6,00;30,00;"]),
-                 relatorio_do_mes(2025, 1, ["1;Café 500g;8;20,00;150,00;120,00", "3;Leite 1L;5;5,00;25,00;30,00"]))
-        with tempfile.TemporaryDirectory(prefix="nexo-leads-pg-") as pasta:
-            caminhos = []
-            for numero, conteudo in enumerate(meses, 1):
-                caminho = Path(pasta) / f"arquivo_{numero:02d}.csv"
-                caminho.write_bytes(conteudo)
-                caminhos.append(str(caminho))
-            with self.app.app_context():
-                resultado = avaliar_como_o_worker(caminhos)
+        id_lead = self._registrar_pelo_servico()
         with self.app.app_context():
-            lead = avaliacao_cenario.registrar(
-                resultado, contato={"nome_contato": "Contato fictício", "email": "lead@example.invalid",
-                                    "whatsapp": None, "nome_loja": "Loja fictícia"}, meses_prata=24)
-            self.db.session.commit()
-            id_lead = lead.id
             linhas = self.db.session.scalar(select(func.count()).select_from(BrainstormingDadosPdv))
             gravado = self.db.session.get(LeadAvaliacao, id_lead)
             resumo = (gravado.status, gravado.arquivos, gravado.vazamento_total_reais, gravado.itens_venda_sem_custo,
-                      gravado.itens_venda_abaixo_custo)
+                      gravado.itens_venda_abaixo_custo, gravado.itens_omissao_erp,
+                      json.loads(gravado.limiares_triagem_json) == triagem_cenario.LIMIARES_PADRAO.para_dict())
             repetida = self.db.session.scalars(select(BrainstormingDadosPdv)).first()
             try:
                 self.db.session.add(BrainstormingDadosPdv(
@@ -270,8 +274,110 @@ class _ClusterDosLeads(_PrivateCluster):
         self._executar("DELETE FROM lead_avaliacao")
         # Café 2025: 8 un a R$ 150,00 com tabela de R$ 20,00 (R$ 10,00); Leite: custo R$ 30,00 > R$ 25,00 (R$ 5,00).
         self.check("service_writes_on_postgresql",
-                   linhas == 4 and resumo == ("concluido", 2, Decimal("15.00"), 1, 1) and unico and refeito,
+                   linhas == 4 and resumo == ("concluido", 2, Decimal("15.00"), 1, 1, 0, True) and unico and refeito,
                    f"linhas={linhas} resumo={resumo} unico={unico} refeito={refeito}")
+
+    def _registrar_pelo_servico(self):
+        """Grava (com commit) um lead pelo serviço, com o motor como o worker: devolve o id."""
+        import avaliacao_cenario
+        from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
+        meses = (relatorio_do_mes(2024, 11, ["1;Cafe 500g;10;20,00;200,00;150,00", "2;Acucar 1kg;5;6,00;30,00;"]),
+                 relatorio_do_mes(2025, 1, ["1;Café 500g;8;20,00;150,00;120,00", "3;Leite 1L;5;5,00;25,00;30,00"]))
+        with tempfile.TemporaryDirectory(prefix="nexo-leads-pg-") as pasta:
+            caminhos = []
+            for numero, conteudo in enumerate(meses, 1):
+                caminho = Path(pasta) / f"arquivo_{numero:02d}.csv"
+                caminho.write_bytes(conteudo)
+                caminhos.append(str(caminho))
+            with self.app.app_context():
+                resultado = avaliar_como_o_worker(caminhos)
+        with self.app.app_context():
+            lead = avaliacao_cenario.registrar(
+                resultado, contato={"nome_contato": "Contato fictício", "email": "lead@example.invalid",
+                                    "whatsapp": None, "nome_loja": "Loja fictícia"}, meses_prata=24)
+            self.db.session.commit()
+            id_lead = lead.id
+            self.db.session.remove()
+        return id_lead
+
+    # ------------------------------------------------- 5. Etapa 2 (7c4e2a9b5d31)
+    def _colunas_e_checks_da_etapa_2(self):
+        colunas = {tabela: {nome for (nome,) in self._sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = :t", t=tabela)} & COLUNAS_DA_ETAPA_2[tabela] for tabela in COLUNAS_DA_ETAPA_2}
+        checks = {nome for (nome,) in self._sql(
+            "SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname = ANY(:nomes)",
+            nomes=sorted(CHECKS_DA_ETAPA_2))}
+        return colunas, checks
+
+    def _etapa_avaliacao_etapa_2(self):
+        from flask_migrate import downgrade, upgrade
+        from sqlalchemy.exc import IntegrityError
+
+        self.stage = "CHECKs da Etapa 2"
+        # Cada comando viola uma CHECK da 7c4e2a9b5d31, e só ela (a recusa tem de vir com o nome dela).
+        somas, meses = "ck_brainstorming_dados_pdv_etapa2_somas", "ck_brainstorming_dados_pdv_etapa2_meses"
+        violacoes = (
+            ("UPDATE lead_avaliacao SET itens_omissao_erp = -1", "ck_lead_avaliacao_omissao"),
+            ("UPDATE brainstorming_dados_pdv SET meses_com_custo = meses, meses_margem_negativa = meses + 1", meses),
+            ("UPDATE brainstorming_dados_pdv SET meses_completos = meses + 1", meses),
+            ("UPDATE brainstorming_dados_pdv SET meses_com_custo = meses + 1", meses),
+            ("UPDATE brainstorming_dados_pdv SET custo_bonificacoes = -1", somas),
+            ("UPDATE brainstorming_dados_pdv SET quantidade_mesmos_meses = -0.001", somas),
+            ("UPDATE brainstorming_dados_pdv SET categoria_produto = '   '", "ck_brainstorming_dados_pdv_categoria"),
+        )
+        id_lead = self._registrar_pelo_servico()
+        recusas = []
+        for comando, restricao in violacoes:
+            try:
+                self._executar(comando)
+                recusas.append(None)
+            except IntegrityError as erro:
+                recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
+        recusas_certas = recusas == [restricao for _comando, restricao in violacoes]
+        # Uma categoria válida e um estoque negativo passam (estoque negativo é dado do PDV).
+        self._executar("UPDATE brainstorming_dados_pdv SET categoria_produto = 'BEBIDAS', estoque_final = -2.5")
+        aceitos = self._sql("SELECT count(*) FROM brainstorming_dados_pdv WHERE categoria_produto = 'BEBIDAS' "
+                            "AND estoque_final = -2.5")[0][0]
+        self.check("etapa2_constraints_enforced", recusas_certas and aceitos == 4, f"recusas={recusas} aceitos={aceitos}")
+
+        self.stage = "downgrade da Etapa 2 com dados das regras novas"
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ANTES_DA_ETAPA_2)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        colunas, checks = self._colunas_e_checks_da_etapa_2()
+        self.check("etapa2_downgrade_refused_with_new_data",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and colunas == COLUNAS_DA_ETAPA_2 and checks == CHECKS_DA_ETAPA_2,
+                   f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade da Etapa 2 sem os dados novos e novo upgrade"
+        # Sem lead da Etapa 2: um lead antigo (colunas novas nulas) com uma linha sem versão fica.
+        self._executar("DELETE FROM lead_avaliacao WHERE id = :i", i=str(id_lead))
+        with self._sessao() as sessao:
+            antigo = self._lead(sessao, "concluido", vazamento_total_reais=Decimal("7.00"))
+            self._linha(sessao, antigo, timedelta(days=2))
+            sessao.commit()
+            id_antigo = str(antigo.id)
+        self._migrar(downgrade, REVISAO_ANTES_DA_ETAPA_2)
+        colunas_depois, checks_depois = self._colunas_e_checks_da_etapa_2()
+        ficou = self._estado()
+        self._migrar(upgrade, "head")
+        colunas_de_volta, checks_de_volta = self._colunas_e_checks_da_etapa_2()
+        padroes = self._sql("SELECT meses_com_custo, ncm_ausente, custo_bonificacoes, categoria_produto, estoque_final "
+                            "FROM brainstorming_dados_pdv WHERE lead_id = :i", i=id_antigo)
+        self.check("etapa2_downgrade_and_upgrade_again",
+                   colunas_depois == {t: set() for t in COLUNAS_DA_ETAPA_2} and checks_depois == set()
+                   and ficou == ([(id_antigo, "concluido")], [(id_antigo, 1)])
+                   and self._revisao() == self.head and colunas_de_volta == COLUNAS_DA_ETAPA_2
+                   and checks_de_volta == CHECKS_DA_ETAPA_2 and self._diferencas_metadata() == []
+                   and [tuple(l) for l in padroes] == [(0, False, Decimal("0.00"), None, None)]
+                   and self._jobs() == [JOB_DO_EXPURGO],
+                   f"colunas={colunas_depois} checks={checks_depois} ficou={ficou} padroes={padroes}")
+        self._executar("DELETE FROM lead_avaliacao")
 
     def _etapa_migracao(self):
         from alembic.script import ScriptDirectory

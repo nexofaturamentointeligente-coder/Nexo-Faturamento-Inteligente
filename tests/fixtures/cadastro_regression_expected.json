@@ -1,0 +1,1723 @@
+{
+ "analise": {
+  "abril": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso).",
+     "Alerta de custo informado pelo PDV: 2 item(ns) tiveram valor total de venda inferior ao custo total informado pelo PDV no período. É um sinal extraído da coluna bruta de custo do PDV, NÃO um cálculo contábil de margem.",
+     "Faturamento líquido: 0 linha(s) canceladas ou estornadas ficaram fora do cálculo e 1 devolução(ões) ou troca(s) foram deduzidas.",
+     "Curva ABC: 1 produto(s) têm receita líquida negativa e aparecem no fim da lista com percentual negativo; por isso, o acumulado pode passar de 100% antes de fechar em 100%."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 125.0,
+        "nome": "Leite Integral 1L",
+        "perc_acumulado": 56.03,
+        "perc_individual": 56.03,
+        "posicao": 1,
+        "quantidade": 25.0
+       },
+       {
+        "classe": "B",
+        "faturamento": 80.0,
+        "nome": "Água Mineral 500ml",
+        "perc_acumulado": 91.89,
+        "perc_individual": 35.86,
+        "posicao": 2,
+        "quantidade": 40.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 30.0,
+        "nome": "Detergente 500ml",
+        "perc_acumulado": 105.33,
+        "perc_individual": 13.44,
+        "posicao": 3,
+        "quantidade": 12.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 0.0,
+        "nome": "Chocolate 90g",
+        "perc_acumulado": 105.33,
+        "perc_individual": 0.0,
+        "posicao": 4,
+        "quantidade": 3.0
+       },
+       {
+        "classe": "C",
+        "faturamento": -11.9,
+        "nome": "Sabão em Pó 1kg",
+        "perc_acumulado": 100.0,
+        "perc_individual": -5.33,
+        "posicao": 5,
+        "quantidade": -1.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 125.0,
+        "perc_faturamento": 56.03,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "B",
+        "faturamento": 80.0,
+        "perc_faturamento": 35.86,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "C",
+        "faturamento": 18.1,
+        "perc_faturamento": 8.11,
+        "qtd_produtos": 3
+       }
+      ]
+     },
+     "faturamento_total": 223.1,
+     "periodo_base_fim": "2026-04-30",
+     "periodo_base_inicio": "2026-04-01",
+     "produto_maior_faturamento_nome": "Leite Integral 1L",
+     "produto_maior_faturamento_valor": 125.0,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "Água Mineral 500ml",
+     "produto_mais_vendido_quantidade": 40.0,
+     "saldo_estimado_compras_vendas": 776.9,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "codigo",
+      "produto",
+      "quantidade",
+      "valor_venda",
+      "valor_custo"
+     ],
+     "itens_venda_abaixo_custo_pdv": 2,
+     "linhas_canceladas": 0,
+     "linhas_compras": 1,
+     "linhas_devolucao": 1,
+     "linhas_vendas": 6,
+     "valor_cancelado": 0.0,
+     "valor_devolucoes": 11.9,
+     "vendas_validas": 235.0
+    }
+   }
+  },
+  "cod_ncm_antes": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso)."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 75.6,
+        "nome": "Café Torrado 500g",
+        "perc_acumulado": 44.58,
+        "perc_individual": 44.58,
+        "posicao": 1,
+        "quantidade": 4.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 50.0,
+        "nome": "Leite Integral 1L",
+        "perc_acumulado": 74.06,
+        "perc_individual": 29.48,
+        "posicao": 2,
+        "quantidade": 10.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 44.0,
+        "nome": "Leite Desnatado 1L",
+        "perc_acumulado": 100.0,
+        "perc_individual": 25.94,
+        "posicao": 3,
+        "quantidade": 8.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 125.6,
+        "perc_faturamento": 74.06,
+        "qtd_produtos": 2
+       },
+       {
+        "classe": "B",
+        "faturamento": 0.0,
+        "perc_faturamento": 0.0,
+        "qtd_produtos": 0
+       },
+       {
+        "classe": "C",
+        "faturamento": 44.0,
+        "perc_faturamento": 25.94,
+        "qtd_produtos": 1
+       }
+      ]
+     },
+     "faturamento_total": 169.6,
+     "periodo_base_fim": "2026-05-31",
+     "periodo_base_inicio": "2026-05-01",
+     "produto_maior_faturamento_nome": "Café Torrado 500g",
+     "produto_maior_faturamento_valor": 75.6,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "Leite Integral 1L",
+     "produto_mais_vendido_quantidade": 10.0,
+     "saldo_estimado_compras_vendas": 830.4,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "codigo",
+      "produto",
+      "quantidade",
+      "valor_venda",
+      "valor_custo"
+     ],
+     "itens_venda_abaixo_custo_pdv": 0,
+     "linhas_compras": 1,
+     "linhas_vendas": 3
+    }
+   }
+  },
+  "grupo_antes": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso)."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 94.0,
+        "nome": "LATICINIOS",
+        "perc_acumulado": 55.42,
+        "perc_individual": 55.42,
+        "posicao": 1,
+        "quantidade": 18.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 75.6,
+        "nome": "MERCEARIA",
+        "perc_acumulado": 100.0,
+        "perc_individual": 44.58,
+        "posicao": 2,
+        "quantidade": 4.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 94.0,
+        "perc_faturamento": 55.42,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "B",
+        "faturamento": 0.0,
+        "perc_faturamento": 0.0,
+        "qtd_produtos": 0
+       },
+       {
+        "classe": "C",
+        "faturamento": 75.6,
+        "perc_faturamento": 44.58,
+        "qtd_produtos": 1
+       }
+      ]
+     },
+     "faturamento_total": 169.6,
+     "periodo_base_fim": "2026-05-31",
+     "periodo_base_inicio": "2026-05-01",
+     "produto_maior_faturamento_nome": "MERCEARIA",
+     "produto_maior_faturamento_valor": 75.6,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "LATICINIOS",
+     "produto_mais_vendido_quantidade": 18.0,
+     "saldo_estimado_compras_vendas": 830.4,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "produto",
+      "quantidade",
+      "valor_venda"
+     ],
+     "linhas_compras": 1,
+     "linhas_vendas": 3
+    }
+   }
+  },
+  "marco": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso).",
+     "Atenção: 1 produto(s) (14.3%) apresentam saldo de estoque NEGATIVO informado pelo PDV — possível inconsistência de registro no sistema do cliente.",
+     "Alerta de custo informado pelo PDV: 2 item(ns) tiveram valor total de venda inferior ao custo total informado pelo PDV no período. É um sinal extraído da coluna bruta de custo do PDV, NÃO um cálculo contábil de margem.",
+     "Faturamento líquido: 1 linha(s) canceladas ou estornadas ficaram fora do cálculo e 1 devolução(ões) ou troca(s) foram deduzidas."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 170.1,
+        "nome": "Café Torrado 500g",
+        "perc_acumulado": 31.65,
+        "perc_individual": 31.65,
+        "posicao": 1,
+        "quantidade": 9.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 150.0,
+        "nome": "Leite Integral 1L",
+        "perc_acumulado": 59.55,
+        "perc_individual": 27.9,
+        "posicao": 2,
+        "quantidade": 32.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 96.0,
+        "nome": "Água Mineral 500ml",
+        "perc_acumulado": 77.41,
+        "perc_individual": 17.86,
+        "posicao": 3,
+        "quantidade": 48.0
+       },
+       {
+        "classe": "B",
+        "faturamento": 71.4,
+        "nome": "Sabão em Pó 1kg",
+        "perc_acumulado": 90.7,
+        "perc_individual": 13.29,
+        "posicao": 4,
+        "quantidade": 6.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 50.0,
+        "nome": "Biscoito Recheado",
+        "perc_acumulado": 100.0,
+        "perc_individual": 9.3,
+        "posicao": 5,
+        "quantidade": 20.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 416.1,
+        "perc_faturamento": 77.41,
+        "qtd_produtos": 3
+       },
+       {
+        "classe": "B",
+        "faturamento": 71.4,
+        "perc_faturamento": 13.29,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "C",
+        "faturamento": 50.0,
+        "perc_faturamento": 9.3,
+        "qtd_produtos": 1
+       }
+      ]
+     },
+     "faturamento_total": 537.5,
+     "periodo_base_fim": "2026-03-31",
+     "periodo_base_inicio": "2026-03-01",
+     "produto_maior_faturamento_nome": "Café Torrado 500g",
+     "produto_maior_faturamento_valor": 170.1,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "Água Mineral 500ml",
+     "produto_mais_vendido_quantidade": 48.0,
+     "saldo_estimado_compras_vendas": 462.5,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "codigo",
+      "produto",
+      "quantidade",
+      "valor_venda",
+      "valor_custo",
+      "estoque"
+     ],
+     "itens_venda_abaixo_custo_pdv": 2,
+     "linhas_canceladas": 1,
+     "linhas_compras": 1,
+     "linhas_devolucao": 1,
+     "linhas_vendas": 7,
+     "produtos_estoque_pdv_negativo": 1,
+     "taxa_estoque_pdv_negativo": 0.14285714285714285,
+     "valor_cancelado": 10.0,
+     "valor_devolucoes": 18.9,
+     "vendas_validas": 556.4
+    }
+   }
+  },
+  "marco_cp1252": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso).",
+     "Atenção: 1 produto(s) (14.3%) apresentam saldo de estoque NEGATIVO informado pelo PDV — possível inconsistência de registro no sistema do cliente.",
+     "Alerta de custo informado pelo PDV: 2 item(ns) tiveram valor total de venda inferior ao custo total informado pelo PDV no período. É um sinal extraído da coluna bruta de custo do PDV, NÃO um cálculo contábil de margem.",
+     "Faturamento líquido: 1 linha(s) canceladas ou estornadas ficaram fora do cálculo e 1 devolução(ões) ou troca(s) foram deduzidas."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 170.1,
+        "nome": "Café Torrado 500g",
+        "perc_acumulado": 31.65,
+        "perc_individual": 31.65,
+        "posicao": 1,
+        "quantidade": 9.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 150.0,
+        "nome": "Leite Integral 1L",
+        "perc_acumulado": 59.55,
+        "perc_individual": 27.9,
+        "posicao": 2,
+        "quantidade": 32.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 96.0,
+        "nome": "Água Mineral 500ml",
+        "perc_acumulado": 77.41,
+        "perc_individual": 17.86,
+        "posicao": 3,
+        "quantidade": 48.0
+       },
+       {
+        "classe": "B",
+        "faturamento": 71.4,
+        "nome": "Sabão em Pó 1kg",
+        "perc_acumulado": 90.7,
+        "perc_individual": 13.29,
+        "posicao": 4,
+        "quantidade": 6.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 50.0,
+        "nome": "Biscoito Recheado",
+        "perc_acumulado": 100.0,
+        "perc_individual": 9.3,
+        "posicao": 5,
+        "quantidade": 20.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 416.1,
+        "perc_faturamento": 77.41,
+        "qtd_produtos": 3
+       },
+       {
+        "classe": "B",
+        "faturamento": 71.4,
+        "perc_faturamento": 13.29,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "C",
+        "faturamento": 50.0,
+        "perc_faturamento": 9.3,
+        "qtd_produtos": 1
+       }
+      ]
+     },
+     "faturamento_total": 537.5,
+     "periodo_base_fim": "2026-03-31",
+     "periodo_base_inicio": "2026-03-01",
+     "produto_maior_faturamento_nome": "Café Torrado 500g",
+     "produto_maior_faturamento_valor": 170.1,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "Água Mineral 500ml",
+     "produto_mais_vendido_quantidade": 48.0,
+     "saldo_estimado_compras_vendas": 462.5,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "codigo",
+      "produto",
+      "quantidade",
+      "valor_venda",
+      "valor_custo",
+      "estoque"
+     ],
+     "itens_venda_abaixo_custo_pdv": 2,
+     "linhas_canceladas": 1,
+     "linhas_compras": 1,
+     "linhas_devolucao": 1,
+     "linhas_vendas": 7,
+     "produtos_estoque_pdv_negativo": 1,
+     "taxa_estoque_pdv_negativo": 0.14285714285714285,
+     "valor_cancelado": 10.0,
+     "valor_devolucoes": 18.9,
+     "vendas_validas": 556.4
+    }
+   }
+  },
+  "xlsx": {
+   "resultado": {
+    "alertas": [
+     "Limitação técnica: o relatório de COMPRAS está em nível de nota fiscal (fornecedor/valor) e não traz produto + quantidade comprada. O KPI 'produto com maior saldo estimado parado' não pôde ser calculado e foi persistido como nulo (sem gerar dado enganoso).",
+     "Alerta de custo informado pelo PDV: 1 item(ns) tiveram valor total de venda inferior ao custo total informado pelo PDV no período. É um sinal extraído da coluna bruta de custo do PDV, NÃO um cálculo contábil de margem."
+    ],
+    "kpis": {
+     "curva_abc": {
+      "produtos": [
+       {
+        "classe": "A",
+        "faturamento": 189.0,
+        "nome": "Café Torrado 500g",
+        "perc_acumulado": 37.32,
+        "perc_individual": 37.32,
+        "posicao": 1,
+        "quantidade": 10.0
+       },
+       {
+        "classe": "A",
+        "faturamento": 150.0,
+        "nome": "Leite Integral 1L",
+        "perc_acumulado": 66.94,
+        "perc_individual": 29.62,
+        "posicao": 2,
+        "quantidade": 30.0
+       },
+       {
+        "classe": "B",
+        "faturamento": 96.0,
+        "nome": "Água Mineral 500ml",
+        "perc_acumulado": 85.9,
+        "perc_individual": 18.96,
+        "posicao": 3,
+        "quantidade": 48.0
+       },
+       {
+        "classe": "C",
+        "faturamento": 71.4,
+        "nome": "Sabão em Pó 1kg",
+        "perc_acumulado": 100.0,
+        "perc_individual": 14.1,
+        "posicao": 4,
+        "quantidade": 6.0
+       }
+      ],
+      "resumo": [
+       {
+        "classe": "A",
+        "faturamento": 339.0,
+        "perc_faturamento": 66.94,
+        "qtd_produtos": 2
+       },
+       {
+        "classe": "B",
+        "faturamento": 96.0,
+        "perc_faturamento": 18.96,
+        "qtd_produtos": 1
+       },
+       {
+        "classe": "C",
+        "faturamento": 71.4,
+        "perc_faturamento": 14.1,
+        "qtd_produtos": 1
+       }
+      ]
+     },
+     "faturamento_total": 506.4,
+     "periodo_base_fim": "2026-03-31",
+     "periodo_base_inicio": "2026-03-01",
+     "produto_maior_faturamento_nome": "Café Torrado 500g",
+     "produto_maior_faturamento_valor": 189.0,
+     "produto_maior_saldo_parado_nome": null,
+     "produto_mais_vendido_nome": "Água Mineral 500ml",
+     "produto_mais_vendido_quantidade": 48.0,
+     "saldo_estimado_compras_vendas": 493.6,
+     "saldo_estimado_parado": null,
+     "total_comprado": 1000.0
+    },
+    "mensagem": "Cálculo concluído em memória.",
+    "sucesso": true,
+    "telemetria": {
+     "coluna_valor_compras": "valor_nf",
+     "colunas_compras": [
+      "fornecedor",
+      "valor_nf"
+     ],
+     "colunas_vendas": [
+      "codigo",
+      "produto",
+      "quantidade",
+      "valor_venda",
+      "valor_custo"
+     ],
+     "itens_venda_abaixo_custo_pdv": 1,
+     "linhas_compras": 1,
+     "linhas_vendas": 4
+    }
+   }
+  }
+ },
+ "raio_x": {
+  "abril": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 6,
+      "rotulo": "04/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 161.3,
+     "custo_bonificacoes": 9.0,
+     "custo_devolucoes": 13.3,
+     "custo_total": 165.6,
+     "faturamento_com_custo": 235.0,
+     "itens_abaixo_custo": [],
+     "itens_margem_negativa": 0,
+     "itens_venda_abaixo_custo": 0,
+     "margem_liquida_percentual": 0.277,
+     "margem_liquida_valor": 61.8,
+     "margem_percentual": 0.2953,
+     "margem_por_item": [
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 100.0,
+       "faturamento_com_custo": 125.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 25.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 25.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 44.0,
+       "faturamento_com_custo": 80.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 36.0,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 40.0
+      },
+      {
+       "codigo": "107",
+       "custo_medio": 1.8,
+       "custo_total": 21.6,
+       "faturamento_com_custo": 30.0,
+       "margem_percentual": 0.28,
+       "margem_valor": 8.4,
+       "produto": "Detergente 500ml",
+       "quantidade_com_custo": 12.0
+      }
+     ],
+     "margem_valor": 69.4,
+     "perda_abaixo_custo": 0.0,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 165.6,
+      "devolucoes": 11.9,
+      "faturamento": 235.0,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-04-30",
+      "indice": 0,
+      "inicio": "2026-04-01",
+      "itens": 3,
+      "margem_percentual": 0.2953,
+      "margem_valor": 69.4,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 0.0,
+      "recuperavel": 0.0,
+      "rotulo": "04/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-04-30",
+     "inicio": "2026-04-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 0.0,
+     "total": 0.0,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 1,
+     "devolucoes": 11.9,
+     "faturamento_sem_custo": 0.0,
+     "faturamento_total": 235.0,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 0,
+      "itens_margem_negativa": 0,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 1
+     },
+     "indice": 100.0,
+     "itens_sem_custo": 0,
+     "itens_vendidos": 3,
+     "pct_faturamento_sem_custo": 0.0,
+     "pct_itens_sem_custo": 0.0
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "abril_marco_xlsx": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 6,
+      "rotulo": "04/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     },
+     {
+      "indice": 1,
+      "linhas": 4,
+      "rotulo": "03/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 554.1,
+     "custo_bonificacoes": 9.0,
+     "custo_devolucoes": 13.3,
+     "custo_total": 558.4,
+     "faturamento_com_custo": 741.4,
+     "itens_abaixo_custo": [
+      {
+       "codigo": "104",
+       "custo_abaixo": 80.0,
+       "faturamento_abaixo": 71.4,
+       "perda": 8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_abaixo": 6.0
+      }
+     ],
+     "itens_margem_negativa": 1,
+     "itens_venda_abaixo_custo": 1,
+     "margem_liquida_percentual": 0.2404,
+     "margem_liquida_valor": 175.4,
+     "margem_percentual": 0.2468,
+     "margem_por_item": [
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 220.0,
+       "faturamento_com_custo": 275.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 55.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 55.0
+      },
+      {
+       "codigo": "102",
+       "custo_medio": 14.0,
+       "custo_total": 140.0,
+       "faturamento_com_custo": 189.0,
+       "margem_percentual": 0.2593,
+       "margem_valor": 49.0,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 96.8,
+       "faturamento_com_custo": 176.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 79.2,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 88.0
+      },
+      {
+       "codigo": "104",
+       "custo_medio": 13.33,
+       "custo_total": 80.0,
+       "faturamento_com_custo": 71.4,
+       "margem_percentual": -0.1204,
+       "margem_valor": -8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_com_custo": 6.0
+      },
+      {
+       "codigo": "107",
+       "custo_medio": 1.8,
+       "custo_total": 21.6,
+       "faturamento_com_custo": 30.0,
+       "margem_percentual": 0.28,
+       "margem_valor": 8.4,
+       "produto": "Detergente 500ml",
+       "quantidade_com_custo": 12.0
+      }
+     ],
+     "margem_valor": 183.0,
+     "perda_abaixo_custo": 8.6,
+     "precificacao": [],
+     "precificacao_visivel": true
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 392.8,
+      "devolucoes": 0.0,
+      "faturamento": 506.4,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-03-31",
+      "indice": 1,
+      "inicio": "2026-03-01",
+      "itens": 4,
+      "margem_percentual": 0.2243,
+      "margem_valor": 113.6,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 8.6,
+      "recuperavel": 8.6,
+      "rotulo": "03/2026",
+      "vazamento_preco": 0.0
+     },
+     {
+      "custo_total": 165.6,
+      "devolucoes": 11.9,
+      "faturamento": 235.0,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-04-30",
+      "indice": 0,
+      "inicio": "2026-04-01",
+      "itens": 3,
+      "margem_percentual": 0.2953,
+      "margem_valor": 69.4,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 0.0,
+      "recuperavel": 0.0,
+      "rotulo": "04/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-04-30",
+     "inicio": "2026-03-01",
+     "meses": 2
+    },
+    "recuperavel": {
+     "abaixo_custo": 8.6,
+     "total": 8.6,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 2,
+     "devolucoes": 11.9,
+     "faturamento_sem_custo": 0.0,
+     "faturamento_total": 741.4,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 0,
+      "itens_margem_negativa": 1,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 1
+     },
+     "indice": 100.0,
+     "itens_sem_custo": 0,
+     "itens_vendidos": 5,
+     "pct_faturamento_sem_custo": 0.0,
+     "pct_itens_sem_custo": 0.0
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "cod_ncm_antes": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 3,
+      "rotulo": "05/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 129.6,
+     "custo_bonificacoes": 0.0,
+     "custo_devolucoes": 0.0,
+     "custo_total": 129.6,
+     "faturamento_com_custo": 169.6,
+     "itens_abaixo_custo": [],
+     "itens_margem_negativa": 0,
+     "itens_venda_abaixo_custo": 0,
+     "margem_liquida_percentual": 0.2358,
+     "margem_liquida_valor": 40.0,
+     "margem_percentual": 0.2358,
+     "margem_por_item": [
+      {
+       "codigo": "09012100",
+       "custo_medio": 14.0,
+       "custo_total": 56.0,
+       "faturamento_com_custo": 75.6,
+       "margem_percentual": 0.2593,
+       "margem_valor": 19.6,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 4.0
+      },
+      {
+       "codigo": "04012010",
+       "custo_medio": 4.0,
+       "custo_total": 40.0,
+       "faturamento_com_custo": 50.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 10.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "04012010",
+       "custo_medio": 4.2,
+       "custo_total": 33.6,
+       "faturamento_com_custo": 44.0,
+       "margem_percentual": 0.2364,
+       "margem_valor": 10.4,
+       "produto": "Leite Desnatado 1L",
+       "quantidade_com_custo": 8.0
+      }
+     ],
+     "margem_valor": 40.0,
+     "perda_abaixo_custo": 0.0,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 129.6,
+      "devolucoes": 0.0,
+      "faturamento": 169.6,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-05-31",
+      "indice": 0,
+      "inicio": "2026-05-01",
+      "itens": 3,
+      "margem_percentual": 0.2358,
+      "margem_valor": 40.0,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 0.0,
+      "recuperavel": 0.0,
+      "rotulo": "05/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-05-31",
+     "inicio": "2026-05-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 0.0,
+     "total": 0.0,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 1,
+     "devolucoes": 0.0,
+     "faturamento_sem_custo": 0.0,
+     "faturamento_total": 169.6,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 1,
+      "estoque_negativo": 0,
+      "itens_margem_negativa": 0,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 0
+     },
+     "indice": 44.58,
+     "itens_sem_custo": 0,
+     "itens_vendidos": 3,
+     "pct_faturamento_sem_custo": 0.0,
+     "pct_itens_sem_custo": 0.0
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "grupo_antes": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 3,
+      "rotulo": "05/2026",
+      "tem_custo": false,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": null,
+     "custo_bonificacoes": 0.0,
+     "custo_devolucoes": 0.0,
+     "custo_total": null,
+     "faturamento_com_custo": 0.0,
+     "itens_abaixo_custo": [],
+     "itens_margem_negativa": 0,
+     "itens_venda_abaixo_custo": 0,
+     "margem_liquida_percentual": null,
+     "margem_liquida_valor": null,
+     "margem_percentual": null,
+     "margem_por_item": [],
+     "margem_valor": null,
+     "perda_abaixo_custo": 0.0,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [
+     "O arquivo 1 não traz a coluna de custo: as vendas dele contam como sem custo informado."
+    ],
+    "fatias": [
+     {
+      "custo_total": null,
+      "devolucoes": 0.0,
+      "faturamento": 169.6,
+      "faturamento_sem_custo": 169.6,
+      "fim": "2026-05-31",
+      "indice": 0,
+      "inicio": "2026-05-01",
+      "itens": 2,
+      "margem_percentual": null,
+      "margem_valor": null,
+      "pct_faturamento_sem_custo": 1.0,
+      "perda_abaixo_custo": 0.0,
+      "recuperavel": 0.0,
+      "rotulo": "05/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-05-31",
+     "inicio": "2026-05-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 0.0,
+     "total": 0.0,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 0,
+     "devolucoes": 0.0,
+     "faturamento_sem_custo": 169.6,
+     "faturamento_total": 169.6,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 0,
+      "itens_margem_negativa": 0,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 0
+     },
+     "indice": 0.0,
+     "itens_sem_custo": 2,
+     "itens_vendidos": 2,
+     "pct_faturamento_sem_custo": 1.0,
+     "pct_itens_sem_custo": 1.0
+    },
+    "scanner": {
+     "faturamento_envolvido": 94.0,
+     "itens": [
+      {
+       "codigo": null,
+       "custo_medio": null,
+       "faturamento": 94.0,
+       "linhas": 2,
+       "margem_percentual": null,
+       "margem_valor": null,
+       "preco_max": 5.5,
+       "preco_min": 5.0,
+       "preco_referencia": 5.0,
+       "produto": "LATICINIOS",
+       "quantidade": 18.0,
+       "referencia_tabela": false,
+       "vazamento": 0.0
+      }
+     ],
+     "itens_com_variacao": 1,
+     "variacao_visivel": true,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "marco": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 7,
+      "rotulo": "03/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 386.8,
+     "custo_bonificacoes": 8.0,
+     "custo_devolucoes": 14.0,
+     "custo_total": 392.8,
+     "faturamento_com_custo": 506.4,
+     "itens_abaixo_custo": [
+      {
+       "codigo": "104",
+       "custo_abaixo": 80.0,
+       "faturamento_abaixo": 71.4,
+       "perda": 8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_abaixo": 6.0
+      }
+     ],
+     "itens_margem_negativa": 1,
+     "itens_venda_abaixo_custo": 1,
+     "margem_liquida_percentual": 0.2066,
+     "margem_liquida_valor": 100.7,
+     "margem_percentual": 0.2243,
+     "margem_por_item": [
+      {
+       "codigo": "102",
+       "custo_medio": 14.0,
+       "custo_total": 140.0,
+       "faturamento_com_custo": 189.0,
+       "margem_percentual": 0.2593,
+       "margem_valor": 49.0,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 120.0,
+       "faturamento_com_custo": 150.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 30.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 30.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 52.8,
+       "faturamento_com_custo": 96.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 43.2,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 48.0
+      },
+      {
+       "codigo": "104",
+       "custo_medio": 13.33,
+       "custo_total": 80.0,
+       "faturamento_com_custo": 71.4,
+       "margem_percentual": -0.1204,
+       "margem_valor": -8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_com_custo": 6.0
+      }
+     ],
+     "margem_valor": 113.6,
+     "perda_abaixo_custo": 8.6,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 392.8,
+      "devolucoes": 18.9,
+      "faturamento": 556.4,
+      "faturamento_sem_custo": 50.0,
+      "fim": "2026-03-31",
+      "indice": 0,
+      "inicio": "2026-03-01",
+      "itens": 5,
+      "margem_percentual": 0.2243,
+      "margem_valor": 113.6,
+      "pct_faturamento_sem_custo": 0.0899,
+      "perda_abaixo_custo": 8.6,
+      "recuperavel": 8.6,
+      "rotulo": "03/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-03-31",
+     "inicio": "2026-03-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 8.6,
+     "total": 8.6,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 1,
+     "devolucoes": 18.9,
+     "faturamento_sem_custo": 50.0,
+     "faturamento_total": 556.4,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 1,
+      "itens_margem_negativa": 1,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 1
+     },
+     "indice": 91.01,
+     "itens_sem_custo": 1,
+     "itens_vendidos": 5,
+     "pct_faturamento_sem_custo": 0.0899,
+     "pct_itens_sem_custo": 0.2
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "marco_abril": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 7,
+      "rotulo": "03/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     },
+     {
+      "indice": 1,
+      "linhas": 6,
+      "rotulo": "04/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 548.1,
+     "custo_bonificacoes": 17.0,
+     "custo_devolucoes": 27.3,
+     "custo_total": 558.4,
+     "faturamento_com_custo": 741.4,
+     "itens_abaixo_custo": [
+      {
+       "codigo": "104",
+       "custo_abaixo": 80.0,
+       "faturamento_abaixo": 71.4,
+       "perda": 8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_abaixo": 6.0
+      }
+     ],
+     "itens_margem_negativa": 1,
+     "itens_venda_abaixo_custo": 1,
+     "margem_liquida_percentual": 0.2287,
+     "margem_liquida_valor": 162.5,
+     "margem_percentual": 0.2468,
+     "margem_por_item": [
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 220.0,
+       "faturamento_com_custo": 275.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 55.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 55.0
+      },
+      {
+       "codigo": "102",
+       "custo_medio": 14.0,
+       "custo_total": 140.0,
+       "faturamento_com_custo": 189.0,
+       "margem_percentual": 0.2593,
+       "margem_valor": 49.0,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 96.8,
+       "faturamento_com_custo": 176.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 79.2,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 88.0
+      },
+      {
+       "codigo": "104",
+       "custo_medio": 13.33,
+       "custo_total": 80.0,
+       "faturamento_com_custo": 71.4,
+       "margem_percentual": -0.1204,
+       "margem_valor": -8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_com_custo": 6.0
+      },
+      {
+       "codigo": "107",
+       "custo_medio": 1.8,
+       "custo_total": 21.6,
+       "faturamento_com_custo": 30.0,
+       "margem_percentual": 0.28,
+       "margem_valor": 8.4,
+       "produto": "Detergente 500ml",
+       "quantidade_com_custo": 12.0
+      }
+     ],
+     "margem_valor": 183.0,
+     "perda_abaixo_custo": 8.6,
+     "precificacao": [],
+     "precificacao_visivel": true
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 392.8,
+      "devolucoes": 18.9,
+      "faturamento": 556.4,
+      "faturamento_sem_custo": 50.0,
+      "fim": "2026-03-31",
+      "indice": 0,
+      "inicio": "2026-03-01",
+      "itens": 5,
+      "margem_percentual": 0.2243,
+      "margem_valor": 113.6,
+      "pct_faturamento_sem_custo": 0.0899,
+      "perda_abaixo_custo": 8.6,
+      "recuperavel": 8.6,
+      "rotulo": "03/2026",
+      "vazamento_preco": 0.0
+     },
+     {
+      "custo_total": 165.6,
+      "devolucoes": 11.9,
+      "faturamento": 235.0,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-04-30",
+      "indice": 1,
+      "inicio": "2026-04-01",
+      "itens": 3,
+      "margem_percentual": 0.2953,
+      "margem_valor": 69.4,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 0.0,
+      "recuperavel": 0.0,
+      "rotulo": "04/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-04-30",
+     "inicio": "2026-03-01",
+     "meses": 2
+    },
+    "recuperavel": {
+     "abaixo_custo": 8.6,
+     "total": 8.6,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 2,
+     "devolucoes": 30.8,
+     "faturamento_sem_custo": 50.0,
+     "faturamento_total": 791.4,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 1,
+      "itens_margem_negativa": 1,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 2
+     },
+     "indice": 93.68,
+     "itens_sem_custo": 1,
+     "itens_vendidos": 6,
+     "pct_faturamento_sem_custo": 0.0632,
+     "pct_itens_sem_custo": 0.1667
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "marco_cp1252": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 7,
+      "rotulo": "03/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 386.8,
+     "custo_bonificacoes": 8.0,
+     "custo_devolucoes": 14.0,
+     "custo_total": 392.8,
+     "faturamento_com_custo": 506.4,
+     "itens_abaixo_custo": [
+      {
+       "codigo": "104",
+       "custo_abaixo": 80.0,
+       "faturamento_abaixo": 71.4,
+       "perda": 8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_abaixo": 6.0
+      }
+     ],
+     "itens_margem_negativa": 1,
+     "itens_venda_abaixo_custo": 1,
+     "margem_liquida_percentual": 0.2066,
+     "margem_liquida_valor": 100.7,
+     "margem_percentual": 0.2243,
+     "margem_por_item": [
+      {
+       "codigo": "102",
+       "custo_medio": 14.0,
+       "custo_total": 140.0,
+       "faturamento_com_custo": 189.0,
+       "margem_percentual": 0.2593,
+       "margem_valor": 49.0,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 120.0,
+       "faturamento_com_custo": 150.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 30.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 30.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 52.8,
+       "faturamento_com_custo": 96.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 43.2,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 48.0
+      },
+      {
+       "codigo": "104",
+       "custo_medio": 13.33,
+       "custo_total": 80.0,
+       "faturamento_com_custo": 71.4,
+       "margem_percentual": -0.1204,
+       "margem_valor": -8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_com_custo": 6.0
+      }
+     ],
+     "margem_valor": 113.6,
+     "perda_abaixo_custo": 8.6,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 392.8,
+      "devolucoes": 18.9,
+      "faturamento": 556.4,
+      "faturamento_sem_custo": 50.0,
+      "fim": "2026-03-31",
+      "indice": 0,
+      "inicio": "2026-03-01",
+      "itens": 5,
+      "margem_percentual": 0.2243,
+      "margem_valor": 113.6,
+      "pct_faturamento_sem_custo": 0.0899,
+      "perda_abaixo_custo": 8.6,
+      "recuperavel": 8.6,
+      "rotulo": "03/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-03-31",
+     "inicio": "2026-03-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 8.6,
+     "total": 8.6,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 1,
+     "devolucoes": 18.9,
+     "faturamento_sem_custo": 50.0,
+     "faturamento_total": 556.4,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 1,
+      "itens_margem_negativa": 1,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 1
+     },
+     "indice": 91.01,
+     "itens_sem_custo": 1,
+     "itens_vendidos": 5,
+     "pct_faturamento_sem_custo": 0.0899,
+     "pct_itens_sem_custo": 0.2
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  },
+  "xlsx": {
+   "resultado": {
+    "arquivos": [
+     {
+      "indice": 0,
+      "linhas": 4,
+      "rotulo": "03/2026",
+      "tem_custo": true,
+      "tem_preco_unitario": false
+     }
+    ],
+    "auditoria": {
+     "cmv_liquido": 392.8,
+     "custo_bonificacoes": 0.0,
+     "custo_devolucoes": 0.0,
+     "custo_total": 392.8,
+     "faturamento_com_custo": 506.4,
+     "itens_abaixo_custo": [
+      {
+       "codigo": "104",
+       "custo_abaixo": 80.0,
+       "faturamento_abaixo": 71.4,
+       "perda": 8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_abaixo": 6.0
+      }
+     ],
+     "itens_margem_negativa": 1,
+     "itens_venda_abaixo_custo": 1,
+     "margem_liquida_percentual": 0.2243,
+     "margem_liquida_valor": 113.6,
+     "margem_percentual": 0.2243,
+     "margem_por_item": [
+      {
+       "codigo": "102",
+       "custo_medio": 14.0,
+       "custo_total": 140.0,
+       "faturamento_com_custo": 189.0,
+       "margem_percentual": 0.2593,
+       "margem_valor": 49.0,
+       "produto": "Café Torrado 500g",
+       "quantidade_com_custo": 10.0
+      },
+      {
+       "codigo": "101",
+       "custo_medio": 4.0,
+       "custo_total": 120.0,
+       "faturamento_com_custo": 150.0,
+       "margem_percentual": 0.2,
+       "margem_valor": 30.0,
+       "produto": "Leite Integral 1L",
+       "quantidade_com_custo": 30.0
+      },
+      {
+       "codigo": "103",
+       "custo_medio": 1.1,
+       "custo_total": 52.8,
+       "faturamento_com_custo": 96.0,
+       "margem_percentual": 0.45,
+       "margem_valor": 43.2,
+       "produto": "Água Mineral 500ml",
+       "quantidade_com_custo": 48.0
+      },
+      {
+       "codigo": "104",
+       "custo_medio": 13.33,
+       "custo_total": 80.0,
+       "faturamento_com_custo": 71.4,
+       "margem_percentual": -0.1204,
+       "margem_valor": -8.6,
+       "produto": "Sabão em Pó 1kg",
+       "quantidade_com_custo": 6.0
+      }
+     ],
+     "margem_valor": 113.6,
+     "perda_abaixo_custo": 8.6,
+     "precificacao": [],
+     "precificacao_visivel": false
+    },
+    "avisos": [],
+    "fatias": [
+     {
+      "custo_total": 392.8,
+      "devolucoes": 0.0,
+      "faturamento": 506.4,
+      "faturamento_sem_custo": 0.0,
+      "fim": "2026-03-31",
+      "indice": 0,
+      "inicio": "2026-03-01",
+      "itens": 4,
+      "margem_percentual": 0.2243,
+      "margem_valor": 113.6,
+      "pct_faturamento_sem_custo": 0.0,
+      "perda_abaixo_custo": 8.6,
+      "recuperavel": 8.6,
+      "rotulo": "03/2026",
+      "vazamento_preco": 0.0
+     }
+    ],
+    "periodo": {
+     "fim": "2026-03-31",
+     "inicio": "2026-03-01",
+     "meses": 1
+    },
+    "recuperavel": {
+     "abaixo_custo": 8.6,
+     "total": 8.6,
+     "variacao_preco": 0.0
+    },
+    "saude": {
+     "arquivos_com_custo": 1,
+     "devolucoes": 0.0,
+     "faturamento_sem_custo": 0.0,
+     "faturamento_total": 506.4,
+     "inconsistencias": {
+      "codigo_com_varios_nomes": 0,
+      "estoque_negativo": 0,
+      "itens_margem_negativa": 1,
+      "nome_com_varios_codigos": 0,
+      "venda_sem_valor": 0
+     },
+     "indice": 100.0,
+     "itens_sem_custo": 0,
+     "itens_vendidos": 4,
+     "pct_faturamento_sem_custo": 0.0,
+     "pct_itens_sem_custo": 0.0
+    },
+    "scanner": {
+     "faturamento_envolvido": 0.0,
+     "itens": [],
+     "itens_com_variacao": 0,
+     "variacao_visivel": false,
+     "vazamento_preco": 0.0
+    },
+    "versao": "raio-x-2026-11.4"
+   }
+  }
+ },
+ "source_commit": "53020e6"
+}

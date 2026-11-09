@@ -1,12 +1,12 @@
 # Avaliação de Cenário (leads)
 
-Situação em 08/11/2026: código, migrações e testes prontos, **sem commit e sem nada aplicado no Supabase**. As migrações só entram com autorização do dono (seção 8).
+Situação em 08/11/2026: a Etapa 1 (saneamento, worker, triagem e infraestrutura) está no commit `53020e6`. A Etapa 2 (triagem com limiares configuráveis, marcas de omissão no ERP, matriz por categoria e diagnóstico em JSON) está pronta e testada, **sem commit e sem nada aplicado no Supabase**. As migrações só entram com autorização do dono (seção 9).
 
-O consultor envia os relatórios mensais de vendas de um lead, ou seja, de quem ainda não é cliente. O motor do Raio-X roda no processo isolado do ETL, numa passada única. O servidor grava a matriz produto × ano, as marcas, a triagem (Urgência, Atenção e Eletiva) e o resumo do lead.
+O consultor envia os relatórios mensais de vendas de um lead, ou seja, de quem ainda não é cliente. O motor do Raio-X roda no processo isolado do ETL, numa passada única. O servidor grava a matriz produto × ano, as marcas, a triagem (Urgência, Atenção e Eletiva) e o resumo do lead. A tela do consultor e a rota JSON mostram a matriz por categoria e os itens de cada bloco, com motivo e impacto.
 
 Os arquivos não são guardados. As linhas de PDV do lead expiram em 30 dias. O resumo e o contato ficam.
 
-Base: Fases 2 a 4 da diretriz de 11/2026 e `Docs/DIAGNOSTICO_MOTOR_ETL.md`. As tabelas, o RLS e a função de expurgo vêm da revisão `f4c2a8e1d9b6` (`Docs/BAIA_DE_SEGURANCA_E_LEADS.md`, seção 2).
+Base: Fases 2 a 4 da diretriz de 11/2026, a diretriz da Etapa 2 (evolução analítica) e `Docs/DIAGNOSTICO_MOTOR_ETL.md`. As tabelas, o RLS e a função de expurgo vêm da revisão `f4c2a8e1d9b6` (`Docs/BAIA_DE_SEGURANCA_E_LEADS.md`, seção 2).
 
 ## 1. Fluxo
 
@@ -18,38 +18,47 @@ Base: Fases 2 a 4 da diretriz de 11/2026 e `Docs/DIAGNOSTICO_MOTOR_ETL.md`. As t
 | 4 | `avaliacao_cenario.processar` | Chama `raio_x_servico.processar_envio(..., executar=etl_runtime.run_avaliacao_cenario, origem="lead")`. Reaproveita a Baia de Segurança, o teto de 36 arquivos, a assinatura, a recusa de arquivo repetido e o diretório temporário do Raio-X. |
 | 5 | `etl_runtime.run_avaliacao_cenario` | Abre o processo isolado com prazo de `min(120, 2 × configurado)` segundos e memória (`RLIMIT_AS`) de `min(384, configurada)` MiB. Isso vale mesmo que `ETL_MEMORY_MB` suba a das outras operações. O retorno inteiro passa por `validar_avaliacao` (detalhes abaixo). |
 | 6 | `etl_worker.py`, operação `avaliacao_cenario` | Recusa mais de `MAX_ARQUIVOS` arquivos, roda `validate_input` em cada um e chama `avaliacao_motor.avaliar_cenario`. |
-| 7 | `avaliacao_motor.avaliar_cenario` | Usa `raio_x._ler_envio`, que lê cada arquivo uma vez só com `read_raw` e `_vendas_do_bruto`. Aplica as regras do lead (seção 2), monta a matriz, confere os tetos e roda `raio_x._combinar`. Antes de devolver, confere o tamanho. |
-| 8 | `avaliacao_cenario.registrar` | Num SAVEPOINT, quantiza as linhas como o banco as guarda e calcula marcas e triagem. Grava o lead e as linhas com **um único `criado_em`**: o expurgo leva o lote inteiro junto. Grava também o plano recomendado (`raio_x.recomendar`, com o histórico do PRATA). O commit é feito pela rota. |
-| 9 | `GET /admin/leads/<id>` | Mostra o resumo, os indicadores e até 30 itens por bloco com os motivos, mais a data em que os dados de PDV expiram. |
+| 7 | `avaliacao_motor.avaliar_cenario` | Usa `raio_x._ler_envio(..., cadastro=True)`, que lê cada arquivo uma vez só com `read_raw` e `_vendas_do_bruto` e, só aqui, também NCM, categoria e estoque (seção 2). Aplica as regras do lead, monta a matriz, confere os tetos e roda `raio_x._combinar`. Antes de devolver, confere o tamanho. |
+| 8 | `avaliacao_cenario.registrar` | Num SAVEPOINT, quantiza as linhas como o banco as guarda e calcula marcas e triagem com os limiares (os padrão, ou os já gravados no lead no reenvio). Confere os tetos das somas arredondadas. Grava o lead e as linhas com **um único `criado_em`**: o expurgo leva o lote inteiro junto. Grava também o plano recomendado (`raio_x.recomendar`, com o histórico do PRATA) e os limiares usados. O commit é feito pela rota. |
+| 9 | `GET /admin/leads/<id>` | Mostra o resumo, os indicadores, a matriz por categoria e até 30 itens por bloco, com motivos e impacto, mais a data em que os dados de PDV expiram (seção 5). |
 
 Se o processo isolado falhar, nada é gravado, porque um lead sem linhas nunca expiraria. Mensagens do motor (`ETLInputError`) voltam ao consultor como estão. Erros de banco viram uma mensagem genérica, e o log guarda só o tipo do erro.
 
-**Conferência do retorno** (`etl_runtime.validar_avaliacao`). Um processo isolado com defeito, ou comprometido, não grava texto livre nem derruba a gravação com erro 500. A conferência cobre:
+**Conferência do retorno** (`etl_runtime.validar_avaliacao`). Um processo isolado com defeito, ou comprometido, não grava texto livre nem derruba a gravação com erro 500: uma exceção inesperada na própria conferência (um inteiro de 400 dígitos, um tipo trocado) também vira recusa. A conferência cobre:
 - **Estrutura:** as chaves e a versão exatas (`VERSAO_REGRAS_LEAD`).
 - **Meta:** as chaves fixas de `avaliacao_motor.CHAVES_META`, só com contagens, versões e valores agregados (sem texto livre):
   - anos de 4 dígitos;
   - relatórios por ano somando o total;
-  - dias entre 1 e 366;
+  - dias entre 1 e 366, e os dias dos mesmos meses até os dias do ano;
   - marca de mensal booleana;
-  - qualidade e situação só com as chaves conhecidas.
-- **Raio-X:** os campos que a gravação e a recomendação do plano leem (período em data ISO, índice de 0 a 100, faturamento, custo e recuperável).
-- **Linhas:**
+  - relatórios com custo, NCM, categoria, estoque e completos, por ano, de 0 até os relatórios do ano;
+  - relatórios com cabeçalho ambíguo, de 0 até o total;
+  - ajustes de produto sem venda por ano com exatamente as três somas, não negativas e abaixo de 10¹² (o teto do dinheiro);
+  - qualidade e situação só com as chaves conhecidas, e o dinheiro da situação abaixo de 10¹².
+- **Raio-X:** os campos que a gravação e a recomendação do plano leem (período em data ISO com início até o fim, índice de 0 a 100, faturamento, custo e recuperável).
+- **Linhas:** exatamente `colunas`, `valores` e `categorias`.
+  - categorias únicas, cada uma com 1 a 80 caracteres imprimíveis e algo além de espaços;
   - ano dentro do envio;
   - chave do produto com 16 hexadecimais;
-  - descrição com texto além de espaços;
-  - código com até 60 caracteres;
-  - somas finitas e não negativas;
-  - uma linha por produto e ano.
+  - descrição com texto além de espaços, e código com até 60 caracteres, os dois só com caracteres imprimíveis (sem NUL, controle nem surrogate solto, que o PostgreSQL recusa fora do tratamento de erro);
+  - somas finitas, não negativas e abaixo do teto da coluna do banco (inteiro só até 2⁵³); estoque finito e com módulo abaixo do teto (pode ser negativo);
+  - contagens inteiras até 2³¹ − 1 (o INTEGER do banco), marcas booleanas, índice de categoria dentro da lista;
+  - coerência dentro da linha: 1 ≤ relatórios com venda ≤ linhas; relatórios com venda ≤ relatórios desde a primeira venda ≤ relatórios do ano; relatórios negativos ≤ relatórios com custo ≤ relatórios com venda; relatórios completos ≤ relatórios com venda; "último relatório negativo" só com relatório negativo; venda com custo ≤ venda nos relatórios com a coluna de custo ≤ venda; quantidade nos mesmos meses ≤ quantidade; NCM, categoria, estoque e custo só nos anos em que algum relatório traz a coluna; categoria e "categoria ausente" nunca juntas;
+  - uma linha por produto e ano;
+  - coluna sem regra de conferência nunca passa.
 
 Se mesmo assim algo não fechar na gravação, o resultado é recusado como "Resultado inválido do processamento isolado." (422), e nada é gravado.
 
-Outras rotas, todas `admin_required`:
+Outras rotas e comandos, todos só para consultores:
 
-| Rota | Faz |
+| Rota ou comando | Faz |
 |---|---|
-| `POST /admin/leads/<id>/reenviar` | Exige de novo a autorização do lead. Troca as linhas pelas do novo envio, com o lead travado. Recusa lead já convertido em cliente. |
-| `POST /admin/leads/<id>/retriar` | Refaz marcas e triagem a partir da staging, sem os arquivos (seção 4). |
+| `GET /admin/leads/<id>/diagnostico.json` | O diagnóstico do lead em JSON (seção 5). |
+| `POST /admin/leads/<id>/reenviar` | Exige de novo a autorização do lead. Troca as linhas pelas do novo envio, com o lead travado, e mantém os limiares gravados. Recusa lead já convertido em cliente. |
+| `POST /admin/leads/<id>/retriar` | Refaz marcas e triagem a partir da staging, sem os arquivos, com os limiares gravados no lead (seção 4). |
 | `flask leads retriar <id>` | O mesmo pela linha de comando. A saída mostra só contagens. |
+| `flask leads retriar <id> --limiares '{"margem_baixa": "0.08"}'` | Refaz com limiares trocados (JSON parcial; valores em texto decimal, contagens em inteiro) e grava os novos no lead. |
+| `flask leads agendar-expurgo` | Agenda, ou reagenda, o expurgo diário no pg_cron, como a revisão `6a8f2d4c0e13` (seção 6). |
 
 Limite: 20 envios por hora por consultor, somando novo envio e reenvio (`limite_envio`).
 
@@ -57,11 +66,11 @@ Limite: 20 envios por hora por consultor, somando novo envio e reenvio (`limite_
 
 **Lista.** Mostra as 100 avaliações mais recentes, em ordem da coluna "Avaliado em": o instante da autorização do lead (`consentimento_em`, renovado a cada reenvio) ou, sem ele, a criação do lead. Um lead antigo reavaliado volta para o topo. Quando há mais avaliações, a lista avisa: "Mostrando as 100 avaliações mais recentes de N".
 
-Banco sem as migrações: a lista mostra o aviso de migrações pendentes, e as demais rotas redirecionam com o mesmo aviso, sem ler arquivo nem consultar as tabelas de lead. A checagem é por engine. A presença fica gravada; a ausência é reavaliada a cada 30 s, então a migração aplicada passa a valer sem reiniciar o processo.
+Banco sem as migrações: a lista mostra o aviso de migrações pendentes; as demais telas redirecionam com o mesmo aviso e a rota JSON responde 503 (`{"erro": "esquema_pendente"}`, com `Retry-After`), sem ler arquivo nem consultar as tabelas de lead. A checagem é por engine e olha a coluna `categoria_produto`, da revisão `7c4e2a9b5d31`. A presença fica gravada; a ausência é reavaliada a cada 30 s, então a migração aplicada passa a valer sem reiniciar o processo.
 
 ## 2. Regras do motor do lead (`avaliacao_motor.py`)
 
-Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.2"`, sobre as regras do Raio-X `raio-x-2026-11.4`. A 11.2 acrescentou três coisas: a cobertura de cada ano, as marcas por produto e ano, e a descrição sem espaços. O motor não importa banco, Flask nem configuração; há teste que garante isso.
+Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.3"`, sobre as regras do Raio-X `raio-x-2026-11.4`. A 11.3 acrescentou a leitura do cadastro (NCM, categoria e estoque), os ajustes de bonificação e devolução por produto e as contagens de que a triagem da Etapa 2 precisa. O motor não importa banco, Flask nem configuração; há teste que garante isso.
 
 - **Ano de exercício.** Cada relatório precisa do período no cabeçalho ("Período: dd/mm/aaaa a dd/mm/aaaa"), dentro de um mesmo ano civil, entre 2000 e o ano corrente, e começando até hoje. A recusa traz o número do arquivo:
   - `avaliacao_sem_periodo`: o relatório não tem período;
@@ -70,32 +79,54 @@ Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.2"`, sobre as regras do Raio-X `rai
   - `avaliacao_periodo_futuro`: o período começa depois de hoje.
 - **Sobreposição.** Dois relatórios com um dia em comum que seja são recusados (`avaliacao_sobreposicao`), e também o período dentro de outro. Períodos vizinhos ("01/01 a 31/01" e "01/02 a 28/02") passam. No Raio-X do cliente a sobreposição é só um aviso. Aqui, a matriz somaria os mesmos dias duas vezes.
 - **Chave do produto.** `chave_produto` é o sha256 do nome normalizado do ETL (sem acento, pontuação nem caixa), com 16 hexadecimais. É estável entre anos e entre grafias com e sem acento.
-- **Matriz produto × ano.** Tem uma linha por produto e ano, com 17 colunas (`avaliacao_motor.COLUNAS`):
-  - `ano_exercicio`, `chave_produto`, `codigo_produto` e `descricao_produto`, com o nome e o código do mês mais recente. Nome só com espaços vira a chave normalizada do produto ("CAFE"), porque a coluna exige texto;
+- **Leitura do cadastro** (`etl_processor._vendas_do_bruto(..., cadastro=True)`). Só o lead pede; o Raio-X do cliente e a análise mensal leem exatamente como antes (golden `tests/test_cadastro_regression.py`, capturado do `53020e6`). Nada entra no dicionário de colunas de vendas.
+  - **NCM:** a coluna cujo título fala em NCM. Ficam só os dígitos ("0901.21.00" vale 09012100); o "4012010.0" que o XLSX entrega como número perde o ".0" e ganha o zero à esquerda; só zeros ou outro tamanho valem como ausente.
+  - **Categoria:** a coluna de nível mais alto entre categoria, departamento (depto), seção, grupo, família e subgrupo. Título com código, NCM, termos fiscais (tributário, ICMS, IPI, PIS, COFINS, CST, CFOP), preço, cliente, fornecedor, pagamento, situação ou status não conta. Marcadores de categoria não configurada ("SEM GRUPO", "Geral", "Padrão", "Não definido", "999", célula vazia) valem como ausente; "Diversos" e "Outros" ficam como categoria. Até 80 caracteres.
+  - **Estoque:** o último valor informado do produto no ano, lido de qualquer linha dele no relatório, inclusive com quantidade 0 (o relatório "vendas x estoque" lista o item parado com o saldo); pode ser negativo. Só entra quando o produto vendeu no ano: o item que aparece num ano só com estoque, sem venda, não ganha linha (limitação, seção 10).
+  - **Cabeçalho ambíguo:** quando o título que o Raio-X leu como código ou nome do produto tem palavra de cadastro ("Cód. NCM" antes de "Código", "Grupo do Produto" antes de "Descrição"), NCM e categoria desse relatório não são avaliados, e o conflito de cadastro não é avaliado **no envio inteiro** (a linha da staging soma o produto no ano e não sabe de que relatório veio o conflito). A meta conta o relatório em `relatorios_cabecalho_ambiguo`.
+- **Matriz produto × ano.** Tem uma linha por produto e ano, com 31 colunas (`avaliacao_motor.COLUNAS`):
+  - `ano_exercicio`, `chave_produto`, `codigo_produto` e `descricao_produto`, com o nome e o código do mês mais recente, limpos de caractere de controle (o espaço especial vira espaço; o código fica com até 60 caracteres). Nome só com espaços vira a chave normalizada do produto ("CAFE"), porque a coluna exige texto;
   - `quantidade`, `valor_venda_bruto`, `quantidade_com_custo`, `faturamento_com_custo`, `custo_total`, `perda`, `vazamento_preco` e `recuperavel`;
   - `linhas` e `meses`. `meses` conta os relatórios com venda no ano: são meses quando os relatórios são mensais;
-  - as marcas `variacao`, `conflito_cadastral` e `estoque_negativo`. As duas últimas valem para o produto **no ano**, como no Raio-X: o arquivo em que o conflito aparece pode ter só bonificação do produto. Quando o produto não teve venda no ano em que a marca apareceu (só bonificação ou devolução), a marca vai para as linhas dele nos outros anos: o Raio-X do mesmo envio conta o produto, e a triagem também tem de contar.
-- **Cobertura de cada ano** (meta). Para cada ano, a meta guarda:
-  - `arquivos_por_ano`: os relatórios do ano;
-  - `dias_por_ano`: os dias cobertos pelos períodos, **contados até hoje**. O mês corrente exportado com o mês inteiro no cabeçalho ("01/11 a 30/11", lido em 08/11) cobre só os 8 dias que já passaram;
-  - `relatorios_mensais_por_ano`: se cada relatório do ano cabe num mesmo mês.
+  - as marcas `variacao`, `conflito_cadastral` e `estoque_negativo`. As duas últimas valem para o produto **no ano**, como no Raio-X. Quando o produto não teve venda no ano em que a marca apareceu (só bonificação ou devolução), a marca vai para as linhas dele nos outros anos;
+  - **novas na 11.3:**
 
-  É a base do ritmo de venda da triagem.
-- **Mesmas regras por linha do Raio-X.** Leitura, limpeza, custo unitário ou total, perda abaixo do custo, vazamento de preço e recuperável são os do Raio-X, sem cópia. `EquivalenciaTests` confere que a staging somada reproduz o Raio-X.
-- **Tetos** (`avaliacao_valor`). Um valor que a coluna do banco não comporta é recusado com mensagem, em vez de derrubar a gravação:
+    | Coluna | O que é |
+    |---|---|
+    | `faturamento_em_relatorio_com_custo` | venda do produto nos relatórios que trazem a coluna de custo |
+    | `meses_com_custo` | relatórios com venda com custo |
+    | `meses_margem_negativa`, `ultimo_mes_negativo` | relatórios com venda abaixo do custo (comparação em centavos) e se o mais recente com custo foi negativo |
+    | `meses_completos` | relatórios com venda cujo período já terminou (fim antes de hoje), seja qual for a duração |
+    | `quantidade_mesmos_meses` | quantidade nos relatórios da janela dos mesmos meses (abaixo); 0 fora dela |
+    | `relatorios_desde_primeira_venda` | relatórios do ano desde a primeira venda do produto no ano (a base do giro de um lançamento) |
+    | `estoque_final` | o último estoque informado (de qualquer linha do produto); nulo sem a coluna |
+    | `categoria` | índice na lista `linhas["categorias"]`; nulo sem categoria |
+    | `ncm_ausente`, `categoria_ausente` | o relatório traz a coluna e o produto veio sem o dado |
+    | `custo_bonificacoes`, `custo_devolucoes`, `devolucoes_com_custo` | custo das bonificações, custo e receita das devoluções com custo, pelas mesmas máscaras da auditoria do Raio-X |
+- **Cobertura de cada ano** (meta). Para cada ano, a meta guarda:
+  - `arquivos_por_ano`, `dias_por_ano` (contados até hoje: o mês corrente exportado inteiro, lido em 08/11, cobre só 8 dias) e `relatorios_mensais_por_ano`;
+  - `relatorios_com_custo_por_ano`, `relatorios_com_ncm_por_ano`, `relatorios_com_categoria_por_ano`, `relatorios_com_estoque_por_ano` e `relatorios_completos_por_ano`;
+  - `dias_mesmos_meses_por_ano`: os dias da **janela dos mesmos meses** em cada ano. A janela são os meses do calendário que os dois últimos anos do envio cobrem, só quando os relatórios dos dois são todos mensais, e no último ano só com os relatórios completos (o mês corrente, parcial, fica de fora dos dois lados). Os anos mais antigos e o envio de um ano só ficam com 0. Envio de 12 meses de novembro a outubro não tem mês em comum: janela 0 nos dois anos;
+  - `ajustes_sem_venda_por_ano`: o custo de bonificação e de devolução de produto sem venda no ano, sem nome de produto (a matriz não tem linha para ele, e o total da matriz por categoria precisa fechar com o Raio-X).
+
+  É a base do ritmo de venda e das contagens da triagem.
+- **Mesmas regras por linha do Raio-X.** Leitura, limpeza, custo unitário ou total, perda abaixo do custo, vazamento de preço, recuperável, bonificação e devolução são os do Raio-X, sem cópia. `EquivalenciaTests` confere que a staging somada reproduz o Raio-X, e a rota JSON tem teste que fecha os totais com a auditoria do Raio-X dos mesmos arquivos.
+- **Tetos** (`avaliacao_valor`). Um valor que a coluna do banco não comporta é recusado com mensagem, em vez de derrubar a gravação. O motor confere antes de devolver, o contrato confere de novo, e a gravação confere as somas já arredondadas (o arredondamento pode levar um valor logo abaixo do teto até ele):
 
   | Valores | Teto |
   |---|---|
-  | Quantidades | menos de 10¹¹ |
+  | Quantidades e estoque (em módulo) | menos de 10¹¹ |
   | Dinheiro | menos de 10¹² |
   | Custo médio e vazamento estimado (derivados no processo pai) | menos de 10¹⁰ |
   | Vazamento total do lead | menos de 10¹⁰ |
 
   O SQLite não impõe `NUMERIC(p, s)`, por isso a conferência é feita no código.
-- **Saída.** O JSON é colunar: `{"colunas": [...], "valores": [[...], ...]}`. Fica abaixo do teto rígido de 4 MiB do worker, com 4 KiB de folga para o envelope. Acima disso, a recusa `avaliacao_grande` explica o motivo. O worker trocaria o resultado grande por um erro genérico. Com cerca de 168 bytes por linha, cabem perto de 24.500 linhas produto × ano.
-- **Meta.** Guarda só contagens, versões e valores agregados, sem nome de produto nem texto livre: as versões das regras do lead e do Raio-X, arquivos por ano, a cobertura, arquivos com custo, linhas lidas, qualidade dos valores, situação (quantidade de linhas e valor em R$ dos cancelamentos e das devoluções) e células recodificadas. Ao gravar, o processo pai acrescenta em `meta_json` os motivos da recomendação do plano (`motivos_recomendacao`): as frases de regra fixa de `raio_x.recomendar`, com contagens e valores, sem nome de produto.
+- **Saída.** O JSON é colunar: `{"colunas": [...], "valores": [[...], ...], "categorias": [...]}`. Número inteiro sai como inteiro, para o JSON ficar menor. O resultado fica abaixo do teto rígido de 4 MiB do worker, com 4 KiB de folga para o envelope; acima disso, a recusa `avaliacao_grande` explica o motivo. Medido com 24 relatórios mensais de 2.000 produtos (nome de 60 caracteres, código de 12 dígitos, NCM, categoria e estoque): **253 bytes por linha produto × ano na 11.3, contra 196 na 11.2** com os mesmos arquivos. Cabem perto de **16.400 linhas** (eram 21.100). O prazo de 120 s do processo isolado continua sendo o limite que chega antes (seção 10).
+- **Meta.** Guarda só contagens, versões e valores agregados, sem nome de produto nem texto livre: as versões das regras do lead e do Raio-X, arquivos por ano, a cobertura, arquivos com custo, linhas lidas, qualidade dos valores, situação (quantidade de linhas e valor em R$ dos cancelamentos e das devoluções), células recodificadas e as contagens e ajustes acima. Ao gravar, o processo pai acrescenta em `meta_json` os motivos da recomendação do plano (`motivos_recomendacao`). As categorias, que são texto do relatório, vão só para a staging, que expira; nunca para a meta.
 
-## 3. Staging e lead (revisão `5e1b9c3a7d20`)
+## 3. Staging e lead
+
+### Revisão `5e1b9c3a7d20`
 
 Expand nas duas tabelas da `f4c2a8e1d9b6`. Nenhuma outra tabela é tocada e nenhuma linha é reescrita. O RLS e as políticas da `f4c2a8e1d9b6` valem para a tabela inteira, então as colunas novas já nascem protegidas.
 
@@ -111,122 +142,181 @@ Expand nas duas tabelas da `f4c2a8e1d9b6`. Nenhuma outra tabela é tocada e nenh
 | `bloco_triagem` | `VARCHAR(10)` | `urgencia`, `atencao`, `eletiva` ou nulo |
 | `versao_regras` | `VARCHAR(40)` | — |
 
-Restrições:
-- `ck_brainstorming_dados_pdv_chave`: chave não vazia;
-- `ck_brainstorming_dados_pdv_somas`: somas não negativas;
-- `ck_brainstorming_dados_pdv_bloco`: bloco válido;
-- `uq_brainstorming_dados_pdv_lead_ano_produto`: unicidade de lead, ano e produto, para que um reprocessamento não duplique linhas.
+Restrições: `ck_brainstorming_dados_pdv_chave` (chave não vazia), `ck_brainstorming_dados_pdv_somas` (somas não negativas), `ck_brainstorming_dados_pdv_bloco` (bloco válido) e `uq_brainstorming_dados_pdv_lead_ano_produto` (unicidade de lead, ano e produto, para que um reprocessamento não duplique linhas).
 
-**`lead_avaliacao`** ganha estas colunas, todas anuláveis:
+**`lead_avaliacao`** ganha, todas anuláveis: `versao_regras` e `versao_triagem`; `periodo_inicio` e `periodo_fim`; `arquivos`; `meta_json`; `itens_venda_sem_custo` e `itens_venda_abaixo_custo`; `registrado_por` (FK para `usuario`, `ON DELETE SET NULL`, com índice `ix_lead_avaliacao_registrado_por`); `consentimento_em`. Os CHECKs são `ck_lead_avaliacao_arquivos`, `ck_lead_avaliacao_itens` e `ck_lead_avaliacao_periodo`.
 
-| Coluna | Guarda |
+O downgrade trava `usuario` e as duas tabelas e recusa se houver qualquer lead ou linha ("Downgrade da Avaliação de Cenário recusado..."). `usuario` vem primeiro, na ordem das requisições, como na `c7d41e9a2b60`: remover a FK de `registrado_por` trava `usuario`, e travá-lo depois das tabelas de lead podia entrar em deadlock com uma requisição em andamento (os testes `postgresql_configuracoes` de downgrade concorrente falhavam por isso desde a Etapa 1).
+
+### Revisão `7c4e2a9b5d31` (Etapa 2)
+
+Também só expand nas duas tabelas: ADD COLUMN com padrão constante (no PostgreSQL 11 ou mais novo, não reescreve a tabela) e CHECKs. Nenhuma linha é reescrita; as linhas gravadas antes recebem o padrão do servidor, e a `versao_regras` as separa.
+
+**`brainstorming_dados_pdv`**
+
+| Coluna | Tipo |
 |---|---|
-| `versao_regras`, `versao_triagem` | versões das regras e da triagem |
-| `periodo_inicio`, `periodo_fim` | período coberto |
-| `arquivos` | número de relatórios |
-| `meta_json` | metadados do envio: contagens, versões e valores agregados, sem nome de produto |
-| `itens_venda_sem_custo`, `itens_venda_abaixo_custo` | contagens das marcas por produto |
-| `registrado_por` | FK para `usuario`, `ON DELETE SET NULL`, com índice `ix_lead_avaliacao_registrado_por` |
-| `consentimento_em` | quando o consultor confirmou a autorização do lead |
+| `faturamento_em_relatorio_com_custo`, `custo_bonificacoes`, `custo_devolucoes`, `devolucoes_com_custo` | `NUMERIC(14,2)` NOT NULL, padrão 0 |
+| `quantidade_mesmos_meses` | `NUMERIC(14,3)` NOT NULL, padrão 0 |
+| `meses_com_custo`, `meses_margem_negativa`, `meses_completos`, `relatorios_desde_primeira_venda` | `INTEGER` NOT NULL, padrão 0 |
+| `ultimo_mes_negativo`, `ncm_ausente`, `categoria_ausente` | `BOOLEAN` NOT NULL, padrão `false` |
+| `estoque_final` | `NUMERIC(14,3)`, anulável |
+| `categoria_produto` | `VARCHAR(80)`, anulável (texto do relatório: expira com a linha em 30 dias) |
 
-Os CHECKs são `ck_lead_avaliacao_arquivos`, `ck_lead_avaliacao_itens` e `ck_lead_avaliacao_periodo`.
+Restrições: `ck_brainstorming_dados_pdv_etapa2_somas` (somas novas não negativas), `ck_brainstorming_dados_pdv_etapa2_meses` (negativos ≤ com custo ≤ meses; completos ≤ meses; relatórios desde a primeira venda ≥ 0) e `ck_brainstorming_dados_pdv_categoria` (categoria nula ou com texto).
 
-O downgrade trava as duas tabelas e recusa se houver qualquer lead ou linha. A mensagem é "Downgrade da Avaliação de Cenário recusado...". `models.py` (`LeadAvaliacao` e `BrainstormingDadosPdv`) espelha a migração, e um teste compara os dois.
+**`lead_avaliacao`** ganha `itens_omissao_erp` (`INTEGER`, anulável, com `ck_lead_avaliacao_omissao` ≥ 0) e `limiares_triagem_json` (`TEXT`, anulável: só números, os limiares usados na triagem). Nulas nos leads de antes.
+
+Cuidados da revisão:
+- `lead_avaliacao` é a tabela-mãe da staging (`ON DELETE CASCADE`). No SQLite, o modo batch recriaria a tabela-mãe e apagaria as linhas de PDV em cascata; por isso a revisão usa ADD e DROP COLUMN direto nela, e a CHECK do lead fica só no PostgreSQL (o SQLite de testes a recebe quando a tabela nasce dos modelos). Há teste que prova que o upgrade não apaga linha de PDV.
+- O downgrade trava `usuario` e as duas tabelas no PostgreSQL (`usuario` primeiro, porque a `5e1b9c3a7d20`, logo abaixo na mesma transação, o trava) e **recusa** enquanto houver linha gravada pelas regras `lead-2026-11.3` ou lead com as colunas novas preenchidas ("Downgrade da Etapa 2 da Avaliação de Cenário recusado..."). O expurgo de 30 dias apaga as linhas, mas não as colunas do lead: para descer, depois do backup, é preciso apagar esses leads ou anular `itens_omissao_erp` e `limiares_triagem_json` deles. Sem esses dados, remove colunas e CHECKs e mantém as linhas antigas.
+
+`models.py` (`LeadAvaliacao` e `BrainstormingDadosPdv`) espelha as migrações, e testes comparam os dois no SQLite e no PostgreSQL.
 
 Gravação (`avaliacao_cenario.registrar`):
-- dinheiro com 2 casas e quantidade com 3, em `Decimal` (`quantizar`). Marcas e triagem saem sempre do valor gravado, então refazê-las dá o mesmo resultado;
+- dinheiro com 2 casas e quantidade e estoque com 3, em `Decimal` (`quantizar`); a categoria sai do índice para o texto. Marcas e triagem saem sempre do valor gravado, então refazê-las dá o mesmo resultado;
 - no reenvio, o lead é travado (`FOR UPDATE`) antes das linhas, na mesma ordem do expurgo.
 
 ## 4. Triagem e marcas (`triagem_cenario.py`)
 
-Função pura no processo pai, sobre as linhas da staging e a cobertura do envio (`Cobertura.do_envio(meta)`). Versão: `VERSAO_TRIAGEM = "triagem-2026-11.2"`.
+Função pura no processo pai, sobre as linhas da staging e a cobertura do envio (`Cobertura.do_envio(meta)`). Versão: `VERSAO_TRIAGEM = "triagem-2026-11.3"`. Tudo em fração exata (`fractions.Fraction`) nas fronteiras: cada limiar vale exatamente no valor configurado (a queda de exatamente 50% entre um fevereiro de 28 dias e um abril de 30 dias é queda forte; a margem de exatamente 10% não é baixa).
 
-**Ritmo de venda e giro.** Os anos podem ter durações diferentes: um ano inteiro e o semestre corrente, ou um relatório anual e outros mensais. Por isso, a triagem usa as seguintes medidas:
-- **Ritmo.** É a venda média **por dia coberto** pelos períodos dos relatórios, e não por relatório.
-- **Queda.** Compara o último ano com o ano anterior mais recente com venda. Só vale quando o ritmo anterior prevê ao menos `VENDA_ESPERADA_MINIMA` (1 unidade) no período do último ano, porque não vender num mês curto não diz nada de um item de giro lento.
-- **Giro.** É a parte dos relatórios do último ano com venda. Só existe quando todos os relatórios do último ano são mensais.
+### 4.1 Limiares configuráveis
 
-**Marcas por produto e ano** (`marcas()`), gravadas em cada linha:
+`triar(linhas, cobertura, limiares=None)` recebe um `Limiares` (dataclass congelada); sem ele, valem os padrão (`LIMIARES_PADRAO`). Valores em `Decimal` e contagens em `int`: a validação recusa float, booleano, NaN, fração fora de [0, 1], razão até 1, inteiro abaixo de 1 e relação incoerente (queda moderada acima da crítica, giro crítico acima do baixo). `Limiares.de_dict` lê a gravação de forma estrita (todas as chaves, nenhuma a mais, a versão da triagem, decimal sem expoente) e `com_ajustes` troca só as chaves pedidas.
+
+O lead grava os limiares usados em `limiares_triagem_json`. A retriagem e o reenvio sem limiares usam os gravados; gravação ilegível faz a retriagem recusar, e o diagnóstico fica "desatualizado", sem cair nos padrão em silêncio.
+
+| Limiar | Padrão | Uso |
+|---|---|---|
+| `pareto_recuperavel` | 0,80 | produtos que somam 80% do recuperável do lead |
+| `recuperavel_minimo_do_produto` | 0,03 | recuperável ≥ 3% do faturamento do produto |
+| `impacto_minimo_do_lead` | 0,001 | o item precisa valer ao menos 0,1% do faturamento para ser Urgência: do envio inteiro na Urgência por recuperável, do último ano na margem negativa recorrente |
+| `queda_critica` | 0,50 | queda do ritmo de venda (Urgência) |
+| `giro_critico` / `relatorios_para_giro_critico` | 0,25 / 4 | vendeu em ≤ 25% dos relatórios mensais, com ao menos 4 |
+| `venda_esperada_minima` | 1 | unidades que o ritmo anterior precisa prever para a queda valer |
+| `pareto_prejuizo` | 0,80 | produtos que somam 80% do prejuízo do último ano |
+| `prejuizo_minimo_do_produto` | 0,03 | prejuízo ≥ 3% da venda com custo do produto |
+| `relatorios_minimos_margem_negativa` / `fracao_relatorios_negativos` | 3 / 0,50 | ao menos 3 relatórios com custo, metade negativos |
+| `margem_baixa` / `distancia_margem_baixa` | 0,10 / 0,05 | margem abaixo de 10% e 5 pontos abaixo da categoria |
+| `queda_de_margem` | 0,05 | queda de 5 pontos entre os dois últimos anos com custo |
+| `vazamento_relevante` | 0,03 | vazamento de preço ≥ 3% do faturamento |
+| `abaixo_custo_minimo` | 0,01 | vendas abaixo do custo ≥ 1% da venda com custo (motivo da Atenção) |
+| `razao_custo_implausivel` | 3 | custo ≥ 3 × a venda com custo: unidade ou embalagem trocada |
+| `queda_moderada` | 0,20 | queda do ritmo de venda (Eletiva) |
+| `giro_baixo` | 0,50 | vendeu em ≤ metade dos relatórios mensais |
+| `corte_cauda_longa` | 0,95 | itens fora dos 95% do faturamento do último ano |
+| `fator_margem_mix` / `participacao_minima_mix` | 0,60 / 0,01 | margem ≤ 60% da margem de referência (a da categoria, ou a do lead), com ao menos 1% do faturamento do último ano |
+| `recuperavel_residual_minimo` | 0,01 | recuperável ≥ 1% do faturamento (Eletiva) |
+
+São parâmetros iniciais: a especificação não trazia números, e o dono deve validá-los comercialmente. Cada limiar tem até 6 dígitos inteiros e 6 decimais (as contagens, de 1 a 10⁶): milhares de dígitos deixariam cada visita à tela dezenas de vezes mais lenta.
+
+Para mudar o padrão para todos os leads, troque o valor e a `VERSAO_TRIAGEM`. Os leads gravados antes ficam "desatualizados"; a retriagem e o reenvio deles usam os **padrão atuais** (os limiares gravados são de outra versão, e o sentido de um limiar pode ter mudado) e avisam isso na tela e no comando. Limiares personalizados de um lead precisam ser reaplicados com `flask leads retriar <id> --limiares`, que parte dos gravados ou, se forem de outra versão, dos padrão atuais.
+
+### 4.2 Marcas por produto e ano (`marcas()`)
 
 | Marca | Regra |
 |---|---|
-| `flag_venda_sem_custo` | parte do faturamento do ano saiu sem custo informado no PDV: `valor_venda_bruto > faturamento_com_custo` |
-| `flag_venda_abaixo_custo` | vendido abaixo do custo médio registrado: há quantidade com custo e `faturamento_com_custo < custo_total` |
-| `flag_omissao_erp` | **sem regra, fica `false`** (pendência do dono) |
+| `flag_venda_sem_custo` | o produto vendeu nos relatórios que trazem a coluna de custo e **nenhuma** dessas vendas tem custo. É parecido com `saude.itens_sem_custo` do Raio-X, mas por ano e só nos relatórios com a coluna: os números podem diferir dos do Raio-X dos mesmos arquivos (o Raio-X conta o produto vendido só em relatório sem a coluna, e olha o envio inteiro). Num ano sem relatório com a coluna de custo, a marca não se aplica: a falta da coluna é do arquivo exportado, não do ERP |
+| `flag_venda_abaixo_custo` | alguma venda com custo teve receita abaixo do custo da linha (`perda > 0`, o critério de `auditoria.itens_venda_abaixo_custo`). É o fato, sem materialidade; o motivo da Atenção exige 1% da venda com custo |
+| `flag_omissao_erp` | alguma destas omissões (`motivos_de_omissao()`): conflito de código e nome no cadastro (ignorado quando algum relatório do envio teve cabeçalho ambíguo); custo informado só em parte das vendas nos relatórios com a coluna; custo implausível; estoque negativo (entrada de compra não lançada); NCM ausente; categoria ausente (só nos anos em que o relatório traz a coluna) |
 | `vazamento_estimado_r$` | o recuperável do produto no ano, o mesmo do Raio-X |
 | `custo_medio_registrado` | `custo_total / quantidade_com_custo`, com 4 casas; nulo sem custo |
 
-O lead recebe a soma por produto: `itens_venda_sem_custo` e `itens_venda_abaixo_custo` contam produtos que tiveram a marca em algum ano.
+O lead recebe a contagem de produtos que tiveram a marca em algum ano: `itens_venda_sem_custo`, `itens_venda_abaixo_custo` e `itens_omissao_erp`. A diretriz cita "descontinuidade de dados de compra" como omissão: o lead não envia compras, então essa parte não existe; a entrada de compra não lançada aparece pelo estoque negativo.
 
-**Blocos por produto** (`triar()`), olhando todos os anos. Cada produto fica em no máximo um bloco, nesta precedência:
+### 4.3 Blocos (`triar()`)
 
-1. **Urgência.** Valor recuperável alto e travado, **e** curva de estagnação crítica:
-   - recuperável alto: o produto está entre os que somam os primeiros 80% do recuperável do lead, e o recuperável dele é ao menos 3% do próprio faturamento;
-   - estagnação crítica, qualquer uma destas:
-     - o ritmo de venda caiu 50% ou mais em relação ao ano anterior com venda;
-     - o produto ficou sem venda no período do último ano, quando o ritmo anterior previa venda;
-     - o produto vendeu em até 25% dos relatórios mensais do último ano, quando esse ano tem ao menos 4.
-2. **Atenção.** Margem degradada ou divergência de custo:
-   - margem degradada, qualquer uma destas:
-     - margem abaixo de 10%;
-     - queda de 5 pontos ou mais entre os dois últimos anos com custo;
-     - vazamento de preço de ao menos 3% do faturamento;
-   - divergência de custo, qualquer uma destas:
-     - venda sem custo;
-     - venda abaixo do custo;
-     - perda abaixo do custo;
-     - conflito de cadastro entre código e nome.
-3. **Eletiva.** Otimização secundária de giro, qualquer uma destas:
-   - ritmo de venda em queda de 20% ou mais;
-   - venda em até metade dos relatórios mensais do último ano;
-   - estoque negativo no PDV;
-   - recuperável residual;
-   - estagnação crítica sem recuperável alto: o produto que parou de vender no último ano (quando o ritmo anterior previa venda) e não tem nenhum dos motivos acima entra com o motivo "Sem venda no período do último ano". Com algum deles (o recuperável residual, por exemplo), entra com esses motivos.
+O ritmo de venda é a venda **por dia coberto** pelos relatórios: anos de durações diferentes não viram queda falsa. A queda compara o último ano com o anterior mais recente com venda e só vale quando o ritmo anterior prevê ao menos `venda_esperada_minima` no período comparado do último ano:
+- **dois últimos anos mensais** (e o ano anterior do produto é o ano anterior do envio): só a janela dos mesmos meses, nos dois lados. O panetone vendido em dezembro não "parou" quando o último ano vai de janeiro a outubro, e o mês corrente parcial não vira queda. **Sem mês em comum** (12 meses de novembro a outubro), a queda não é avaliada, e o diagnóstico avisa: a decisão conservadora é não apresentar sazonalidade como parada; o item que de fato parou aparece no estoque parado;
+- **ano anterior não mensal, ou o produto não vendeu no ano anterior do envio:** os períodos inteiros (o relatório anual não separa os meses).
 
-**Fronteiras exatas.** Ritmo, queda, giro e margem são calculados em fração exata (`fractions.Fraction`), e não em ponto flutuante. Cada limiar vale exatamente no valor da constante:
-- a queda de exatamente 50% entre um fevereiro (28 dias) e um abril (30 dias) é queda forte; em ponto flutuante a conta dá 0,4999…;
-- a margem de exatamente 10% não é baixa, e a queda de exatamente 5 pontos conta;
-- a venda esperada de exatamente 1 unidade conta.
+O giro (parte dos relatórios do último ano com venda) só existe com relatórios mensais. O de um **lançamento** (sem venda nos anos anteriores) conta só os relatórios desde a primeira venda: o produto que vende todo mês desde outubro não tem "giro crítico". O giro crítico exige ao menos 4 relatórios nessa base.
 
-Os limiares são constantes no topo do módulo, e o dono deve ajustá-los, porque a especificação não trazia números:
+Cada produto fica em no máximo um bloco, nesta precedência:
 
-| Constante | Valor | Uso |
-|---|---|---|
-| `PARETO_RECUPERAVEL` | 0,80 | produtos que somam 80% do recuperável |
-| `RECUPERAVEL_MINIMO_DO_PRODUTO` | 0,03 | recuperável ≥ 3% do faturamento do produto |
-| `QUEDA_CRITICA` | 0,50 | queda do ritmo de venda (Urgência) |
-| `GIRO_CRITICO` / `RELATORIOS_PARA_GIRO_CRITICO` | 0,25 / 4 | vendeu em ≤ 25% dos relatórios mensais, com ao menos 4 |
-| `MARGEM_BAIXA` | 0,10 | margem abaixo de 10% |
-| `QUEDA_DE_MARGEM` | 0,05 | queda de 5 pontos |
-| `VAZAMENTO_RELEVANTE` | 0,03 | vazamento ≥ 3% do faturamento |
-| `QUEDA_MODERADA` | 0,20 | queda do ritmo de venda (Eletiva) |
-| `GIRO_BAIXO` | 0,50 | vendeu em ≤ metade dos relatórios mensais |
-| `VENDA_ESPERADA_MINIMA` | 1 | unidades que o ritmo anterior precisa prever no último ano para a queda valer |
+1. **Urgência** — impacto financeiro imediato, qualquer um:
+   - **potencial recuperável alto e estagnação crítica:** entre os que somam 80% do recuperável do lead (sem os itens de custo implausível), com recuperável ≥ 3% do próprio faturamento e ≥ 0,1% do faturamento do envio; e venda parada, em queda forte ou com giro crítico. Com estoque positivo, entra também "estoque parado". Com estoque zero ou negativo, a parada é "possível ruptura" e vai para a Atenção;
+   - **margem negativa recorrente:** no último ano, ao menos 3 relatórios com custo, metade deles abaixo do custo e o mais recente negativo, contados por relatório, mensais ou não (com um único relatório no último ano, o anual: o ano negativo); o prejuízo do último ano entre os 80% do prejuízo do lead, ≥ 3% da venda com custo do produto no último ano e ≥ 0,1% do faturamento do último ano. O rótulo pede para confirmar se é promoção.
+2. **Atenção** — margem degradada ou divergência de CMV: sem custo; vendas abaixo do custo (≥ 1% da venda com custo); margem em queda (≥ 5 pontos); margem baixa relativa (abaixo de 10% e 5 pontos abaixo da margem da categoria, ou do lead quando a categoria tem menos de 3 itens com custo); vazamento de preço; custo parcial; custo implausível; conflito de cadastro; possível ruptura.
+3. **Eletiva** — otimização de estoque, giro de cauda longa e mix: ritmo em queda (≥ 20%); giro baixo; cauda longa (fora dos 95% do faturamento do último ano, com giro baixo e venda em ano anterior: lançamento e item que vende todo mês não entram); margem abaixo do mix (margem ≥ 10% mas ≤ 60% da margem da categoria, com ≥ 1% do faturamento); estoque negativo; sem NCM; sem categoria; potencial recuperável menor (≥ 1% do faturamento). A estagnação sem recuperável alto (venda parada, queda forte ou giro crítico) entra com os motivos dela quando não tem outro motivo da Eletiva, e com "estoque parado" na frente quando há estoque positivo.
+
+**Estoque parado** (`ResultadoTriagem.estagnados`): todo produto com estagnação crítica e estoque positivo, em qualquer bloco. É a base do estoque parado da matriz e do impacto (seção 5).
+
+**Custo implausível** (custo ≥ 3 × a venda com custo, típico de embalagem cadastrada como unidade) sai dos Paretos e do impacto e aparece "a confirmar": um erro de cadastro de R$ 82 mil não empurra os itens legítimos para fora da Urgência.
+
+**Códigos de motivo.** Quando uma regra muda de sentido, o código muda (`sem_custo`, `abaixo_do_custo`, `margem_baixa_relativa`, `recuperavel_menor`). Os códigos das versões anteriores ficam em `ROTULOS_HISTORICOS`, porque os resumos de leads antigos continuam no banco. `rotulo_do_motivo(codigo, limiares)` monta o texto com os limiares usados ("Ritmo de venda caiu 40% ou mais" com `queda_critica` 0,40).
 
 Os resumos dos blocos (`resumo_urgencia_json`, `resumo_atencao_json` e `resumo_eletiva_json`) guardam a versão, o número de itens, o faturamento, o recuperável e a contagem de motivos. **Nunca guardam nome de produto**, porque ficam no lead depois do expurgo das linhas.
 
-**Retriagem.** Para mudar um limiar e aplicá-lo a leads antigos, troque a constante e a `VERSAO_TRIAGEM`. Depois use "Refazer a triagem" na tela ou `flask leads retriar <id>`. A retriagem:
-- só funciona enquanto as linhas existirem (30 dias);
-- recusa o lead expirado, o lead sem linhas, as linhas gravadas por outra `VERSAO_REGRAS_LEAD` e o lead sem a cobertura do envio na meta;
-- grava em lote, pela chave primária.
+**Retriagem.** "Refazer a triagem" na tela ou `flask leads retriar <id>`:
+- só funciona dentro dos 30 dias contados do envio, mesmo antes de o expurgo rodar (o mesmo critério do diagnóstico); a tela esconde o botão quando os dados já expiraram;
+- recusa o lead expirado, o lead sem linhas, as linhas gravadas por outra `VERSAO_REGRAS_LEAD`, o lead sem a cobertura do envio na meta e o lead com limiares gravados ilegíveis; com limiares de outra versão, usa os padrão atuais e avisa;
+- grava em lote, pela chave primária, e grava os limiares usados.
 
-**Detalhe do lead.** O bloco de cada produto é o gravado. Os motivos de cada item são a triagem refeita sobre as linhas, sem gravar nada, e só aparecem quando a triagem e as regras do lead são as da versão atual. Senão, a tela avisa "Triagem feita com regras anteriores", mostra a versão atual e a do lead, e mostra só os blocos e o resumo gravados. JSON gravado que não seja um objeto (resumo ou meta) é ignorado, sem erro 500.
+## 5. Diagnóstico: matriz por categoria e payload (`diagnostico_cenario.py`)
 
-## 5. Retenção e expurgo (revisão `6a8f2d4c0e13`)
+Função pura, sem banco nem Flask, sobre as linhas da staging e o resumo do lead. Versão: `VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.1"`. A tela do consultor e a rota JSON usam o mesmo payload.
+
+**O que o lead não tem.** O fluxo do lead recebe só relatórios de **vendas**. Por isso:
+- **Compras** não entram no cruzamento: não há relatório de compras do lead;
+- **Perdas operacionais** (quebra, validade, avaria, furto) ficam nulas, com o motivo: exigem relatório de perdas ou inventário. O que existe são as vendas abaixo do custo;
+- margem e CMV são os do Raio-X, sobre o custo informado pelo PDV nas vendas: não são a margem de lucro nem o CMV contábil.
+
+**Matriz por categoria** (`matriz_por_categoria`). A categoria do produto é a do ano mais recente que tiver uma; grafias diferentes do mesmo nome ("Bebidas" e "BEBIDAS ") somam juntas, com o rótulo mais recente. Para cada categoria e para o total:
+
+| Campo | Pedido da diretriz | Definição |
+|---|---|---|
+| `faturamento`, `faturamento_ultimo_ano`, `participacao_ultimo_ano` | Faturamento Total | venda bruta do envio e do último ano |
+| `faturamento_venda_continua` | Faturamento Recorrente | venda do último ano dos itens que venderam em ao menos 75% dos relatórios mensais completos (período já terminado); nulo sem relatórios mensais no último ano ou com menos de 2 completos |
+| `venda_com_custo`, `custo_das_vendas` | — | venda com custo informado e o custo dela |
+| `custo_bonificacoes`, `custo_devolucoes`, `cmv_liquido` | CMV Líquido | custo das vendas + bonificações − devoluções |
+| `margem_bruta_estimada` | Margem de Contribuição Bruta | venda com custo − custo das vendas (valor e %) |
+| `margem_com_bonificacoes_e_devolucoes` | Margem de Contribuição Líquida | (venda com custo − receita devolvida) − CMV líquido (valor e %) |
+| `perdas_operacionais` | Perdas operacionais | nulo (ver acima) |
+| `vendas_abaixo_do_custo`, `vazamento_de_preco`, `potencial_recuperavel` | Caixa resgatável | o que se recupera no preço (retroativo; inclui promoção intencional) |
+| `estoque_parado` | Caixa resgatável | estoque × custo médio dos itens com estagnação crítica (venda parada, queda forte ou giro crítico) e estoque positivo, em qualquer bloco; nulo sem a coluna de estoque |
+| `impacto`, `impacto_acumulado` | ordenação | soma do impacto dos itens (abaixo) |
+| `itens_por_bloco`, `marcas`, `cauda`, `a_confirmar` | — | contagens |
+
+O potencial recuperável e o estoque parado ficam separados porque não se somam: um é retroativo, o outro é capital parado hoje. O total soma também os ajustes de produto sem venda no ano e fecha com a auditoria do Raio-X dos mesmos arquivos (há teste). A matriz só é publicada com categoria em ao menos metade do faturamento; "Sem categoria" vai por último, fora da ordenação. As categorias saem em **ordem decrescente de impacto** no último ano (depois o acumulado e o faturamento).
+
+**Impacto de cada item** (`impacto_do_produto`): por ano, o maior entre o potencial recuperável, a venda sem custo exposta, a oportunidade de margem (só com motivo de margem: distância até a margem de referência × venda com custo) e, no último ano, o estoque parado. Item de custo implausível tem impacto zero e aparece "a confirmar". Os itens de cada bloco saem em ordem decrescente de impacto do último ano, depois o acumulado e o nome.
+
+**Payload** (`montar_payload`, audiência "consultor"):
+- `GET /admin/leads/<id>/diagnostico.json`, só `admin_required`, com `Cache-Control: no-store`; o log da leitura leva só os identificadores;
+- **nunca** leva o contato do lead (nome, e-mail, WhatsApp, loja) nem quem o registrou;
+- `situacao`:
+  - `atual`: linhas e triagem da versão atual, dentro da retenção. Vêm a cobertura, os totais, as categorias e os itens por bloco;
+  - `desatualizado`: linhas de outra `VERSAO_REGRAS_LEAD`, triagem de outra versão, meta ou limiares ilegíveis. Só o resumo gravado;
+  - `expirado`: lead expirado, sem linhas ou com as linhas além dos 30 dias (pela data do envio, mesmo antes de o expurgo rodar). Só o resumo gravado;
+- itens por bloco até `?limite=` (padrão 30, entre 1 e 200; um limite que não é número vale o padrão);
+- `definicoes` com o texto de cada campo e `avisos` (matriz não publicada, cabeçalho ambíguo, retenção);
+- números finitos: JSON gravado com `NaN`, `Infinity` ou número que estoura (`1e999`), ou aninhado sem fim, é ignorado; meta, limiares ou resumo fora do formato deixam o lead "desatualizado", sem erro 500;
+- toda linha precisa ser do próprio lead (`lead_id`): linha de outro lead faz o montador recusar (`ValueError`), para um filtro esquecido nunca misturar leads;
+- até 60 categorias na matriz (as de maior impacto); as demais saem somadas em "Demais categorias (N)".
+
+**Tela do consultor.** A mesma matriz (com a linha de total), os indicadores das três marcas e os itens de cada bloco, com categoria, impacto e motivos, e o atalho "Diagnóstico em JSON". Com linhas ou triagem de outra versão, a tela lista os itens no **bloco gravado**, sem motivos, impacto nem matriz, e avisa a versão.
+
+**Dashboard do cliente.** Não foi aberto: o lead ainda não é cliente nem tem acesso ao portal. O payload já separa a audiência; a exposição ao cliente depende da conversão do lead e do recorte por plano (seção 10).
+
+## 6. Retenção e expurgo (revisão `6a8f2d4c0e13`)
 
 - **Com pg_cron.** Onde a extensão estiver habilitada (no Supabase: Database › Extensions › pg_cron), a migração agenda o job `nexo_expurgo_leads_pdv` para todo dia às 06:15 UTC (03:15 em Brasília). O job roda `SELECT * FROM <esquema>.expurgar_brainstorming_pdv(30)`, a mesma função do comando `flask leads expurgar-pdv --aplicar`. Ele roda dentro do banco: não depende do servidor web, que dorme no plano gratuito do Render, nem de cron pago.
-- **Sem pg_cron.** No PostgreSQL sem a extensão, a revisão não agenda nada e emite um `WARNING` ("pg_cron ausente: o expurgo diário dos leads NÃO foi agendado..."). O aviso vai para o log do PostgreSQL e **não aparece na saída do `flask db upgrade`**: a conferência é o `SELECT` em `cron.job` da seção 8, passo 5. No SQLite, a revisão não faz nada e não avisa. Nos dois casos, o expurgo segue pelo comando, que um cron externo pode chamar, e pela própria tela (abaixo).
-- **Pela tela.** A lista e o detalhe dos leads rodam a mesma regra ao serem abertos (`blueprints/leads.expurgo_oportunista`), no máximo uma vez por hora por processo. Assim, sem o pg_cron, ou com o servidor dormindo na hora do job, a tela não mostra dado de PDV vencido. Um erro de banco no expurgo vai para o log só com o tipo e nunca derruba a página.
-- **Reagendar e downgrade.** Reagendar com o mesmo nome atualiza o job. O downgrade remove o job, se ele existir. Nenhum dado é tocado.
-- **O que a função faz.** Ela não mudou e segue na `BAIA_DE_SEGURANCA_E_LEADS.md`, seção 2. Apaga as linhas de PDV com mais de 30 dias de leads não convertidos e marca como `expirado` o lead que ficou sem linhas. Mantém o resumo e o contato.
+- **Sem pg_cron.** No PostgreSQL sem a extensão, a revisão não agenda nada e emite um `WARNING` ("pg_cron ausente: o expurgo diário dos leads NÃO foi agendado..."). O aviso vai para o log do PostgreSQL e **não aparece na saída do `flask db upgrade`**: a conferência é o `SELECT` em `cron.job` da seção 9. No SQLite, a revisão não faz nada e não avisa. Nos dois casos, o expurgo segue pelo comando, que um cron externo pode chamar, e pela própria tela (abaixo).
+- **Extensão habilitada depois.** `flask leads agendar-expurgo` agenda o mesmo job, sem downgrade. Fora do PostgreSQL, ou sem o pg_cron, o comando recusa sem tocar em nada.
+- **Pela tela.** A lista, o detalhe e a rota JSON dos leads rodam a mesma regra ao serem abertos (`blueprints/leads.expurgo_oportunista`), no máximo uma vez por hora por processo. Além disso, o diagnóstico confere a data do envio: linha além dos 30 dias não aparece nem antes de o expurgo rodar. Um erro de banco no expurgo vai para o log só com o tipo e nunca derruba a página.
+- **Reagendar e downgrade.** Reagendar com o mesmo nome atualiza o job. O downgrade da `6a8f2d4c0e13` remove o job, se ele existir. Nenhum dado é tocado.
+- **O que a função faz.** Ela não mudou e segue na `BAIA_DE_SEGURANCA_E_LEADS.md`, seção 2. Apaga as linhas de PDV com mais de 30 dias de leads não convertidos e marca como `expirado` o lead que ficou sem linhas. Mantém o resumo e o contato. A matriz por categoria e os itens não são guardados: saem com as linhas.
 - **Na tela.** O detalhe do lead mostra quando os dados de PDV expiram: o `criado_em` do lote mais 30 dias.
-- **Fora do backup.** O job fica no esquema `cron`, fora do `pg_dump` da aplicação (`Docs/OPERACAO_BACKUP_RESTAURACAO.md`). Depois de uma restauração, reaplique a revisão ou agende de novo.
+- **Fora do backup.** O job fica no esquema `cron`, fora do `pg_dump` da aplicação (`Docs/OPERACAO_BACKUP_RESTAURACAO.md`). Depois de uma restauração, rode `flask leads agendar-expurgo`.
 
-## 6. Segurança e concorrência
+## 7. Segurança e concorrência
 
-- **Acesso.** Só consultores (`admin_required` em todas as rotas). Tem CSRF em todos os formulários e limite de 20 envios por hora.
+- **Acesso.** Só consultores (`admin_required` em todas as rotas, inclusive a JSON). Tem CSRF em todos os formulários e limite de 20 envios por hora.
 - **Arquivos.** Nenhum arquivo do lead é guardado, nem o nome. O processamento acontece no diretório temporário do Raio-X, que some ao fim.
-- **Logs.** Erros de banco vão para o log só com o tipo do erro. Os comandos mostram só contagens.
+- **Dados do PDV.** Nome, código e categoria dos produtos só aparecem enquanto as linhas existem e estão dentro da retenção; a meta, os resumos e os limiares gravados no lead não levam texto do PDV.
+- **Logs.** Erros de banco vão para o log só com o tipo do erro. Os comandos mostram só contagens. A leitura do diagnóstico registra só os identificadores do lead e do consultor.
 - **Concorrência.** Há duas vagas únicas por processo:
   - a de entrada (`etl_uploads._UPLOAD_ADMISSION`), compartilhada com as análises e o Raio-X;
   - a do processo isolado (`etl_runtime._ADMISSION`).
@@ -238,54 +328,46 @@ Os resumos dos blocos (`resumo_urgencia_json`, `resumo_atencao_json` e `resumo_e
 - **Lead convertido.** Não aceita reenvio. O lead expirado não aceita retriagem.
 - **Retriagem.** Um valor acima do teto vira aviso na tela, e não erro 500.
 
-## 7. Testes
+## 8. Testes
 
 **SQLite e processo próprio** (rodam neste Windows):
-- `tests/test_avaliacao_cenario.py` (68 testes):
-  - **`MotorTests`:**
-    - ano, sobreposição (um dia em comum, período dentro de outro, vizinhos aceitos), ano corrente e ano seguinte;
-    - período futuro recusado e mês corrente contado até hoje;
-    - matriz, cobertura de cada ano, marcas por produto e ano, marca de um ano sem venda levada aos outros anos;
-    - nome só com espaços e tetos;
+- `tests/test_triagem_cenario.py` (54 testes, puros):
+  - **`LimiaresTests`:** padrão, ida e volta pelo JSON exata, validação de tipo, faixa e relação, leitura estrita, ajustes, resultado que muda com os limiares e rótulos com limiares e históricos;
+  - **`MarcasTests`:** sem custo com e sem a coluna, custo parcial, perda de R$ 0,01 (marca sem o motivo), cada fonte de omissão, custo médio e contagens do lead (inclusive com cabeçalho ambíguo);
+  - **`BlocosTests`, `UrgenciaTests`, `AtencaoTests`, `EletivaTests`:** o cenário de referência, a ordem das linhas, a precedência, cada motivo sozinho, estoque parado e possível ruptura, piso de impacto do lead, custo implausível fora dos Paretos, margem negativa recorrente (2 de 6, recência, poucos relatórios, prejuízo pequeno, relatório anual), margem estrutural da categoria, mix, cauda longa e um catálogo de 1.000 itens que não inunda a Eletiva;
+  - **`RitmoTests` e `FronteirasDaTriagemTests`:** anos de durações diferentes, item sazonal nos mesmos meses, giro só com relatórios mensais, meta inválida e as fronteiras exatas;
+  - **`DiagnosticoTests`:** matriz por categoria (grafias, ordem por impacto, CMV líquido e margens, ajuste sem venda só no total), publicação com metade do faturamento, venda contínua, impacto e "a confirmar", payload sem contato, limite de itens, vencido, expirado, desatualizado e limiares gravados.
+- `tests/test_avaliacao_cenario.py` (58 testes):
+  - **`MotorTests`:** ano, sobreposição, ano corrente, período futuro, mês corrente até hoje, matriz, cobertura, marcas, nome só com espaços, tetos, leitura do cadastro (NCM, categoria, estoque, bonificação e devolução por produto fechando com o Raio-X), cabeçalho ambíguo e XLSX;
   - **`EquivalenciaTests`:** a staging reproduz o Raio-X;
-  - **`ContratoTests`:**
-    - o formato do retorno, com 27 variantes recusadas, entre elas meta vazia ou com texto livre, chave fora do formato, linha repetida e período ausente;
-    - `run_avaliacao_cenario` confere o retorno do processo filho;
-    - o motor sem banco nem config;
-    - a operação do worker;
-    - o prazo de 120 s e a memória de 384 MiB;
-  - **`TriagemTests`:** os três blocos, a precedência e as marcas;
-  - **`RitmoTests`:** anos de durações diferentes sem queda falsa, queda verdadeira, mês curto sem venda de item lento, giro só com relatórios mensais e cobertura inválida;
-  - **`FronteirasDaTriagemTests`:** queda de exatamente 50% (28 e 30 dias), venda esperada de exatamente 1 unidade, margem de exatamente 10%, queda de margem de exatamente 5 pontos, corte de Pareto com empate, giro crítico com recuperável alto e três anos;
-  - **`QuantizacaoTests`:** dinheiro com 2 casas e quantidade com 3, arredondando o meio para cima a partir do valor do JSON;
-  - **`GravacaoTests`:** gravação, reenvio, recusas, retriagem, comando, resultado malformado sem erro 500, nome só com espaços e teto do custo médio;
-  - **`RotasTests`:**
-    - só consultor em todas as rotas (sem login vai para o login mesmo com CSRF válido; cliente recebe 403);
-    - autorização, reenvio sem autorização, consentimento renovado no reenvio;
-    - 503 com `Retry-After` (vaga de entrada e vaga do processo isolado, no envio e no reenvio);
-    - 413 em português no envio e no reenvio;
-    - expurgo pelo detalhe e pela lista no máximo uma vez por hora, e erro de banco no expurgo sem derrubar a página;
-    - lista em ordem da última avaliação;
-    - erro do motor, resultado malformado (422), retriagem, triagem de versão anterior, CSRF, 404 e banco sem as migrações;
+  - **`ContratoTests`:** o formato do retorno, com 27 variantes antigas e 36 da Etapa 2 recusadas (categorias, índices, coerência, tetos, meta), o motor sem banco nem config, a operação do worker, o prazo de 120 s e a memória de 384 MiB;
+  - **`QuantizacaoTests`:** dinheiro com 2 casas, quantidade e estoque com 3 e a categoria do índice;
+  - **`GravacaoTests`:** gravação (com as três contagens e os limiares), reenvio, recusas, retriagem e reenvio com os limiares gravados, comandos (`retriar --limiares`, `agendar-expurgo` fora do PostgreSQL), resultado malformado sem erro 500, tetos (inclusive a soma que o arredondamento leva ao teto);
+  - **`RotasTests`:** só consultor em todas as rotas (inclusive a JSON), diagnóstico em JSON (cabeçalhos, sem contato, triagem refeita igual à gravada, totais iguais à auditoria do Raio-X, limite, 404), desatualizado e vencido só com o resumo, 503 sem esquema, autorização, 503 com `Retry-After`, 413, expurgo pela tela, lista, erro do motor, 422, retriagem, triagem de versão anterior (itens no bloco gravado, sem motivos), CSRF e 404;
   - **`TravaDeCelulasTests`:** CSV e XLSX com 500.004 células são recusados.
-- `tests/test_leads_avaliacao.py`: esquema, restrições novas, unicidade, índice e downgrade até a revisão que recusa.
+- `tests/test_leads_avaliacao.py` (10): esquema, restrições, unicidade, índice, downgrade até a revisão que recusa, downgrade da Etapa 2 recusado com dados 11.3 e o upgrade da Etapa 2 sem apagar linha de PDV.
+- `tests/test_cadastro_regression.py` (3): o Raio-X e a análise mensal com NCM, categoria, situação, bonificação, devolução e estoque, iguais aos do `53020e6`.
+- Bordas da Etapa 2, escritas depois da verificação adversarial (as lacunas que o teste de mutação achou e as correções):
+  - `tests/test_etapa2_triagem_bordas.py` (40, puros): a janela dos mesmos meses (parcial, vazia, ano anterior mais antigo, ano não mensal), o giro de lançamento, o estoque parado em qualquer bloco e no impacto, as fronteiras da margem negativa recorrente, o estoque informado, a ordem por impacto, a margem de referência, as fronteiras exatas e os 23 limiares padrão, o diagnóstico com dado gravado fora do formato (meta, ajustes, limiares, resumos, números não finitos), as linhas de outro lead e o teto de categorias;
+  - `tests/test_etapa2_motor_bordas.py` (19, motor real): a janela com ano inteiro contra janeiro a outubro, doze meses sem mês em comum, só outubro em comum e o mês corrente parcial; o lançamento; o relatório sem a coluna de custo; a margem negativa por relatório; o estoque (zero, célula vazia, linha sem venda no arquivo e saldo de um mês sem venda); o cabeçalho ambíguo; a categoria com espaço especial; o teto do dinheiro da meta; o nome com caractere de controle;
+  - `tests/test_etapa2_contrato_gravacao.py` (21): o contrato com cada campo trocado (contagens, texto não imprimível, inteiro enorme, período invertido, teto da meta, JSON aninhado demais vindo do processo isolado), a ida e volta da staging, o cabeçalho ambíguo na gravação e na retriagem, a retenção de 30 dias na retriagem (função, tela e comando), os limiares de outra versão ou ilegíveis, o teto do vazamento total, o log só com identificadores, a lista sem o esquema, o resumo e a meta fora do formato e o downgrade com lead expirado que guarda as colunas da Etapa 2.
 
 **PostgreSQL real** (cluster temporário; precisa de `NEXO_TEST_POSTGRES_BIN`):
-- `tests/test_leads_postgresql.py`, com 24 verificações. Inclui o agendamento, a remoção no downgrade, o reagendamento no upgrade e a gravação pelo serviço.
+- `tests/test_leads_postgresql.py`, com 27 verificações. Inclui o agendamento, a gravação pelo serviço (com as contagens e os limiares), as CHECKs da Etapa 2 (cada recusa com o nome da restrição) e o downgrade da `7c4e2a9b5d31`: recusado com dados 11.3, aceito sem eles mantendo as linhas antigas, e o upgrade de novo com os padrões do servidor.
 - **Ressalva:** o PostgreSQL local não tem pg_cron. O ensaio usa um esquema `cron` simulado, com `schedule`, `unschedule` e a tabela `job`. Isso prova a migração, mas não o pg_cron real do Supabase.
 
 **Só no Linux:** o worker real, que precisa do módulo `resource`, roda em `ContratoTests.test_worker_real_devolve_o_contrato`. Neste Windows, esse teste é pulado.
 
-**Navegador:** `tests/test_overflow_navegador.py` cobre `/admin/leads` e o detalhe do lead sem estouro horizontal.
+**Navegador:** `tests/test_overflow_navegador.py` cobre `/admin/leads` e o detalhe do lead, com a matriz por categoria e categorias de 80 caracteres, sem estouro horizontal nas oito larguras.
 
-## 8. Aplicação (só com autorização)
+## 9. Aplicação (só com autorização)
 
-Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13`, que é a `head`. Todas vêm depois da `b3e9d6c1f7a2`.
+Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13` → `7c4e2a9b5d31`, que é a `head`. Todas vêm depois da `b3e9d6c1f7a2`.
 
 1. **Backup.** Faça o backup do banco e confira que dá para voltar (`Docs/OPERACAO_BACKUP_RESTAURACAO.md`).
    - Antes de publicar o código, confira no painel do Render que `ETL_MAX_CELLS_PER_SHEET`, se existir, vale no máximo 500000. O teto passou a ser rígido, e um valor acima dele (o teto antigo era 1.000.000) impede o app de subir.
-2. **pg_cron.** Opcional, mas recomendado: habilite a extensão no Supabase **antes** da `6a8f2d4c0e13`. Se for habilitada depois, reaplique só o agendamento (`flask db downgrade 5e1b9c3a7d20` e `flask db upgrade`). Isso não toca em dado.
-3. **Prévia.** Rode `flask db upgrade b3e9d6c1f7a2:6a8f2d4c0e13 --sql`.
+2. **pg_cron.** Opcional, mas recomendado: habilite a extensão no Supabase **antes** da `6a8f2d4c0e13`. Se for habilitada depois, rode `flask leads agendar-expurgo`.
+3. **Prévia.** Rode `flask db upgrade b3e9d6c1f7a2:7c4e2a9b5d31 --sql` (ou só a Etapa 2, se as anteriores já estiverem aplicadas: `flask db upgrade 6a8f2d4c0e13:7c4e2a9b5d31 --sql`).
 4. **Aplicação.** Rode `flask db upgrade`.
 5. **Conferência.**
    - Estrutura:
@@ -294,11 +376,12 @@ Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13`, que é a `head`. To
      - `SELECT jobname, schedule, username FROM cron.job`, com o pg_cron ativo. O `username` deve ser o papel dono das tabelas (`postgres` no Supabase); com outro papel, o job roda sob o RLS e pode apagar zero linhas sem erro.
    - Funcionamento, com uma avaliação de teste:
      - a tela `/admin/leads` faz a avaliação;
-     - o detalhe mostra os blocos.
+     - o detalhe mostra a matriz e os blocos;
+     - `/admin/leads/<id>/diagnostico.json` responde com `"situacao": "atual"`.
 
-O código pode ser publicado antes das migrações: a tela mostra o aviso e não lê arquivo. A avaliação roda no worker isolado do ETL e só funciona no Linux do Render.
+O código pode ser publicado antes das migrações: a tela mostra o aviso e não lê arquivo. Leads gravados antes da Etapa 2 (regras 11.2) aparecem como "desatualizados" até um novo envio: os blocos e os itens gravados ficam, sem matriz nem motivos novos. A avaliação roda no worker isolado do ETL e só funciona no Linux do Render.
 
-## 9. Limitações e pendências do dono
+## 10. Limitações e pendências do dono
 
 - **LGPD do lead.** Faltam definir:
   - a base legal e o aviso de privacidade para quem ainda não é cliente;
@@ -307,17 +390,21 @@ O código pode ser publicado antes das migrações: a tela mostra o aviso e não
   - o atendimento a pedido de exclusão: apagar o lead leva as linhas por CASCADE.
 
   Nada disso foi inventado aqui. A tela registra só o instante da confirmação (`consentimento_em`) e quem a fez (`registrado_por`).
-- **Especificação da triagem.** Os limiares da seção 4 são parâmetros iniciais e precisam de validação comercial.
-- **`flag_omissao_erp`.** Não tem regra definida e fica falsa. A variação de preço segue na coluna `variacao`.
+- **Limiares da triagem.** Os padrão da seção 4.1 são provisórios e precisam de validação comercial.
+- **Categoria.** Decisões a confirmar: "Diversos" e "Outros" contam como categoria (só os marcadores claramente vazios, como "SEM GRUPO", valem como ausentes); a precedência entre categoria, departamento, seção, grupo, família e subgrupo; a matriz só sai com categoria em metade do faturamento.
+- **Promoção intencional.** A venda abaixo do custo recorrente pode ser promoção planejada. O rótulo pede para confirmar, mas não há como marcar o produto como promoção: o potencial recuperável inclui esses casos.
+- **Matriz depois dos 30 dias.** A matriz por categoria e os itens saem com as linhas de PDV. Se o dono quiser a matriz depois da retenção, é preciso gravar um resumo por categoria no lead (com o texto da categoria, que é dado do PDV) e decidir o prazo dele.
+- **Compras e perdas.** O lead envia só vendas: o cruzamento com compras e as perdas operacionais pedidos na diretriz dependem de aceitar relatórios de compras e de perdas ou inventário no fluxo do lead.
+- **Dashboard do cliente.** O payload é só do consultor. Abrir ao cliente depende da conversão do lead e do recorte por plano (o que cada nível vê).
 - **Capacidade.** O diagnóstico mediu:
   - XLSX com 36 meses × 5.000 produtos levou 173 s neste computador, acima do prazo de 120 s;
   - CSV com o mesmo volume levou cerca de 35 s;
-  - o plano gratuito do Render tem 0,1 CPU, o que pode deixar o processamento perto de 10 vezes mais lento. Nesse cenário, até 36 × 2.000 em CSV passaria do prazo.
+  - o plano gratuito do Render tem 0,1 CPU, o que pode deixar o processamento perto de 10 vezes mais lento. Nesse cenário, até 36 × 2.000 em CSV passaria do prazo;
+  - a saída da 11.3 cabe em cerca de 16.400 linhas produto × ano (seção 2), acima do que o prazo deixa processar.
 
-  Por isso, recomende enviar por ano ou usar CSV. Medir no Render antes de usar com leads reais. A revisão independente acrescentou três medidas:
-  - o detalhe do lead refaz a triagem a cada visita, e com 24,6 mil linhas isso leva 0,33 s em CPU cheia;
-  - a gravação usa cerca de 90 MB de memória transitória para 24,6 mil linhas;
-  - o `validate_input` antes da leitura repete uma passada do XLSX dentro dos 120 s.
+  Por isso, recomende enviar por ano ou usar CSV. Medir no Render antes de usar com leads reais. Outras medidas: o detalhe do lead e a rota JSON refazem a carga das linhas, a triagem, a matriz e os itens a cada visita, de 2 a 4 s com 8 a 16 mil linhas em CPU cheia (no Render, de 15 a 25 s para os maiores leads que cabem no prazo do processo isolado); a gravação usa cerca de 90 MB de memória transitória para 24,6 mil linhas; o `validate_input` antes da leitura repete uma passada do XLSX dentro dos 120 s.
+- **Produto renomeado entre os anos.** A chave do produto é o nome normalizado. Quando o ERP troca a descrição de um código entre os anos ("CAFE PILAO 500G" passa a "CAFE PILAO TRADICIONAL 500G"), o nome antigo aparece como parado e o novo como lançamento, sem conflito de cadastro: o conflito é apurado dentro de cada relatório, como no Raio-X. Decisão do dono: tratar a troca de descrição de um mesmo código entre relatórios como inconsistência cadastral (código reaproveitado para outro produto ou produto renomeado).
+- **Item só com estoque.** O produto listado num ano só com estoque, sem venda, não ganha linha nesse ano: a triagem usa o estoque do último ano em que ele vendeu.
 - **Captação pública.** A rota pública ficou de fora. A fase 1 é só para o consultor, e a abertura depende da LGPD, de anti-abuso (captcha e limite por IP) e da capacidade.
 - **Conversão do lead em cliente.** O status `convertido` existe e bloqueia o reenvio, mas ainda não existe o fluxo que converte o lead.
 - **Envio em lotes.** Mandar um ano por vez e juntar os anos num mesmo lead ficou fora. Hoje, cada envio substitui o anterior.

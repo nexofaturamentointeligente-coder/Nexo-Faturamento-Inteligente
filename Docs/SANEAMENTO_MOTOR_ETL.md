@@ -1,6 +1,6 @@
 # Saneamento do motor ETL (Fase 1)
 
-Situação em 08/11/2026: implementado e testado, **sem commit**. A Fase 1 não tem migração.
+Situação em 08/11/2026: no commit `53020e6`. A Fase 1 não tem migração. A leitura do cadastro da Etapa 2 (seção 11) está pronta e testada, sem commit.
 
 Fase 1 da diretriz de 11/2026: corrigir as falhas numéricas e de parsing legadas sem mudar o relatório de quem não tem esses defeitos. As falhas foram medidas em `Docs/DIAGNOSTICO_MOTOR_ETL.md`.
 
@@ -305,5 +305,15 @@ Análises e Raio-X já gravados não são recalculados: o banco guarda o resulta
   - **Compras líquidas:** marcas explícitas, textos de ERP (inclusive negação longe da marca e "Venda e bonificação"), devolução de venda, CFOP, duas colunas de situação e valor vazio.
   - **CMV líquido:** valor em branco, devolução com custo negativo, recorte por plano e Raio-X gravado antes do saneamento.
   - **Codificação:** cp1252 legítimo, caminho latin1, o mesmo produto nos meses de um envio e a cópia da Baia.
+- `tests/test_cadastro_regression.py` (3): o golden complementar da seção 11.
 - `tests/test_planos_raio_x.py`: a auditoria de um Raio-X do `91e5fb0` abre (página 200, CMV líquido nulo na API) e o Raio-X novo grava a versão 11.4.
 - Seguem passando os testes de equivalência financeira, regras financeiras, Raio-X e planos, Baia, trava do PDV, upload e limites, fora as falhas já conhecidas deste Windows (o worker real, que exige Linux, e um teste de limite de registro do CSV que depende da quebra de linha).
+
+## 11. Leitura do cadastro (Etapa 2 da Avaliação de Cenário)
+
+A Avaliação de Cenário do lead passou a ler NCM, categoria e estoque dos relatórios de vendas (`Docs/AVALIACAO_DE_CENARIO.md`, seção 2). A leitura fica atrás de um parâmetro que só o motor do lead liga:
+- `etl_processor._vendas_do_bruto(bruto, nome, *, cadastro=False)` e `raio_x._ler_arquivo` e `_ler_envio` com `cadastro=False` por padrão. Com `cadastro=True`, o df ganha as colunas `_ncm`, `_categoria` e `_estoque_informado` (prefixo "_", fora das colunas do relatório) e `attrs["cadastro"]`;
+- a leitura nova não acrescenta nada ao dicionário de colunas de vendas (`ALIAS_VENDAS`). A coluna de NCM ou de grupo só vira código ou produto quando o próprio `ALIAS_VENDAS` já a escolhia, antes e depois desta etapa ("Cód. NCM" antes de "Código"): é o cabeçalho ambíguo, marcado em `attrs["cadastro"]["ambiguo"]` e coberto pelo golden;
+- `normalizar_ncm` e `normalizar_categoria` são públicas e puras.
+
+**Golden complementar** (`tests/test_cadastro_regression.py`). Antes da mudança, o Raio-X e a análise mensal foram capturados do motor do commit `53020e6` em relatórios com NCM (em texto, com pontos, vazio, só zeros e numérico no XLSX), Grupo, Departamento, Seção e Família, situação (devolução e cancelamento), bonificação, devolução, estoque negativo e cabeçalhos ambíguos ("Cód. NCM" antes de "Código", "Grupo do Produto" antes da descrição). A referência está em `tests/fixtures/cadastro_regression_expected.json` (14 casos) e continua idêntica com a leitura nova: o Raio-X do cliente e a análise mensal não mudam. Recaptura só com motivo documentado: `python -B -m tests.test_cadastro_regression --capturar --commit <commit>`.

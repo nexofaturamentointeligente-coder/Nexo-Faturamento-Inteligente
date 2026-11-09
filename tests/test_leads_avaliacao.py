@@ -19,7 +19,8 @@ from tests.deploy_support import ROOT, DeployTestCase
 AGORA = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
 # Última revisão das tabelas de lead (a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging e
 # 6a8f2d4c0e13 agenda o expurgo no pg_cron, sem efeito no SQLite).
-REVISAO = "6a8f2d4c0e13"
+REVISAO = "7c4e2a9b5d31"
+REVISAO_SEM_EFEITO = "6a8f2d4c0e13"
 REVISAO_QUE_RECUSA = "5e1b9c3a7d20"
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
 
@@ -64,7 +65,9 @@ class EsquemaTests(_LeadsCase):
             "resumo_eletiva_json", "criado_em", "atualizado_em",
             # 5e1b9c3a7d20
             "versao_regras", "versao_triagem", "periodo_inicio", "periodo_fim", "arquivos", "meta_json",
-            "itens_venda_sem_custo", "itens_venda_abaixo_custo", "registrado_por", "consentimento_em"})
+            "itens_venda_sem_custo", "itens_venda_abaixo_custo", "registrado_por", "consentimento_em",
+            # 7c4e2a9b5d31
+            "itens_omissao_erp", "limiares_triagem_json"})
         colunas = {c["name"] for c in inspetor.get_columns("brainstorming_dados_pdv")}
         self.assertEqual(colunas, {
             "id", "lead_id", "ano_exercicio", "codigo_produto", "descricao_produto", "quantidade",
@@ -73,7 +76,12 @@ class EsquemaTests(_LeadsCase):
             # 5e1b9c3a7d20
             "chave_produto", "quantidade_com_custo", "faturamento_com_custo", "custo_total", "perda",
             "vazamento_preco", "recuperavel", "linhas", "meses", "variacao", "conflito_cadastral",
-            "estoque_negativo", "bloco_triagem", "versao_regras"})
+            "estoque_negativo", "bloco_triagem", "versao_regras",
+            # 7c4e2a9b5d31
+            "faturamento_em_relatorio_com_custo", "meses_com_custo", "meses_margem_negativa", "ultimo_mes_negativo",
+            "meses_completos", "quantidade_mesmos_meses", "estoque_final", "categoria_produto", "ncm_ausente",
+            "categoria_ausente", "custo_bonificacoes", "custo_devolucoes", "devolucoes_com_custo",
+            "relatorios_desde_primeira_venda"})
         [fk] = inspetor.get_foreign_keys("brainstorming_dados_pdv")
         self.assertEqual((fk["name"], fk["referred_table"], fk["options"].get("ondelete")),
                          ("fk_brainstorming_dados_pdv_lead", "lead_avaliacao", "CASCADE"))
@@ -276,6 +284,34 @@ class DowngradeTests(_LeadsCase):
         with patch("logging.config.fileConfig"), contextlib.redirect_stdout(io.StringIO()),                 contextlib.redirect_stderr(io.StringIO()):
             funcao(directory=str(ROOT / "migrations"), revision=revisao)
 
+    def test_downgrade_da_etapa_2_recusa_dados_das_regras_novas(self):
+        lead = self.lead(itens_omissao_erp=2)
+        self.linha(lead, 1, versao_regras="lead-2026-11.3", categoria_produto="BEBIDAS")
+        self.db.session.commit()
+        with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
+            self._migrar("downgrade", REVISAO_SEM_EFEITO)
+        self.assertIn("Downgrade da Etapa 2 da Avaliação de Cenário recusado", registro.output[0])
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        self.assertEqual(self.db.session.scalar(text("SELECT categoria_produto FROM brainstorming_dados_pdv")),
+                         "BEBIDAS")
+
+    def test_upgrade_da_etapa_2_nao_apaga_linhas_de_pdv(self):
+        # Volta à 6a8f2d4c0e13 sem dado da Etapa 2, grava uma linha e sobe de novo: a linha fica.
+        self._migrar("downgrade", REVISAO_SEM_EFEITO)
+        self.db.session.execute(text(
+            "INSERT INTO lead_avaliacao (id, nome_contato, email, nome_loja, status, criado_em, atualizado_em) "
+            "VALUES ('00000000000000000000000000000001', 'Contato', 'lead@example.invalid', 'Loja', 'concluido', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+        self.db.session.execute(text(
+            "INSERT INTO brainstorming_dados_pdv (id, lead_id, ano_exercicio, chave_produto, descricao_produto, "
+            "quantidade, valor_venda_bruto, criado_em) VALUES ('00000000000000000000000000000002', "
+            "'00000000000000000000000000000001', 2026, 'abcdef0123456789', 'Produto', 1, 10, CURRENT_TIMESTAMP)"))
+        self.db.session.commit()
+        self._migrar("upgrade", "head")
+        self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
+        self.assertEqual(self.db.session.scalar(text(
+            "SELECT meses_com_custo FROM brainstorming_dados_pdv")), 0)
+
     def test_downgrade_recusa_dados_e_remove_as_tabelas_vazias(self):
         lead = self.lead()
         self.linha(lead, 1)
@@ -285,10 +321,12 @@ class DowngradeTests(_LeadsCase):
             self._migrar("downgrade", REVISAO_ANTERIOR)
         self.assertEqual(saida.exception.code, 1)
         self.assertIn("Downgrade da Avaliação de Cenário recusado", registro.output[0])
-        # O SQLite não tem DDL transacional no Alembic: o passo sem efeito da 6a8f2d4c0e13 pode ficar
-        # registrado antes da recusa da 5e1b9c3a7d20. No PostgreSQL a recusa desfaz tudo (ensaio próprio).
+        # O SQLite não tem DDL transacional no Alembic: os passos da 7c4e2a9b5d31 (sem linha da Etapa 2, ela
+        # desce) e da 6a8f2d4c0e13 (sem efeito) podem ficar registrados antes da recusa da 5e1b9c3a7d20. No
+        # PostgreSQL a recusa desfaz tudo (ensaio próprio). A linha de PDV fica: a 7c4e2a9b5d31 não recria
+        # a tabela do lead, e o CASCADE não a apaga.
         self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
-                      (REVISAO, REVISAO_QUE_RECUSA))
+                      (REVISAO, REVISAO_SEM_EFEITO, REVISAO_QUE_RECUSA))
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
         colunas = {c["name"] for c in inspect(self.db.engine).get_columns("brainstorming_dados_pdv")}
         self.assertIn("chave_produto", colunas)

@@ -5,7 +5,8 @@ Rotas (todas admin_required: na fase 1 o consultor envia em nome do lead; a capt
 fica para depois da LGPD do lead, do anti-abuso e da capacidade, ver Docs/AVALIACAO_DE_CENARIO.md):
   GET  /admin/leads                  → leads avaliados e o formulário de nova avaliação
   POST /admin/leads                  → lê os relatórios do lead e grava a avaliação
-  GET  /admin/leads/<id>             → resumo, triagem e os itens de cada bloco
+  GET  /admin/leads/<id>             → resumo, triagem, matriz por categoria e os itens de cada bloco
+  GET  /admin/leads/<id>/diagnostico.json → o mesmo diagnóstico em JSON (diagnostico_cenario.montar_payload)
   POST /admin/leads/<id>/reenviar    → troca os dados do lead pelos de um novo envio
   POST /admin/leads/<id>/retriar     → refaz marcas e triagem a partir dos dados gravados
 
@@ -20,12 +21,13 @@ Regras:
 
 from datetime import timedelta
 from decimal import Decimal
-import json
+import math
 import threading
 import time
 from weakref import WeakKeyDictionary
 
-from flask import Blueprint, abort, current_app, flash, make_response, redirect, render_template, request, url_for
+from flask import (Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template,
+                   request, url_for)
 from flask_login import current_user
 from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,6 +35,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import avaliacao_cenario
 import avaliacao_motor
 from blueprints.admin import admin_required
+import diagnostico_cenario
 from configuracoes_conta import DadoInvalido, limpar_telefone
 from contas_email import normalizar_email
 from emails import email_valido
@@ -40,6 +43,7 @@ import entitlements
 from etl_inputs import ETLInputError
 from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
+from horario import agora_utc
 import leads_avaliacao
 from leads_avaliacao import RETENCAO_DIAS
 from models import BrainstormingDadosPdv, LeadAvaliacao
@@ -52,8 +56,10 @@ limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_f
 
 MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
                     "nenhum arquivo foi lido.")
-MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20 e 6a8f2d4c0e13, ainda não "
-                        "aplicadas neste banco: nenhum arquivo foi lido.")
+MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13 e 7c4e2a9b5d31, "
+                        "ainda não aplicadas neste banco: nenhum arquivo foi lido.")
+# Coluna da revisão mais nova de que a tela depende (7c4e2a9b5d31, Etapa 2).
+_COLUNA_DO_ESQUEMA = "categoria_produto"
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada.
 CODIGO_OCUPADO = "busy"
@@ -64,7 +70,7 @@ _esquema_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
 
 
 def esquema_disponivel() -> bool:
-    """True quando a staging ampliada (revisão 5e1b9c3a7d20) existe neste banco.
+    """True quando a staging da Etapa 2 (revisão 7c4e2a9b5d31, sobre a 5e1b9c3a7d20) existe neste banco.
 
     O mesmo critério de validacao_pdv: a presença fica fixa para o engine, e a ausência é
     reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo. Vem antes de
@@ -78,7 +84,7 @@ def esquema_disponivel() -> bool:
     if estado is not None and time.monotonic() - estado < _REVERIFICAR_ESQUEMA_SEGUNDOS:
         return False
     inspetor = inspect(db.session.connection())
-    disponivel = (inspetor.has_table(BrainstormingDadosPdv.__tablename__) and "chave_produto" in
+    disponivel = (inspetor.has_table(BrainstormingDadosPdv.__tablename__) and _COLUNA_DO_ESQUEMA in
                   {coluna["name"] for coluna in inspetor.get_columns(BrainstormingDadosPdv.__tablename__)})
     _esquema_por_engine[engine] = True if disponivel else time.monotonic()
     return disponivel
@@ -136,65 +142,121 @@ def _contexto_lista(formulario=None) -> dict:
 
 
 def _objeto_json(texto):
-    """O JSON gravado se for um objeto; qualquer outra coisa (lista, texto, JSON inválido) vale nada."""
-    try:
-        valor = json.loads(texto) if texto else None
-    except ValueError:
-        return None
-    return valor if isinstance(valor, dict) else None
+    """O JSON gravado se for um objeto com números finitos; qualquer outra coisa (lista, texto, JSON
+    inválido, NaN, aninhamento sem fim) vale nada (diagnostico_cenario.ler_objeto)."""
+    return diagnostico_cenario.ler_objeto(texto)
 
 
 def _resumo(lead: LeadAvaliacao, bloco: str):
-    return _objeto_json(getattr(lead, f"resumo_{bloco}_json"))
+    """O resumo gravado de um bloco, só se tiver o formato que a tela usa (itens inteiro, totais em
+    texto decimal, motivos {código: contagem}); gravação fora do formato vale nada, sem erro 500."""
+    resumo = _objeto_json(getattr(lead, f"resumo_{bloco}_json"))
+    if resumo is None:
+        return None
+    itens, motivos = resumo.get("itens"), resumo.get("motivos", {})
+    if type(itens) is not int or itens < 0 or not isinstance(motivos, dict):
+        return None
+    if not all(isinstance(codigo, str) and type(quantos) is int and quantos >= 0 for codigo, quantos in motivos.items()):
+        return None
+    for chave in ("faturamento", "recuperavel"):
+        try:
+            if not math.isfinite(float(resumo.get(chave, 0))):
+                return None
+        except (TypeError, ValueError):
+            return None
+    return resumo
 
 
-def _contexto_detalhe(lead: LeadAvaliacao) -> dict:
-    """Resumo gravado e, enquanto os dados de PDV existirem, os itens de cada bloco com os motivos
-    (a mesma triagem refeita sobre as linhas, sem gravar nada)."""
+def _lead_para_payload(lead: LeadAvaliacao) -> dict:
+    """Os campos do lead que o diagnóstico usa. Nunca o contato (nome, e-mail, WhatsApp, loja) nem
+    quem registrou."""
+    return {
+        "id": lead.id, "status": lead.status, "versao_regras": lead.versao_regras,
+        "versao_triagem": lead.versao_triagem, "periodo_inicio": lead.periodo_inicio,
+        "periodo_fim": lead.periodo_fim, "arquivos": lead.arquivos,
+        "score_saude_cadastral": lead.score_saude_cadastral,
+        "plano_recomendado_codigo": lead.plano_recomendado_codigo,
+        "vazamento_total_reais": lead.vazamento_total_reais,
+        "itens_venda_sem_custo": lead.itens_venda_sem_custo,
+        "itens_venda_abaixo_custo": lead.itens_venda_abaixo_custo,
+        "itens_omissao_erp": lead.itens_omissao_erp,
+        "resumos_json": {bloco: getattr(lead, f"resumo_{bloco}_json") for bloco in triagem_cenario.BLOCOS},
+        "meta_json": lead.meta_json, "limiares_triagem_json": lead.limiares_triagem_json,
+    }
+
+
+def _diagnostico(lead: LeadAvaliacao, limite: int) -> tuple[dict, list, list]:
+    """(payload do diagnóstico, linhas da staging, registros gravados) do lead, sem gravar nada."""
     registros = list(db.session.scalars(
         select(BrainstormingDadosPdv).where(BrainstormingDadosPdv.lead_id == lead.id)
         .order_by(BrainstormingDadosPdv.ano_exercicio, BrainstormingDadosPdv.chave_produto)
     ))
-    meta = _objeto_json(lead.meta_json) or {}
+    linhas = [avaliacao_cenario.linha_da_staging(r) for r in registros]
+    payload = diagnostico_cenario.montar_payload(_lead_para_payload(lead), linhas, agora=agora_utc(),
+                                                 retencao_dias=RETENCAO_DIAS, limite=limite)
+    return payload, linhas, registros
+
+
+def _itens_gravados(registros: list) -> dict:
+    """Os itens no bloco gravado (bloco_triagem), sem motivos nem impacto: a tela de um lead com a
+    triagem ou as regras de outra versão, enquanto as linhas existem. Ordem: potencial recuperável
+    gravado, faturamento e nome. O nome e o código são os do ano mais recente."""
     itens = {bloco: [] for bloco in triagem_cenario.BLOCOS}
-    expira_em = None
-    # Os motivos são a triagem refeita sobre as linhas, sem gravar: só batem com o bloco gravado
-    # quando a triagem do lead é a da versão atual. Senão, a tela pede "Refazer a triagem".
-    triagem_atual = (lead.versao_triagem == triagem_cenario.VERSAO_TRIAGEM
-                     and lead.versao_regras == avaliacao_motor.VERSAO_REGRAS_LEAD)
-    if registros:
-        linhas = [avaliacao_cenario.linha_da_staging(r) for r in registros]
-        motivos = {}
-        if triagem_atual:
-            try:
-                motivos = triagem_cenario.triar(linhas, triagem_cenario.Cobertura.do_envio(meta)).motivos
-            except ValueError:
-                triagem_atual = False
-        por_produto = {}
-        for registro in registros:
-            item = por_produto.setdefault(registro.chave_produto, {
-                "nome": registro.descricao_produto, "codigo": registro.codigo_produto, "anos": [],
-                "faturamento": Decimal("0"), "recuperavel": Decimal("0"), "bloco": registro.bloco_triagem,
-                "motivos": [triagem_cenario.ROTULOS_DOS_MOTIVOS.get(m, m)
-                            for m in motivos.get(registro.chave_produto, ())],
-            })
-            # Linhas em ordem de ano: o nome e o código ficam os do ano mais recente.
-            item["nome"], item["codigo"] = registro.descricao_produto, registro.codigo_produto or item["codigo"]
-            item["anos"].append(registro.ano_exercicio)
-            item["faturamento"] += Decimal(registro.valor_venda_bruto)
-            item["recuperavel"] += Decimal(registro.vazamento_estimado_reais)
-        for item in por_produto.values():
-            if item["bloco"] in itens:
-                itens[item["bloco"]].append(item)
-        for bloco in itens:
-            itens[bloco].sort(key=lambda item: (-item["recuperavel"], -item["faturamento"], item["nome"]))
-            itens[bloco] = itens[bloco][:ITENS_POR_BLOCO]
-        expira_em = min(r.criado_em for r in registros) + timedelta(days=RETENCAO_DIAS)
+    por_produto: dict = {}
+    for registro in registros:  # em ordem de ano
+        item = por_produto.setdefault(registro.chave_produto, {
+            "produto": registro.descricao_produto, "codigo": registro.codigo_produto, "categoria": None, "anos": [],
+            "faturamento": Decimal("0"), "potencial_recuperavel": Decimal("0"), "impacto": None,
+            "a_confirmar": False, "motivos": [], "bloco": registro.bloco_triagem,
+        })
+        item["produto"], item["codigo"] = registro.descricao_produto, registro.codigo_produto or item["codigo"]
+        item["anos"].append(registro.ano_exercicio)
+        item["faturamento"] += Decimal(registro.valor_venda_bruto)
+        item["potencial_recuperavel"] += Decimal(registro.vazamento_estimado_reais)
+    for item in por_produto.values():
+        if item["bloco"] in itens:
+            itens[item["bloco"]].append(item)
+    for bloco, lista in itens.items():
+        lista.sort(key=lambda item: (-item["potencial_recuperavel"], -item["faturamento"], item["produto"]))
+        itens[bloco] = lista[:ITENS_POR_BLOCO]
+    return itens
+
+
+def _limiares_legiveis(lead: LeadAvaliacao):
+    try:
+        return avaliacao_cenario.limiares_do_lead(lead)
+    except ValueError:
+        return None
+
+
+def _contexto_detalhe(lead: LeadAvaliacao) -> dict:
+    """Resumo gravado e, enquanto os dados de PDV existirem e forem da versão atual, a matriz por
+    categoria e os itens de cada bloco com os motivos (o mesmo diagnóstico da rota JSON)."""
+    payload, linhas, registros = _diagnostico(lead, ITENS_POR_BLOCO)
+    meta = _objeto_json(lead.meta_json) or {}
+    atual = payload["situacao"] == "atual"
+    if atual:
+        itens = {bloco: payload["blocos"][bloco]["itens"] for bloco in triagem_cenario.BLOCOS}
+    elif payload["situacao"] == "desatualizado":
+        # Linhas dentro da retenção, mas de outra versão: o bloco gravado, sem os motivos refeitos.
+        itens = _itens_gravados(registros)
+    else:
+        itens = {bloco: [] for bloco in triagem_cenario.BLOCOS}
+    expira_em = min((l["criado_em"] for l in linhas), default=None)
+    expira_em = expira_em + timedelta(days=RETENCAO_DIAS) if expira_em is not None else None
+    limiares = _limiares_legiveis(lead)
+    linhas_atuais = bool(linhas) and {l["versao_regras"] for l in linhas} == {avaliacao_motor.VERSAO_REGRAS_LEAD}
     return {
-        "lead": lead, "meta": meta, "itens": itens, "linhas_pdv": len(registros), "expira_em": expira_em,
-        "triagem_atual": triagem_atual, "versao_triagem_atual": triagem_cenario.VERSAO_TRIAGEM,
+        "lead": lead, "meta": meta, "itens": itens, "linhas_pdv": len(linhas), "expira_em": expira_em,
+        "triagem_atual": atual or payload["situacao"] == "expirado",
+        "linhas_atuais": linhas_atuais, "situacao": payload["situacao"], "avisos": payload["avisos"],
+        "versao_triagem_atual": triagem_cenario.VERSAO_TRIAGEM, "triagem_da_versao_atual":
+            lead.versao_triagem == triagem_cenario.VERSAO_TRIAGEM,
         "resumos": {bloco: _resumo(lead, bloco) for bloco in triagem_cenario.BLOCOS},
-        "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS, "rotulos_motivos": triagem_cenario.ROTULOS_DOS_MOTIVOS,
+        "rotulo_do_motivo": lambda codigo: triagem_cenario.rotulo_do_motivo(codigo, limiares),
+        "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS,
+        "totais": payload["totais"], "categorias": payload["categorias"],
+        "categorias_publicadas": payload["categorias_publicadas"],
         "max_arquivos": raio_x.MAX_ARQUIVOS, "itens_por_bloco": ITENS_POR_BLOCO, "retencao_dias": RETENCAO_DIAS,
     }
 
@@ -256,7 +318,8 @@ def _avaliar(arquivos, *, contato=None, lead_id=None) -> LeadAvaliacao:
 def lista():
     if not esquema_disponivel():
         return render_template("admin/leads.html", disponivel=False, retencao_dias=RETENCAO_DIAS,
-                               max_arquivos=raio_x.MAX_ARQUIVOS, leads=[], formulario={})
+                               max_arquivos=raio_x.MAX_ARQUIVOS, leads=[], formulario={},
+                               mensagem_sem_esquema=MENSAGEM_SEM_ESQUEMA)
     expurgo_oportunista()
     return render_template("admin/leads.html", **_contexto_lista())
 
@@ -304,6 +367,31 @@ def detalhe(lead_id):
     return render_template("admin/lead.html", **_contexto_detalhe(lead))
 
 
+@leads_bp.route("/<uuid:lead_id>/diagnostico.json")
+@admin_required
+def diagnostico_json(lead_id):
+    """O diagnóstico do lead em JSON, para o consultor (audiência "consultor"; nunca o contato do
+    lead). Itens por bloco até `?limite=` (padrão 30, máximo 200)."""
+    if not esquema_disponivel():
+        resposta = jsonify({"erro": "esquema_pendente", "mensagem": MENSAGEM_SEM_ESQUEMA})
+        resposta.status_code = 503
+        resposta.headers["Retry-After"] = str(ESPERA_SEGUNDOS)
+    else:
+        expurgo_oportunista()
+        lead = db.session.get(LeadAvaliacao, lead_id)
+        if lead is None:
+            resposta = jsonify({"erro": "lead_inexistente"})
+            resposta.status_code = 404
+        else:
+            limite = request.args.get("limite", default=diagnostico_cenario.ITENS_POR_BLOCO_PADRAO, type=int)
+            payload, _linhas, _registros = _diagnostico(lead, limite)
+            # Registro da leitura só com identificadores (sem nome de produto nem contato).
+            current_app.logger.info("Diagnóstico do lead %s lido pelo consultor %s.", lead.id, current_user.id_usuario)
+            resposta = jsonify(payload)
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
 @leads_bp.route("/<uuid:lead_id>/reenviar", methods=["POST"])
 @admin_required
 @limite_envio
@@ -335,6 +423,8 @@ def reenviar(lead_id):
             flash("Não foi possível gravar a avaliação. Tente novamente.", "danger")
             return redirect(url_for("leads.detalhe", lead_id=lead_id), 303)
     flash(f"Avaliação refeita com {lead.arquivos} relatório(s) de vendas.", "success")
+    if getattr(lead, "aviso_limiares", None):
+        flash(lead.aviso_limiares, "warning")
     return redirect(url_for("leads.detalhe", lead_id=lead_id), 303)
 
 
@@ -344,7 +434,8 @@ def retriar(lead_id):
     if not esquema_disponivel():
         return _sem_esquema()
     try:
-        avaliacao_cenario.retriar(lead_id)
+        lead = avaliacao_cenario.retriar(lead_id)
+        aviso_limiares = getattr(lead, "aviso_limiares", None)
         db.session.commit()
     except avaliacao_cenario.LeadIndisponivel as erro:
         db.session.rollback()
@@ -358,4 +449,6 @@ def retriar(lead_id):
         flash("Não foi possível refazer a triagem. Tente novamente.", "danger")
     else:
         flash("Triagem refeita com as regras atuais.", "success")
+        if aviso_limiares:
+            flash(aviso_limiares, "warning")
     return redirect(url_for("leads.detalhe", lead_id=lead_id), 303)

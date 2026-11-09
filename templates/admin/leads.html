@@ -24,7 +24,7 @@
     <i class="bi bi-database-exclamation" aria-hidden="true"></i>
     <div>
         <strong>Falta aplicar as migrações da Avaliação de Cenário.</strong>
-        <p>A tela depende das revisões 5e1b9c3a7d20 e 6a8f2d4c0e13 no banco de dados. Até lá, nenhuma avaliação é lida nem gravada.</p>
+        <p>{{ mensagem_sem_esquema or 'A tela depende das migrações da Avaliação de Cenário no banco de dados.' }} Até lá, nenhuma avaliação é lida nem gravada.</p>
     </div>
 </div>
 {% else %}

@@ -7,8 +7,9 @@
      arquivos (índice, faturamento, itens sem custo, margem negativa, abaixo do custo, estoque
      negativo); o recuperável difere só em centavos, pelo arredondamento por linha.
   3. Contrato do processo isolado (etl_runtime.validar_avaliacao) e isolamento do módulo.
-  4. Triagem (triagem_cenario): marcas, blocos, motivos e resumos sem nome de produto; ritmo
-     por dia coberto; limiares exatos nas fronteiras; Pareto e giro crítico.
+  4. Quantização das linhas do worker (2 casas no dinheiro, 3 na quantidade e no estoque, a categoria
+     do índice). A triagem pura (marcas, blocos, limiares, ritmo e fronteiras) e o diagnóstico estão
+     em tests/test_triagem_cenario.py.
   5. Gravação (avaliacao_cenario): lead, linhas e resumo numa transação; reenvio; retriagem;
      expurgo do lote inteiro; tetos das colunas.
   6. Rotas do consultor (blueprints/leads.py): só ADMIN em todas, autorização do lead, 503 com
@@ -27,8 +28,6 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import random
-import re
 import subprocess
 import sys
 import tempfile
@@ -54,7 +53,14 @@ DEZ24 = relatorio_do_mes(2024, 12, ["1;Cafe 500g;10;20,00;200,00;150,00", "2;Acu
 JAN25 = relatorio_do_mes(2025, 1, ["1;Café 500g;8;20,00;150,00;120,00", "3;Leite 1L;5;5,00;25,00;20,00"])
 FEV25 = relatorio_do_mes(2025, 2, ["1;Café 500g;4;20,00;80,00;60,00", "3;Leite 1L;5;5,00;25,00;20,00",
                                    "4;Arroz 5kg;2;27,90;55,80;44,00"])
+# nov-dez/2024 e jan-fev/2025: os dois anos são mensais e não têm mês em comum, então a queda de ritmo
+# não é avaliada (a regra que evita a sazonalidade virar parada).
 LOTE = (NOV24, DEZ24, JAN25, FEV25)
+NOV25 = relatorio_do_mes(2025, 11, ["1;Café 500g;8;20,00;150,00;120,00", "3;Leite 1L;5;5,00;25,00;20,00"])
+DEZ25 = relatorio_do_mes(2025, 12, ["1;Café 500g;4;20,00;80,00;60,00", "3;Leite 1L;5;5,00;25,00;20,00",
+                                   "4;Arroz 5kg;2;27,90;55,80;44,00"])
+# Os mesmos meses nos dois anos (nov-dez): o Leite cai 75% no mesmo período e vai para a Urgência.
+LOTE_MESMOS_MESES = (NOV24, DEZ24, NOV25, DEZ25)
 NOMES = ("Cafe", "Café", "Leite", "Acucar", "Arroz")
 
 
@@ -270,6 +276,90 @@ class MotorTests(_Arquivos):
 # =============================================================================
 # 2. Equivalência: o resumo refeito da staging gravada bate com o Raio-X
 # =============================================================================
+    def _cadastro(self, *casos):
+        from tests.test_cadastro_regression import montar_conjuntos
+        conjuntos = montar_conjuntos(self.pasta)
+        caminhos = [str(conjuntos[caso]) for caso in casos]
+        return avaliar_como_o_worker(caminhos, hoje=date(2026, 11, 8)), caminhos
+
+    def test_cadastro_estoque_e_ajustes_por_produto(self):
+        resultado, caminhos = self._cadastro("marco", "abril")
+        categorias = resultado["linhas"]["categorias"]
+        produtos = {linha["descricao_produto"]: linha for linha in _linhas(resultado)}
+
+        def categoria(nome):
+            indice = produtos[nome]["categoria"]
+            return None if indice is None else categorias[indice]
+        # A categoria do relatório mais recente com venda do produto (Departamento antes de Seção e de
+        # Grupo); o marcador genérico ("SEM GRUPO") e a célula vazia contam como ausentes.
+        self.assertEqual({nome: categoria(nome) for nome in produtos}, {
+            "Leite Integral 1L": "ALIMENTOS", "Café Torrado 500g": "MERCEARIA", "Água Mineral 500ml": "BEBIDAS",
+            "Sabão em Pó 1kg": None, "Biscoito Recheado": None, "Detergente 500ml": "LIMPEZA"})
+        self.assertEqual(sorted(categorias), ["ALIMENTOS", "BEBIDAS", "LIMPEZA", "MERCEARIA"])
+        self.assertEqual({n for n, l in produtos.items() if l["categoria_ausente"]},
+                         {"Sabão em Pó 1kg", "Biscoito Recheado"})
+        # NCM: "0901.21.00" vale pelos dígitos; "00000000" não; a Água, sem NCM em março, tem em abril.
+        self.assertEqual({n for n, l in produtos.items() if l["ncm_ausente"]}, {"Sabão em Pó 1kg"})
+        # Estoque: o último informado; abril não tem a coluna (o Detergente só vendeu em abril).
+        self.assertEqual({n: l["estoque_final"] for n, l in produtos.items()}, {
+            "Leite Integral 1L": 12, "Café Torrado 500g": 4, "Água Mineral 500ml": 30, "Sabão em Pó 1kg": -2,
+            "Biscoito Recheado": 8, "Detergente 500ml": None})
+        # Bonificação e devolução por produto, com as mesmas regras do Raio-X; o Chocolate só teve
+        # bonificação (nenhuma venda): o custo dela vai para a meta, sem nome de produto.
+        leite, cafe, sabao = produtos["Leite Integral 1L"], produtos["Café Torrado 500g"], produtos["Sabão em Pó 1kg"]
+        self.assertEqual(leite["custo_bonificacoes"], 8)
+        self.assertEqual((cafe["custo_devolucoes"], cafe["devolucoes_com_custo"]), (14, 18.9))
+        self.assertEqual((sabao["custo_devolucoes"], sabao["devolucoes_com_custo"]), (13.3, 11.9))
+        meta = resultado["meta"]
+        self.assertEqual(meta["ajustes_sem_venda_por_ano"],
+                         {"2026": {"custo_bonificacoes": 9, "custo_devolucoes": 0, "devolucoes_com_custo": 0}})
+        auditoria = resultado["raio_x"]["auditoria"]
+        for coluna in ("custo_bonificacoes", "custo_devolucoes"):
+            soma = sum(l[coluna] for l in produtos.values()) + meta["ajustes_sem_venda_por_ano"]["2026"][coluna]
+            self.assertAlmostEqual(soma, auditoria[coluna], places=2)
+        # Margem negativa no único relatório com custo do Sabão (R$ 71,40 de venda, R$ 80,00 de custo).
+        self.assertEqual((sabao["meses_com_custo"], sabao["meses_margem_negativa"], sabao["ultimo_mes_negativo"]),
+                         (1, 1, True))
+        # Biscoito: o relatório tem a coluna de custo e a célula está em branco.
+        biscoito = produtos["Biscoito Recheado"]
+        self.assertEqual((biscoito["faturamento_em_relatorio_com_custo"], biscoito["faturamento_com_custo"],
+                          biscoito["meses_com_custo"]), (50, 0, 0))
+        # Um só ano: não há janela dos mesmos meses (ela compara os dois últimos anos do envio). O giro de
+        # quem só vendeu em abril conta desde abril.
+        agua = produtos["Água Mineral 500ml"]
+        self.assertEqual(agua["quantidade_mesmos_meses"], 0)
+        self.assertEqual({n: l["relatorios_desde_primeira_venda"] for n, l in produtos.items()}, {
+            "Leite Integral 1L": 2, "Café Torrado 500g": 2, "Água Mineral 500ml": 2, "Sabão em Pó 1kg": 2,
+            "Biscoito Recheado": 2, "Detergente 500ml": 1})
+        self.assertEqual(
+            {chave: meta[chave] for chave in ("relatorios_com_custo_por_ano", "relatorios_com_ncm_por_ano",
+                                              "relatorios_com_categoria_por_ano", "relatorios_com_estoque_por_ano",
+                                              "relatorios_completos_por_ano", "dias_mesmos_meses_por_ano",
+                                              "relatorios_cabecalho_ambiguo")},
+            {"relatorios_com_custo_por_ano": {"2026": 2}, "relatorios_com_ncm_por_ano": {"2026": 2},
+             "relatorios_com_categoria_por_ano": {"2026": 2}, "relatorios_com_estoque_por_ano": {"2026": 1},
+             "relatorios_completos_por_ano": {"2026": 2}, "dias_mesmos_meses_por_ano": {"2026": 0},
+             "relatorios_cabecalho_ambiguo": 0})
+        # A leitura do cadastro não muda o Raio-X do lead.
+        self.assertEqual(resultado["raio_x"], json.loads(json.dumps(raio_x.diagnosticar(caminhos))))
+        self.assertNotIn("Chocolate", json.dumps(meta, ensure_ascii=False))
+
+    def test_cabecalho_ambiguo_e_xlsx(self):
+        # "Cód. NCM" antes de "Código": o Raio-X lê a primeira como código do produto; NCM, categoria e
+        # conflito desse relatório não são avaliados.
+        resultado, _ = self._cadastro("cod_ncm_antes")
+        meta = resultado["meta"]
+        self.assertEqual((meta["relatorios_cabecalho_ambiguo"], meta["relatorios_com_ncm_por_ano"],
+                          resultado["linhas"]["categorias"]), (1, {"2026": 0}, []))
+        for linha in _linhas(resultado):
+            self.assertEqual((linha["ncm_ausente"], linha["categoria_ausente"], linha["categoria"]), (False, False, None))
+        # XLSX: o NCM numérico (4012010.0) vale; Família é a categoria.
+        resultado, _ = self._cadastro("xlsx")
+        produtos = {linha["descricao_produto"]: linha for linha in _linhas(resultado)}
+        self.assertEqual({n for n, l in produtos.items() if l["ncm_ausente"]}, {"Água Mineral 500ml", "Sabão em Pó 1kg"})
+        self.assertEqual(sorted(resultado["linhas"]["categorias"]), ["BEBIDAS", "LATICINIOS", "MERCEARIA"])
+
+
 class EquivalenciaTests(_Arquivos):
     def test_staging_reproduz_o_raio_x(self):
         import avaliacao_cenario
@@ -361,6 +451,76 @@ class ContratoTests(_Arquivos):
             with self.subTest(caso=caso):
                 self._invalido(mudar)
 
+    def test_colunas_da_etapa_2_fora_do_formato_sao_recusadas(self):
+        from tests.test_cadastro_regression import montar_conjuntos
+        conjuntos = montar_conjuntos(self.pasta)
+        self.valido = avaliar_como_o_worker([str(conjuntos["marco"]), str(conjuntos["abril"])],
+                                            hoje=date(2026, 11, 8))
+        indice = {nome: i for i, nome in enumerate(avaliacao_motor.COLUNAS)}
+        nomes = [valores[indice["descricao_produto"]] for valores in self.valido["linhas"]["valores"]]
+        leite, sabao = nomes.index("Leite Integral 1L"), nomes.index("Sabão em Pó 1kg")
+
+        def campo(linha, nome, valor):
+            return lambda r: r["linhas"]["valores"][linha].__setitem__(indice[nome], valor)
+
+        def acima(linha, nome, base):
+            return lambda r: campo(linha, nome, r["linhas"]["valores"][linha][indice[base]] + 1)(r)
+        ajustes_zerados = {"custo_bonificacoes": 0, "custo_devolucoes": 0, "devolucoes_com_custo": 0}
+        mudancas = {
+            "sem a lista de categorias": lambda r: r["linhas"].pop("categorias"),
+            "chave a mais nas linhas": lambda r: r["linhas"].__setitem__("extra", []),
+            "categoria repetida": lambda r: r["linhas"]["categorias"].append(r["linhas"]["categorias"][0]),
+            "categoria longa": lambda r: r["linhas"]["categorias"].__setitem__(0, "X" * 81),
+            "categoria só com espaços": lambda r: r["linhas"]["categorias"].__setitem__(0, "   "),
+            "categoria que não é texto": lambda r: r["linhas"]["categorias"].__setitem__(0, 7),
+            "índice de categoria fora da lista":
+                lambda r: campo(leite, "categoria", len(r["linhas"]["categorias"]))(r),
+            "índice de categoria negativo": campo(leite, "categoria", -1),
+            "índice de categoria booleano": campo(leite, "categoria", True),
+            "categoria e categoria ausente juntas": campo(leite, "categoria_ausente", True),
+            "marca da Etapa 2 numérica": campo(leite, "ncm_ausente", 0),
+            "mais relatórios negativos que com custo": campo(sabao, "meses_margem_negativa", 2),
+            "último negativo sem relatório negativo": campo(leite, "ultimo_mes_negativo", True),
+            "relatórios completos acima dos relatórios": acima(leite, "meses_completos", "meses"),
+            "relatórios com custo acima dos relatórios": acima(leite, "meses_com_custo", "meses"),
+            "venda em relatório com custo acima da venda":
+                acima(leite, "faturamento_em_relatorio_com_custo", "valor_venda_bruto"),
+            "venda com custo acima da venda em relatório com custo":
+                acima(leite, "faturamento_com_custo", "faturamento_em_relatorio_com_custo"),
+            "quantidade nos mesmos meses acima da quantidade": acima(leite, "quantidade_mesmos_meses", "quantidade"),
+            "contagem em float": campo(leite, "meses_com_custo", 2.0),
+            "estoque em texto": campo(leite, "estoque_final", "12"),
+            "estoque infinito": campo(leite, "estoque_final", float("inf")),
+            "estoque acima do teto": campo(leite, "estoque_final", 10.0 ** 12),
+            "bonificação negativa": campo(leite, "custo_bonificacoes", -1),
+            "devolução infinita": campo(sabao, "custo_devolucoes", float("inf")),
+            "NCM ausente sem a coluna de NCM no ano":
+                lambda r: r["meta"]["relatorios_com_ncm_por_ano"].__setitem__("2026", 0),
+            "estoque sem a coluna de estoque no ano":
+                lambda r: r["meta"]["relatorios_com_estoque_por_ano"].__setitem__("2026", 0),
+            "categoria sem a coluna de categoria no ano":
+                lambda r: r["meta"]["relatorios_com_categoria_por_ano"].__setitem__("2026", 0),
+            "venda com custo sem relatório com custo no ano":
+                lambda r: r["meta"]["relatorios_com_custo_por_ano"].__setitem__("2026", 0),
+            "contagem do ano acima dos relatórios":
+                lambda r: r["meta"]["relatorios_completos_por_ano"].__setitem__("2026", 3),
+            "dias nos mesmos meses acima dos dias":
+                lambda r: r["meta"]["dias_mesmos_meses_por_ano"].__setitem__("2026", 9999),
+            "meta sem a contagem de NCM": lambda r: r["meta"].pop("relatorios_com_ncm_por_ano"),
+            "cabeçalho ambíguo acima dos relatórios":
+                lambda r: r["meta"].__setitem__("relatorios_cabecalho_ambiguo", 3),
+            "cabeçalho ambíguo booleano": lambda r: r["meta"].__setitem__("relatorios_cabecalho_ambiguo", True),
+            "ajuste sem venda com chave a mais":
+                lambda r: r["meta"]["ajustes_sem_venda_por_ano"]["2026"].__setitem__("extra", 1),
+            "ajuste sem venda negativo":
+                lambda r: r["meta"]["ajustes_sem_venda_por_ano"]["2026"].__setitem__("custo_bonificacoes", -1),
+            "ajuste sem venda de ano fora do envio":
+                lambda r: r["meta"]["ajustes_sem_venda_por_ano"].__setitem__("2025", dict(ajustes_zerados)),
+        }
+        for caso, mudar in mudancas.items():
+            with self.subTest(caso=caso):
+                self._invalido(mudar)
+
     def test_motor_nao_carrega_banco_nem_configuracao(self):
         codigo = ("import sys; sys.path.insert(0, sys.argv[1]); import avaliacao_motor; "
                   "print('models' in sys.modules or 'config' in sys.modules or 'flask' in sys.modules)")
@@ -407,259 +567,30 @@ class ContratoTests(_Arquivos):
 
 
 # =============================================================================
-# 4. Triagem
+# 4. Quantização (a triagem pura está em tests/test_triagem_cenario.py)
 # =============================================================================
-def _linha(chave, ano, *, quantidade="10", venda="100.00", com_custo=None, custo="60.00", perda="0.00",
-           vazamento="0.00", recuperavel="0.00", meses=12, conflito=False, estoque=False):
-    com_custo = venda if com_custo is None else com_custo
-    return {
-        "ano_exercicio": ano, "chave_produto": chave, "codigo_produto": None, "descricao_produto": f"Produto {chave}",
-        "quantidade": Decimal(quantidade), "valor_venda_bruto": Decimal(venda),
-        "quantidade_com_custo": Decimal(quantidade) if Decimal(com_custo) > 0 else Decimal("0"),
-        "faturamento_com_custo": Decimal(com_custo), "custo_total": Decimal(custo) if Decimal(com_custo) > 0 else Decimal("0"),
-        "perda": Decimal(perda), "vazamento_preco": Decimal(vazamento), "recuperavel": Decimal(recuperavel),
-        "linhas": meses, "meses": meses, "variacao": False, "conflito_cadastral": conflito, "estoque_negativo": estoque,
-    }
-
-
-CENARIO = [
-    # Urgência: recuperável alto e parou de vender no último ano.
-    _linha("U", 2024, venda="1000.00", custo="600.00", vazamento="200.00", recuperavel="200.00"),
-    # Urgência: recuperável alto e venda média caiu 60%.
-    _linha("Q", 2024, quantidade="100", venda="1000.00", custo="500.00", recuperavel="80.00", perda="80.00"),
-    _linha("Q", 2025, quantidade="40", venda="500.00", custo="250.00", recuperavel="70.00", perda="70.00"),
-    # Atenção: margem de 5%.
-    _linha("M", 2024, custo="95.00"), _linha("M", 2025, custo="95.00"),
-    # Atenção: venda sem custo cadastrado.
-    _linha("S", 2024), _linha("S", 2025, com_custo="0.00"),
-    # Atenção: preço médio abaixo do custo médio.
-    _linha("B", 2024), _linha("B", 2025, venda="90.00", custo="100.00"),
-    # Eletiva: venda média caiu 30%, margem saudável, nada a recuperar.
-    _linha("E", 2024, quantidade="100"), _linha("E", 2025, quantidade="70"),
-    # Nenhum bloco.
-    _linha("N", 2024), _linha("N", 2025),
-]
-# 12 relatórios mensais em cada ano, cobrindo o ano inteiro.
-RELATORIOS = triagem_cenario.Cobertura(relatorios={2024: 12, 2025: 12}, dias={2024: 366, 2025: 365},
-                                       mensais={2024: True, 2025: True})
-
-
-class TriagemTests(unittest.TestCase):
-    def test_marcas_da_linha(self):
-        sem_custo = triagem_cenario.marcas(_linha("S", 2025, com_custo="0.00"))
-        self.assertEqual((sem_custo["flag_venda_sem_custo"], sem_custo["flag_venda_abaixo_custo"],
-                          sem_custo["custo_medio_registrado"], sem_custo["flag_omissao_erp"]), (True, False, None, False))
-        abaixo = triagem_cenario.marcas(_linha("B", 2025, quantidade="3", venda="90.00", custo="100.00",
-                                               recuperavel="10.00"))
-        self.assertEqual((abaixo["flag_venda_sem_custo"], abaixo["flag_venda_abaixo_custo"]), (False, True))
-        self.assertEqual(abaixo["custo_medio_registrado"], Decimal("33.3333"))
-        self.assertEqual(abaixo["vazamento_estimado_reais"], Decimal("10.00"))
-
-    def test_blocos_motivos_e_resumos(self):
-        resultado = triagem_cenario.triar(CENARIO, RELATORIOS)
-        self.assertEqual(resultado.blocos, {"U": "urgencia", "Q": "urgencia", "M": "atencao", "S": "atencao",
-                                            "B": "atencao", "E": "eletiva", "N": None})
-        self.assertEqual(resultado.motivos["U"], ("recuperavel_alto", "venda_parou"))
-        self.assertEqual(resultado.motivos["Q"], ("recuperavel_alto", "venda_em_queda_forte"))
-        self.assertEqual(resultado.motivos["M"], ("margem_baixa",))
-        self.assertIn("venda_sem_custo", resultado.motivos["S"])
-        self.assertIn("venda_abaixo_do_custo", resultado.motivos["B"])
-        self.assertEqual(resultado.motivos["E"], ("venda_em_queda",))
-        self.assertEqual((resultado.itens_venda_sem_custo, resultado.itens_venda_abaixo_custo), (1, 1))
-        urgencia = resultado.resumos["urgencia"]
-        self.assertEqual((urgencia["itens"], urgencia["faturamento"], urgencia["recuperavel"]), (2, "2500.00", "350.00"))
-        self.assertEqual(urgencia["motivos"], {"recuperavel_alto": 2, "venda_em_queda_forte": 1, "venda_parou": 1})
-        self.assertEqual((resultado.resumos["atencao"]["itens"], resultado.resumos["eletiva"]["itens"]), (3, 1))
-        self.assertEqual(urgencia["versao"], triagem_cenario.VERSAO_TRIAGEM)
-        texto = json.dumps(resultado.resumos, ensure_ascii=False)
-        self.assertNotIn("Produto", texto)
-
-    def test_triagem_nao_depende_da_ordem_das_linhas(self):
-        referencia = triagem_cenario.triar(CENARIO, RELATORIOS)
-        embaralhado = list(CENARIO)
-        random.Random(7).shuffle(embaralhado)
-        self.assertEqual(triagem_cenario.triar(embaralhado, RELATORIOS), referencia)
-
-    def test_todo_motivo_tem_rotulo(self):
-        resultado = triagem_cenario.triar(CENARIO, RELATORIOS)
-        for motivos in resultado.motivos.values():
-            for motivo in motivos:
-                self.assertIn(motivo, triagem_cenario.ROTULOS_DOS_MOTIVOS)
-
-
-class RitmoTests(unittest.TestCase):
-    """O ritmo de venda é por dia coberto pelos relatórios: anos de durações diferentes não viram
-    queda falsa, e o giro só existe com relatórios mensais."""
-
-    @staticmethod
-    def cobertura(**anos):
-        return triagem_cenario.Cobertura(
-            relatorios={int(a[1:]): r for a, (r, _d, _m) in anos.items()},
-            dias={int(a[1:]): d for a, (_r, d, _m) in anos.items()},
-            mensais={int(a[1:]): m for a, (_r, _d, m) in anos.items()})
-
-    def test_ano_inteiro_e_semestre_corrente_no_mesmo_ritmo_nao_e_queda(self):
-        linhas = [_linha("X", 2025, quantidade="120", venda="1200.00", custo="600.00", recuperavel="300.00", meses=1),
-                  _linha("X", 2026, quantidade="60", venda="600.00", custo="300.00", recuperavel="150.00", meses=1)]
-        resultado = triagem_cenario.triar(linhas, self.cobertura(a2025=(1, 365, False), a2026=(1, 181, False)))
-        self.assertEqual((resultado.blocos["X"], resultado.motivos["X"]), ("eletiva", ("recuperavel_residual",)))
-
-    def test_relatorio_anual_e_mensais_no_mesmo_ritmo_nao_e_queda(self):
-        linhas = [_linha("X", 2025, quantidade="120", meses=1), _linha("X", 2026, quantidade="100", meses=10)]
-        resultado = triagem_cenario.triar(linhas, self.cobertura(a2025=(1, 365, False), a2026=(10, 304, True)))
-        self.assertEqual(resultado.blocos["X"], None)
-
-    def test_queda_de_ritmo_de_verdade_continua_aparecendo(self):
-        linhas = [_linha("X", 2025, quantidade="120", recuperavel="30.00", meses=1),
-                  _linha("X", 2026, quantidade="20", recuperavel="0.00", meses=6)]
-        resultado = triagem_cenario.triar(linhas, self.cobertura(a2025=(1, 365, False), a2026=(6, 181, True)))
-        # 120 por ano (0,33 por dia) contra 20 em meio ano (0,11 por dia): queda de 66%.
-        self.assertEqual(resultado.motivos["X"], ("recuperavel_alto", "venda_em_queda_forte"))
-
-    def test_mes_curto_sem_venda_so_conta_quando_a_venda_era_esperada(self):
-        linhas = [_linha("LENTO", 2025, quantidade="6", recuperavel="10.00", meses=1),
-                  _linha("RAPIDO", 2025, quantidade="365", recuperavel="10.00", meses=1),
-                  _linha("OUTRO", 2026, quantidade="10", meses=1)]
-        resultado = triagem_cenario.triar(linhas, self.cobertura(a2025=(1, 365, False), a2026=(1, 31, True)))
-        # LENTO previa 0,5 unidade em 31 dias: não vender não diz nada. RAPIDO previa 31.
-        self.assertNotIn("venda_parou", resultado.motivos["LENTO"])
-        self.assertIn("venda_parou", resultado.motivos["RAPIDO"])
-
-    def test_giro_so_com_relatorios_mensais_no_ultimo_ano(self):
-        linhas = [_linha("X", 2026, quantidade="10", meses=1)]
-        # Vendeu em 1 dos 4 relatórios mensais: giro de 25%. Num relatório que cobre os 4 meses de uma
-        # vez, a mesma venda não diz em quantos meses o produto vendeu.
-        mensais = triagem_cenario.triar(linhas, self.cobertura(a2026=(4, 120, True)))
-        anual = triagem_cenario.triar(linhas, self.cobertura(a2026=(1, 120, False)))
-        self.assertEqual((mensais.blocos["X"], mensais.motivos["X"]), ("eletiva", ("giro_baixo",)))
-        self.assertEqual(anual.blocos["X"], None)
-
-    def test_cobertura_da_meta_do_envio(self):
-        meta = {"arquivos_por_ano": {"2025": 1, "2026": 3}, "dias_por_ano": {"2025": 365, "2026": 90},
-                "relatorios_mensais_por_ano": {"2025": False, "2026": True}}
-        cobertura = triagem_cenario.Cobertura.do_envio(meta)
-        self.assertEqual((cobertura.relatorios, cobertura.dias, cobertura.mensais),
-                         ({2025: 1, 2026: 3}, {2025: 365, 2026: 90}, {2025: False, 2026: True}))
-        invalidas = (
-            {}, {"arquivos_por_ano": {"2025": 1}}, {**meta, "dias_por_ano": {"2025": 365}},
-            {**meta, "dias_por_ano": {"2025": 0, "2026": 90}}, {**meta, "arquivos_por_ano": {"2025": "1", "2026": 3}},
-            {**meta, "relatorios_mensais_por_ano": {"2025": 1, "2026": True}}, [],
-        )
-        for meta_invalida in invalidas:
-            with self.subTest(meta=meta_invalida), self.assertRaises(ValueError):
-                triagem_cenario.Cobertura.do_envio(meta_invalida)
-
-    def test_linha_de_ano_fora_da_cobertura_e_recusada(self):
-        with self.assertRaises(ValueError):
-            triagem_cenario.triar([_linha("X", 2024)], self.cobertura(a2025=(1, 365, False)))
-
-
-class FronteirasDaTriagemTests(unittest.TestCase):
-    """Os limiares valem exatamente no valor da constante (fração exata, sem o erro de uma divisão em
-    ponto flutuante) e os cortes da triagem: Pareto, giro crítico e três anos."""
-
-    cobertura = staticmethod(RitmoTests.cobertura)
-
-    def test_queda_de_exatamente_50_por_cento_entre_meses_de_28_e_30_dias(self):
-        # 2,8 kg em fevereiro (28 dias) e 1,5 kg em abril (30 dias): o ritmo caiu exatamente pela metade.
-        # Em ponto flutuante, 1 - (1,5/30)/(2,8/28) dá 0,4999...
-        def linhas(abril):
-            return [_linha("X", 2025, quantidade="2.8", recuperavel="10.00", meses=1),
-                    _linha("X", 2026, quantidade=abril, recuperavel="10.00", meses=1)]
-        cobertura = self.cobertura(a2025=(1, 28, True), a2026=(1, 30, True))
-        exata = triagem_cenario.triar(linhas("1.5"), cobertura)
-        self.assertEqual((exata.blocos["X"], exata.motivos["X"]),
-                         ("urgencia", ("recuperavel_alto", "venda_em_queda_forte")))
-        menor = triagem_cenario.triar(linhas("1.501"), cobertura)
-        self.assertEqual((menor.blocos["X"], menor.motivos["X"]), ("eletiva", ("venda_em_queda", "recuperavel_residual")))
-
-    def test_venda_esperada_de_exatamente_uma_unidade(self):
-        # 2,44 kg em 2024 (366 dias) prevê exatamente 1 kg em 150 dias de 2025: sem venda nesse período,
-        # o produto parou. Em ponto flutuante, 2,44/366 x 150 dá 0,9999...
-        cobertura = self.cobertura(a2024=(12, 366, True), a2025=(5, 150, True))
-        parou = triagem_cenario.triar([_linha("X", 2024, quantidade="2.44")], cobertura)
-        # Sem recuperável alto, a venda que parou fica na Eletiva.
-        self.assertEqual((parou.blocos["X"], parou.motivos["X"]), ("eletiva", ("venda_parou",)))
-        lento = triagem_cenario.triar([_linha("X", 2024, quantidade="2.439")], cobertura)
-        self.assertEqual((lento.blocos["X"], lento.motivos["X"]), (None, ()))
-
-    def test_margem_de_exatamente_10_por_cento_nao_e_baixa(self):
-        # Em ponto flutuante, a margem de R$ 3,00 com custo de R$ 2,70 dá 0,0999..., subtraindo em
-        # Decimal ou em float antes da divisão.
-        cobertura = self.cobertura(a2025=(1, 365, False))
-        no_limite = triagem_cenario.triar([_linha("X", 2025, venda="3.00", custo="2.70")], cobertura)
-        abaixo = triagem_cenario.triar([_linha("X", 2025, venda="3.00", custo="2.71")], cobertura)
-        self.assertEqual((no_limite.blocos["X"], abaixo.motivos["X"]), (None, ("margem_baixa",)))
-
-    def test_margem_em_queda_de_exatamente_5_pontos(self):
-        # Margem de 30% para 25%: em ponto flutuante, 0,30 - 0,25 dá 0,0499...
-        cobertura = self.cobertura(a2024=(1, 366, False), a2025=(1, 365, False))
-
-        def linhas(custo_2025):
-            return [_linha("X", 2024, custo="70.00"), _linha("X", 2025, custo=custo_2025)]
-        caiu = triagem_cenario.triar(linhas("75.00"), cobertura)
-        self.assertEqual((caiu.blocos["X"], caiu.motivos["X"]), ("atencao", ("margem_em_queda",)))
-        quase = triagem_cenario.triar(linhas("74.99"), cobertura)
-        self.assertEqual((quase.blocos["X"], quase.motivos["X"]), (None, ()))
-        # Margem que subiu não é queda.
-        subiu = triagem_cenario.triar([_linha("X", 2024, custo="75.00"), _linha("X", 2025, custo="70.00")], cobertura)
-        self.assertEqual(subiu.blocos["X"], None)
-
-    def test_corte_de_pareto_em_80_por_cento_e_empate(self):
-        cobertura = self.cobertura(a2024=(12, 366, True), a2025=(12, 365, True))
-
-        def pararam(**recuperaveis):
-            # Produtos que pararam de vender em 2025, cada um com R$ 100,00 de faturamento em 2024.
-            return [_linha(chave, 2024, recuperavel=valor) for chave, valor in recuperaveis.items()]
-        resultado = triagem_cenario.triar(pararam(A="50.00", B="30.00", C="15.00", D="5.00"), cobertura)
-        # A e B somam 80% do recuperável: o corte para em B; C e D ficam com o recuperável residual.
-        self.assertEqual(resultado.blocos, {"A": "urgencia", "B": "urgencia", "C": "eletiva", "D": "eletiva"})
-        self.assertEqual(resultado.motivos["A"], ("recuperavel_alto", "venda_parou"))
-        self.assertEqual(resultado.motivos["C"], ("recuperavel_residual",))
-        # Empate no corte: a chave desempata, sempre do mesmo jeito (A, B e M somam os 80%; Z fica de fora).
-        empate = pararam(A="40.00", Z="20.00", M="20.00", B="20.00")
-        esperado = {"A": "urgencia", "B": "urgencia", "M": "urgencia", "Z": "eletiva"}
-        self.assertEqual(triagem_cenario.triar(empate, cobertura).blocos, esperado)
-        self.assertEqual(triagem_cenario.triar(list(reversed(empate)), cobertura).blocos, esperado)
-
-    def test_giro_critico_com_recuperavel_alto_vai_para_urgencia(self):
-        quatro = self.cobertura(a2026=(4, 120, True))
-        uma_vez = triagem_cenario.triar([_linha("X", 2026, recuperavel="10.00", meses=1)], quatro)
-        self.assertEqual((uma_vez.blocos["X"], uma_vez.motivos["X"]), ("urgencia", ("recuperavel_alto", "giro_critico")))
-        duas_vezes = triagem_cenario.triar([_linha("X", 2026, recuperavel="10.00", meses=2)], quatro)
-        self.assertEqual((duas_vezes.blocos["X"], duas_vezes.motivos["X"]),
-                         ("eletiva", ("giro_baixo", "recuperavel_residual")))
-        # Com 3 relatórios mensais, vender em 1 deles ainda não é giro crítico.
-        tres = triagem_cenario.triar([_linha("X", 2026, recuperavel="10.00", meses=1)],
-                                     self.cobertura(a2026=(3, 90, True)))
-        self.assertEqual((tres.blocos["X"], tres.motivos["X"]), ("eletiva", ("giro_baixo", "recuperavel_residual")))
-
-    def test_tres_anos_comparam_o_ultimo_com_o_anterior_mais_recente_com_venda(self):
-        cobertura = self.cobertura(a2024=(1, 366, False), a2025=(1, 365, False), a2026=(1, 365, False))
-        linhas = [
-            # X: 2025 e 2026 no mesmo ritmo; a queda contra 2024 não conta.
-            _linha("X", 2024, quantidade="100"), _linha("X", 2025, quantidade="50"), _linha("X", 2026, quantidade="50"),
-            # Y: sem venda em 2025; 2026 compara com 2024 (100 em 366 dias contra 40 em 365: queda de 60%).
-            _linha("Y", 2024, quantidade="100"), _linha("Y", 2026, quantidade="40"),
-        ]
-        resultado = triagem_cenario.triar(linhas, cobertura)
-        self.assertEqual(resultado.blocos["X"], None)
-        self.assertEqual((resultado.blocos["Y"], resultado.motivos["Y"]), ("eletiva", ("venda_em_queda",)))
-
-
 class QuantizacaoTests(unittest.TestCase):
     def test_dinheiro_com_2_casas_e_quantidade_com_3_arredondando_o_meio_para_cima(self):
         import avaliacao_cenario
         valores = dict.fromkeys(avaliacao_motor.COLUNAS, 0)
         valores.update(ano_exercicio=2025, chave_produto="0" * 16, codigo_produto=None, descricao_produto="X",
                        quantidade=1.0005, quantidade_com_custo=2.0004, valor_venda_bruto=2.675, recuperavel=0.125,
-                       custo_total=1.005, variacao=False, conflito_cadastral=False, estoque_negativo=False)
+                       custo_total=1.005, variacao=False, conflito_cadastral=False, estoque_negativo=False,
+                       ultimo_mes_negativo=False, ncm_ausente=False, categoria_ausente=False,
+                       estoque_final=2.0005, categoria=None)
         linha = avaliacao_cenario.quantizar({"colunas": list(avaliacao_motor.COLUNAS),
                                              "valores": [[valores[c] for c in avaliacao_motor.COLUNAS]]})[0]
         # O valor que o JSON traz ("2.675"), e não o binário do float (2,67499...).
         self.assertEqual((linha["quantidade"], linha["quantidade_com_custo"]), (Decimal("1.001"), Decimal("2.000")))
         self.assertEqual((linha["valor_venda_bruto"], linha["recuperavel"], linha["custo_total"]),
                          (Decimal("2.68"), Decimal("0.13"), Decimal("1.01")))
+        # Estoque com 3 casas; sem categoria no envio, a linha grava categoria_produto nula.
+        self.assertEqual((linha["estoque_final"], linha["categoria_produto"]), (Decimal("2.001"), None))
+        self.assertNotIn("categoria", linha)
+        com_categoria = avaliacao_cenario.quantizar({
+            "colunas": list(avaliacao_motor.COLUNAS), "categorias": ["BEBIDAS", "LIMPEZA"],
+            "valores": [[{**valores, "categoria": 1}[c] for c in avaliacao_motor.COLUNAS]]})[0]
+        self.assertEqual(com_categoria["categoria_produto"], "LIMPEZA")
 
 
 # =============================================================================
@@ -711,8 +642,10 @@ class GravacaoTests(_BancoCase):
         self.assertEqual((cafe.custo_medio_registrado, cafe.valor_venda_bruto, cafe.custo_total),
                          (Decimal("15.0000"), Decimal("400.00"), Decimal("300.00")))
         leite = por_chave[(2024, "Leite 1L")]
+        # Sem mês em comum entre 2024 e 2025, a queda do Leite não é avaliada: fica na Atenção pela margem.
         self.assertEqual((leite.perda, leite.vazamento_estimado_reais, leite.bloco_triagem),
-                         (Decimal("10.00"), Decimal("10.00"), "urgencia"))
+                         (Decimal("10.00"), Decimal("10.00"), "atencao"))
+        self.assertEqual(json.loads(lead.meta_json)["dias_mesmos_meses_por_ano"], {"2024": 0, "2025": 0})
         self.assertEqual({l.versao_regras for l in linhas}, {avaliacao_motor.VERSAO_REGRAS_LEAD})
         self.db.session.refresh(lead)
         recomendado = raio_x.recomendar(resultado["raio_x"], 24)["plano"]
@@ -721,11 +654,13 @@ class GravacaoTests(_BancoCase):
         self.assertEqual(lead.score_saude_cadastral,
                          Decimal(str(resultado["raio_x"]["saude"]["indice"])).quantize(Decimal("0.01")))
         self.assertEqual((lead.periodo_inicio, lead.periodo_fim), (date(2024, 11, 1), date(2025, 2, 28)))
-        self.assertEqual((lead.itens_venda_sem_custo, lead.itens_venda_abaixo_custo), (1, 0))
+        # Leite 1L vendeu abaixo do custo em 2024 (perda de R$ 10): a marca é o fato, sem materialidade.
+        self.assertEqual((lead.itens_venda_sem_custo, lead.itens_venda_abaixo_custo, lead.itens_omissao_erp), (1, 1, 0))
+        self.assertEqual(json.loads(lead.limiares_triagem_json), triagem_cenario.LIMIARES_PADRAO.para_dict())
         self.assertEqual((lead.registrado_por, lead.versao_triagem), (self.admin_id, triagem_cenario.VERSAO_TRIAGEM))
         self.assertIsNotNone(lead.consentimento_em)
         resumos = {b: json.loads(getattr(lead, f"resumo_{b}_json")) for b in triagem_cenario.BLOCOS}
-        self.assertEqual({b: r["itens"] for b, r in resumos.items()}, {"urgencia": 1, "atencao": 1, "eletiva": 2})
+        self.assertEqual({b: r["itens"] for b, r in resumos.items()}, {"urgencia": 0, "atencao": 2, "eletiva": 1})
         guardado = lead.meta_json + "".join(getattr(lead, f"resumo_{b}_json") for b in triagem_cenario.BLOCOS)
         for nome in NOMES:
             self.assertNotIn(nome, guardado)
@@ -751,7 +686,7 @@ class GravacaoTests(_BancoCase):
     def test_retriar_refaz_marcas_e_blocos_a_partir_da_staging(self):
         import avaliacao_cenario
         from models import BrainstormingDadosPdv
-        lead, _ = self._registrar(*LOTE)
+        lead, _ = self._registrar(*LOTE_MESMOS_MESES)
         antes = {l.id: (l.bloco_triagem, l.flag_venda_sem_custo, l.vazamento_estimado_reais) for l in
                  self.db.session.scalars(select(BrainstormingDadosPdv))}
         self.db.session.execute(text("UPDATE brainstorming_dados_pdv SET bloco_triagem = NULL, "
@@ -824,6 +759,19 @@ class GravacaoTests(_BancoCase):
         self.db.session.rollback()
         self.assertEqual(self.contar(LeadAvaliacao), 0)
 
+    def test_soma_arredondada_ate_o_teto_nao_grava_nada(self):
+        # R$ 999.999.999.999,996 passa pelo contrato (abaixo de 10^12) e vira 1.000.000.000.000,00 com
+        # 2 casas, o que a coluna NUMERIC(14,2) não guarda: recusa com mensagem, sem erro 500.
+        import avaliacao_cenario
+        from models import LeadAvaliacao
+        resultado = avaliar_como_o_worker(self.caminhos(*LOTE))
+        resultado["linhas"]["valores"][0][avaliacao_motor.COLUNAS.index("valor_venda_bruto")] = 999999999999.996
+        with self.assertRaises(ETLInputError) as erro:
+            avaliacao_cenario.registrar(resultado, contato=CONTATO, registrado_por=self.admin_id, meses_prata=24)
+        self.assertEqual(erro.exception.code, "avaliacao_valor")
+        self.db.session.rollback()
+        self.assertEqual(self.contar(LeadAvaliacao), 0)
+
     def test_custo_medio_acima_da_coluna_nao_grava_nada(self):
         # O custo médio (NUMERIC(14,4)) é derivado no processo pai: 1e8 de custo em 0,001 unidade dá 1e11.
         import avaliacao_cenario
@@ -854,16 +802,72 @@ class GravacaoTests(_BancoCase):
         self.assertEqual((lead.status, lead.score_saude_cadastral), ("expirado", score))
 
     def test_comando_retriar_mostra_so_contagens(self):
-        lead, _ = self._registrar(*LOTE)
+        lead, _ = self._registrar(*LOTE_MESMOS_MESES)
         identificador = str(lead.id)
         self.db.session.remove()
         saida = self.app.test_cli_runner().invoke(args=["leads", "retriar", identificador])
         self.assertEqual(saida.exit_code, 0, saida.output)
-        self.assertIn("urgência 1, atenção 1, eletiva 2", saida.output)
+        self.assertIn("urgência 1, atenção 1, eletiva 1", saida.output)
         for dado in ("lead@example.invalid", "Contato fictício", "Mercado fictício", "Leite"):
             self.assertNotIn(dado, saida.output)
         invalido = self.app.test_cli_runner().invoke(args=["leads", "retriar", "nao-e-uuid"])
         self.assertNotEqual(invalido.exit_code, 0)
+
+
+    def test_retriagem_e_reenvio_usam_os_limiares_gravados(self):
+        import avaliacao_cenario
+        from models import LeadAvaliacao
+        lead, _ = self._registrar(*LOTE)
+        identificador = lead.id
+        self.assertEqual(json.loads(lead.limiares_triagem_json), triagem_cenario.LIMIARES_PADRAO.para_dict())
+        avaliacao_cenario.retriar(identificador, triagem_cenario.Limiares(margem_baixa=Decimal("0.05")))
+        self.db.session.commit()
+
+        def gravados():
+            self.db.session.expire_all()
+            return json.loads(self.db.session.get(LeadAvaliacao, identificador).limiares_triagem_json)
+        self.assertEqual(gravados()["margem_baixa"], "0.05")
+        # Sem limiares, a retriagem e o reenvio usam os gravados no lead.
+        avaliacao_cenario.retriar(identificador)
+        self.db.session.commit()
+        self.assertEqual(gravados()["margem_baixa"], "0.05")
+        self._registrar(JAN25, FEV25, lead_id=identificador)
+        self.assertEqual(gravados()["margem_baixa"], "0.05")
+        # Gravação ilegível: a retriagem sem limiares recusa, sem cair nos padrão em silêncio.
+        self.db.session.get(LeadAvaliacao, identificador).limiares_triagem_json = '{"margem_baixa": "abc"}'
+        self.db.session.commit()
+        with self.assertRaises(avaliacao_cenario.LeadIndisponivel):
+            avaliacao_cenario.retriar(identificador)
+        self.db.session.rollback()
+        with self.assertRaises(ValueError):
+            avaliacao_cenario.retriar(identificador, {"margem_baixa": "0.05"})
+
+    def test_comando_retriar_com_limiares_e_agendar_expurgo_fora_do_postgresql(self):
+        from models import LeadAvaliacao
+        lead, _ = self._registrar(*LOTE)
+        identificador = str(lead.id)
+        self.db.session.remove()
+        cli = self.app.test_cli_runner()
+        saida = cli.invoke(args=["leads", "retriar", identificador, "--limiares",
+                                 '{"margem_baixa": "0.05", "relatorios_para_giro_critico": 6}'])
+        self.assertEqual(saida.exit_code, 0, saida.output)
+        self.assertIn("com omissão no ERP 0", saida.output)
+        gravados = json.loads(self.db.session.get(LeadAvaliacao, lead.id).limiares_triagem_json)
+        self.assertEqual((gravados["margem_baixa"], gravados["relatorios_para_giro_critico"]), ("0.05", 6))
+        self.db.session.remove()
+        for invalido in ('{"margem_baixa": 0.05}', '{"inexistente": "1"}', '{"queda_moderada": "0.9"}', "[]", "{",
+                         '{"margem_baixa": NaN}'):
+            with self.subTest(limiares=invalido):
+                recusa = cli.invoke(args=["leads", "retriar", identificador, "--limiares", invalido])
+                self.assertNotEqual(recusa.exit_code, 0)
+                self.assertIn("Limiares inválidos", recusa.output)
+        sem_lead = cli.invoke(args=["leads", "retriar", str(uuid.uuid4()), "--limiares", "{}"])
+        self.assertNotEqual(sem_lead.exit_code, 0)
+        self.assertIn("Lead inexistente", sem_lead.output)
+        # O agendamento é do pg_cron: fora do PostgreSQL, recusa sem tocar em nada.
+        agendar = cli.invoke(args=["leads", "agendar-expurgo"])
+        self.assertNotEqual(agendar.exit_code, 0)
+        self.assertIn("não é PostgreSQL", agendar.output)
 
 
 # =============================================================================
@@ -893,8 +897,14 @@ class RotasTests(_BancoCase):
             dados["autorizacao"] = "1"
         return self.client.post(destino or self.PAGINA, data=dados, content_type="multipart/form-data")
 
-    def _lote(self):
-        return [(f"mes_{i}.csv", conteudo) for i, conteudo in enumerate(LOTE, 1)]
+    def _lote(self, lote=LOTE):
+        return [(f"mes_{i}.csv", conteudo) for i, conteudo in enumerate(lote, 1)]
+
+    def _lote_com_cadastro(self):
+        from tests.test_cadastro_regression import montar_conjuntos
+        conjuntos = montar_conjuntos(self.pasta)
+        casos = ("marco", "abril")
+        return [(f"{caso}.csv", conjuntos[caso].read_bytes()) for caso in casos], [str(conjuntos[c]) for c in casos]
 
     def test_so_consultor_acessa(self):
         self.assertEqual(self.client.get(self.PAGINA).status_code, 302)
@@ -909,7 +919,7 @@ class RotasTests(_BancoCase):
     def test_envio_grava_e_o_detalhe_mostra_a_triagem(self):
         from models import LeadAvaliacao
         self.login("admin-test@example.invalid")
-        resposta = self._enviar(*self._lote())
+        resposta = self._enviar(*self._lote(LOTE_MESMOS_MESES))
         self.assertEqual(resposta.status_code, 303, resposta.get_data(as_text=True)[:500])
         lead = self.db.session.scalar(select(LeadAvaliacao))
         self.assertEqual(resposta.headers["Location"], f"{self.PAGINA}/{lead.id}")
@@ -925,10 +935,10 @@ class RotasTests(_BancoCase):
     def test_triagem_de_versao_anterior_nao_mistura_motivos_novos(self):
         from models import LeadAvaliacao
         self.login("admin-test@example.invalid")
-        self._enviar(*self._lote())
+        self._enviar(*self._lote(LOTE_MESMOS_MESES))
         lead = self.db.session.scalar(select(LeadAvaliacao))
         detalhe = f"{self.PAGINA}/{lead.id}"
-        motivos_do_item = "<td>Valor recuperável alto; Ritmo de venda caiu 50% ou mais</td>"
+        motivos_do_item = "<td>Potencial recuperável alto; Ritmo de venda caiu 50% ou mais</td>"
         self.assertIn(motivos_do_item, self.client.get(detalhe).get_data(as_text=True))
         lead.versao_triagem = "triagem-anterior"
         self.db.session.commit()
@@ -937,6 +947,106 @@ class RotasTests(_BancoCase):
         self.assertIn("Triagem feita com regras anteriores", html)
         self.assertIn("Leite 1L", html)
         self.assertNotIn(motivos_do_item, html)
+
+    def test_diagnostico_json_do_consultor(self):
+        from models import LeadAvaliacao
+        self.login("admin-test@example.invalid")
+        arquivos, caminhos = self._lote_com_cadastro()
+        self.assertEqual(self._enviar(*arquivos).status_code, 303)
+        lead = self.db.session.scalar(select(LeadAvaliacao))
+        caminho = f"{self.PAGINA}/{lead.id}/diagnostico.json"
+        resposta = self.client.get(caminho)
+        self.assertEqual((resposta.status_code, resposta.mimetype, resposta.headers["Cache-Control"]),
+                         (200, "application/json", "no-store"))
+        texto = resposta.get_data(as_text=True)
+
+        def sem_constante(nome):
+            raise AssertionError(f"{nome} no JSON")
+        payload = json.loads(texto, parse_constant=sem_constante)
+        self.assertEqual((payload["situacao"], payload["audiencia"], payload["lead"]["id"]),
+                         ("atual", "consultor", str(lead.id)))
+        for proibido in ("Contato fictício", "lead@example.invalid", "11900000000", "Mercado fictício",
+                         "nome_contato", "whatsapp", "nome_loja", "registrado_por"):
+            self.assertNotIn(proibido, texto)
+        # A triagem refeita sobre a staging é a gravada: os mesmos itens em cada bloco.
+        for bloco in triagem_cenario.BLOCOS:
+            self.assertEqual(payload["blocos"][bloco]["total"], payload["resumos"][bloco]["itens"])
+        self.assertIn("Biscoito Recheado", [item["produto"] for item in payload["blocos"]["atencao"]["itens"]])
+        # Matriz por categoria, "Sem categoria" por último; os totais fecham com a auditoria do Raio-X.
+        self.assertTrue(payload["categorias_publicadas"])
+        nomes = [linha["categoria"] for linha in payload["categorias"]]
+        self.assertEqual((sorted(nomes[:-1]), nomes[-1]),
+                         (["ALIMENTOS", "BEBIDAS", "LIMPEZA", "MERCEARIA"], "Sem categoria"))
+        totais, raio = payload["totais"], raio_x.diagnosticar(caminhos)
+        auditoria = raio["auditoria"]
+        self.assertEqual(totais["faturamento"], raio["saude"]["faturamento_total"])
+        self.assertEqual(
+            (totais["venda_com_custo"], totais["custo_das_vendas"], totais["custo_bonificacoes"],
+             totais["custo_devolucoes"], totais["cmv_liquido"], totais["vendas_abaixo_do_custo"]),
+            (auditoria["faturamento_com_custo"], auditoria["custo_total"], auditoria["custo_bonificacoes"],
+             auditoria["custo_devolucoes"], auditoria["cmv_liquido"], auditoria["perda_abaixo_custo"]))
+        self.assertEqual(
+            (totais["margem_bruta_estimada"]["valor"], totais["margem_com_bonificacoes_e_devolucoes"]["valor"]),
+            (auditoria["margem_valor"], auditoria["margem_liquida_valor"]))
+        self.assertAlmostEqual(totais["margem_bruta_estimada"]["percentual"], auditoria["margem_percentual"],
+                               delta=0.0001)
+        self.assertAlmostEqual(totais["margem_com_bonificacoes_e_devolucoes"]["percentual"],
+                               auditoria["margem_liquida_percentual"], delta=0.0001)
+        self.assertIsNone(totais["perdas_operacionais"])
+        # As categorias somam o total; a bonificação do produto sem venda (R$ 9) entra só no total.
+        self.assertAlmostEqual(sum(linha["faturamento"] for linha in payload["categorias"]), totais["faturamento"],
+                               places=2)
+        self.assertAlmostEqual(sum(linha["custo_bonificacoes"] for linha in payload["categorias"]) + 9,
+                               totais["custo_bonificacoes"], places=2)
+        # Itens por bloco: entre 1 e 200; um limite que não é número vale o padrão (30).
+        for limite, esperado in (("1", 1), ("-5", 1), ("abc", 30), ("100000", 200)):
+            with self.subTest(limite=limite):
+                for bloco in self.client.get(f"{caminho}?limite={limite}").get_json()["blocos"].values():
+                    self.assertEqual(bloco["mostrando"], min(bloco["total"], esperado))
+        # A tela mostra a mesma matriz e o atalho para o JSON.
+        html = self.client.get(f"{self.PAGINA}/{lead.id}").get_data(as_text=True)
+        for trecho in ("Matriz por categoria", "ALIMENTOS", "Sem categoria", "Itens com omissão no ERP",
+                       "Diagnóstico em JSON", "Biscoito Recheado"):
+            self.assertIn(trecho, html)
+        # Lead inexistente: 404 em JSON, sem cache.
+        inexistente = self.client.get(f"{self.PAGINA}/{uuid.uuid4()}/diagnostico.json")
+        self.assertEqual((inexistente.status_code, inexistente.get_json(), inexistente.headers["Cache-Control"]),
+                         (404, {"erro": "lead_inexistente"}, "no-store"))
+
+    def test_diagnostico_de_outra_versao_ou_vencido_fica_so_com_o_resumo(self):
+        from horario import agora_utc
+        from models import BrainstormingDadosPdv, LeadAvaliacao
+        self.login("admin-test@example.invalid")
+        arquivos, _ = self._lote_com_cadastro()
+        self._enviar(*arquivos)
+        lead = self.db.session.scalar(select(LeadAvaliacao))
+        detalhe = f"{self.PAGINA}/{lead.id}"
+        # Linhas de outra versão das regras: o JSON fica só com o resumo; a tela lista os itens no bloco
+        # gravado, sem motivos, impacto nem matriz.
+        self.db.session.execute(text("UPDATE brainstorming_dados_pdv SET versao_regras = 'lead-antiga'"))
+        self.db.session.commit()
+        payload = self.client.get(f"{detalhe}/diagnostico.json").get_json()
+        self.assertEqual((payload["situacao"], payload["blocos"], payload["categorias"], payload["totais"]),
+                         ("desatualizado", None, None, None))
+        self.assertNotIn("Biscoito", json.dumps(payload, ensure_ascii=False))
+        html = self.client.get(detalhe).get_data(as_text=True)
+        self.assertIn("Dados gravados por outra versão das regras", html)
+        self.assertIn("Biscoito Recheado", html)
+        for ausente in ("Matriz por categoria", "Diagnóstico em JSON"):
+            self.assertNotIn(ausente, html)
+        # Passados os 30 dias, antes de o expurgo rodar: só o resumo, no JSON e na tela.
+        for registro in self.db.session.scalars(select(BrainstormingDadosPdv)):
+            registro.versao_regras = avaliacao_motor.VERSAO_REGRAS_LEAD
+            registro.criado_em = agora_utc() - timedelta(days=31)
+        self.db.session.commit()
+        with patch("blueprints.leads.expurgo_oportunista"):
+            payload = self.client.get(f"{detalhe}/diagnostico.json").get_json()
+            html = self.client.get(detalhe).get_data(as_text=True)
+        self.assertEqual((payload["situacao"], payload["blocos"], payload["categorias"]), ("expirado", None, None))
+        self.assertNotIn("Biscoito", json.dumps(payload, ensure_ascii=False))
+        for ausente in ("Biscoito Recheado", "Matriz por categoria", "Diagnóstico em JSON"):
+            self.assertNotIn(ausente, html)
+        self.assertEqual(self.contar(BrainstormingDadosPdv), 6)
 
     def test_resultado_malformado_do_processo_isolado_responde_422(self):
         from models import LeadAvaliacao
@@ -1049,7 +1159,7 @@ class RotasTests(_BancoCase):
         self.logout()
         detalhe = f"{self.PAGINA}/{lead.id}"
         rotas = (("get", self.PAGINA), ("post", self.PAGINA), ("get", detalhe), ("post", f"{detalhe}/reenviar"),
-                 ("post", f"{detalhe}/retriar"))
+                 ("post", f"{detalhe}/retriar"), ("get", f"{detalhe}/diagnostico.json"))
         chamadas = self.worker_chamado
 
         def pedir(metodo, caminho, token):
@@ -1202,7 +1312,11 @@ class RotasTests(_BancoCase):
                 "csrf_token": token, "nome_contato": "Contato", "nome_loja": "Loja", "email": "lead@example.invalid",
                 "autorizacao": "1", "arquivos": [(io.BytesIO(NOV24), "nov.csv")]}, content_type="multipart/form-data")
             detalhe = self.client.get(f"{self.PAGINA}/{uuid.uuid4()}")
+            diagnostico = self.client.get(f"{self.PAGINA}/{uuid.uuid4()}/diagnostico.json")
         self.assertEqual(pagina.status_code, 200)
+        self.assertEqual((diagnostico.status_code, diagnostico.get_json()["erro"],
+                          diagnostico.headers["Cache-Control"]), (503, "esquema_pendente", "no-store"))
+        self.assertIn("Retry-After", diagnostico.headers)
         self.assertIn("Falta aplicar as migrações da Avaliação de Cenário", pagina.get_data(as_text=True))
         self.assertEqual((envio.status_code, detalhe.status_code), (303, 303))
         self.assertEqual((self.contar(LeadAvaliacao), self.worker_chamado), (0, 0))

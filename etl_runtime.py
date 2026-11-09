@@ -79,7 +79,7 @@ def _run_job(operation, paths, *, extension=None, limits=None):
                 raise ETLInputError("output", "Resultado excede o orçamento permitido.")
             try:
                 envelope = json.loads(payload)
-            except (ValueError, UnicodeError):
+            except (ValueError, UnicodeError, RecursionError):
                 raise ETLInputError("worker", "Não foi possível concluir o processamento com segurança.") from None
             if not isinstance(envelope, dict) or type(envelope.get("ok")) is not bool:
                 raise ETLInputError("worker", "Resposta inválida do processamento isolado.")
@@ -152,13 +152,32 @@ _ANO = re.compile(r"[0-9]{4}")
 _DATA_ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
+# Maior contagem que as colunas INTEGER do banco guardam.
+_INTEIRO_DO_BANCO = 2 ** 31 - 1
+# Inteiro que o float representa sem perda: acima disso (até 4.300 dígitos o json.loads aceita),
+# math.isfinite levantaria OverflowError e derrubaria a conferência com erro 500.
+_INTEIRO_EXATO = 2 ** 53
+
+
 def _inteiro(valor, minimo=0, maximo=None) -> bool:
-    return type(valor) is int and valor >= minimo and (maximo is None or valor <= maximo)
+    maximo = _INTEIRO_DO_BANCO if maximo is None else maximo
+    return type(valor) is int and minimo <= valor <= maximo
 
 
 def _numero(valor, minimo=None, maximo=None) -> bool:
-    return (type(valor) in (int, float) and math.isfinite(valor)
-            and (minimo is None or valor >= minimo) and (maximo is None or valor <= maximo))
+    if type(valor) is int:
+        if abs(valor) > _INTEIRO_EXATO:
+            return False
+    elif type(valor) is not float or not math.isfinite(valor):
+        return False
+    return (minimo is None or valor >= minimo) and (maximo is None or valor <= maximo)
+
+
+def _texto_gravavel(valor, limite: int) -> bool:
+    """Texto de 1 a `limite` caracteres, com algo além de espaços, só com caracteres imprimíveis (sem
+    NUL, controle ou surrogate solto, que o PostgreSQL recusa com erro fora do tratamento)."""
+    return (isinstance(valor, str) and 0 < len(valor) <= limite and bool(valor.strip())
+            and all(caractere.isprintable() for caractere in valor))
 
 
 def _data_iso(valor) -> bool:
@@ -176,8 +195,9 @@ def _data_iso(valor) -> bool:
 def _meta_valida(meta, versao) -> bool:
     """A meta do envio (avaliacao_motor._meta): chaves fixas, só contagens, nenhum texto livre. Ela
     fica no lead depois do expurgo das linhas, então nada fora disto pode chegar ao banco."""
-    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_META, CHAVES_QUALIDADE,
-                                 CHAVES_SITUACAO_CONTAGENS, CHAVES_SITUACAO_VALORES)
+    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_AJUSTES, CHAVES_META, CHAVES_QUALIDADE,
+                                 CHAVES_RELATORIOS_POR_ANO, CHAVES_SITUACAO_CONTAGENS, CHAVES_SITUACAO_VALORES,
+                                 TETO_DINHEIRO_DA_META)
     from raio_x import MAX_ARQUIVOS, VERSAO_REGRAS
     if not isinstance(meta, dict) or set(meta) != CHAVES_META:
         return False
@@ -209,8 +229,27 @@ def _meta_valida(meta, versao) -> bool:
         return False
     if not isinstance(situacao, dict) or not set(situacao) <= CHAVES_SITUACAO_CONTAGENS | CHAVES_SITUACAO_VALORES:
         return False
-    return all(_inteiro(valor) if chave in CHAVES_SITUACAO_CONTAGENS else _numero(valor, 0)
-               for chave, valor in situacao.items())
+    if not all(_inteiro(valor) if chave in CHAVES_SITUACAO_CONTAGENS
+               else _numero(valor, 0) and valor < TETO_DINHEIRO_DA_META for chave, valor in situacao.items()):
+        return False
+    # Etapa 2: a cobertura de cada verificação por ano (de 0 ao número de relatórios do ano), os dias da
+    # janela dos mesmos meses e os ajustes de produto sem venda no ano (só valores, nunca texto).
+    for chave in CHAVES_RELATORIOS_POR_ANO:
+        contagem = meta[chave]
+        if (not isinstance(contagem, dict) or set(contagem) != anos
+                or not all(_inteiro(contagem[ano], 0, por_ano[ano]) for ano in anos)):
+            return False
+    janela = meta["dias_mesmos_meses_por_ano"]
+    if (not isinstance(janela, dict) or set(janela) != anos
+            or not all(_inteiro(janela[ano], 0, dias[ano]) for ano in anos)):
+        return False
+    if not _inteiro(meta["relatorios_cabecalho_ambiguo"], 0, arquivos):
+        return False
+    ajustes = meta["ajustes_sem_venda_por_ano"]
+    return (isinstance(ajustes, dict) and set(ajustes) == anos
+            and all(isinstance(ajustes[ano], dict) and set(ajustes[ano]) == set(CHAVES_AJUSTES)
+                    and all(_numero(valor, 0) and valor < TETO_DINHEIRO_DA_META for valor in ajustes[ano].values())
+                    for ano in anos))
 
 
 def _raio_x_valido(raio) -> bool:
@@ -221,6 +260,8 @@ def _raio_x_valido(raio) -> bool:
         return False
     if not (_data_iso(periodo.get("inicio")) and _data_iso(periodo.get("fim"))):
         return False
+    if periodo.get("inicio") is not None and periodo.get("fim") is not None and periodo["inicio"] > periodo["fim"]:
+        return False  # ck_lead_avaliacao_periodo recusaria no banco, com erro de gravação
     if periodo.get("meses") is not None and not _inteiro(periodo.get("meses")):
         return False
     inconsistencias = saude.get("inconsistencias")
@@ -233,10 +274,22 @@ def _raio_x_valido(raio) -> bool:
 def validar_avaliacao(result):
     """O resultado da avaliação no formato exato que o processo pai grava; senão, recusa. Confere
     a estrutura inteira: um processo isolado com defeito (ou comprometido) não grava texto livre
-    nem derruba a gravação com erro 500."""
+    nem derruba a gravação com erro 500 (uma exceção na própria conferência também vira recusa)."""
+    from etl_inputs import ETLInputError
+    try:
+        return _validar_avaliacao(result)
+    except ETLInputError:
+        raise
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError, RecursionError):
+        raise ETLInputError("worker", "Resultado inválido do processamento isolado.") from None
+
+
+def _validar_avaliacao(result):
     from etl_inputs import ETLInputError
     from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_RESULTADO as CHAVES_AVALIACAO, COLUNAS,
-                                 LIMITE_DESCRICAO, VERSAO_REGRAS_LEAD)
+                                 COLUNAS_CONTAGEM, COLUNAS_DINHEIRO, COLUNAS_MARCA, COLUNAS_QUANTIDADE,
+                                 LIMITE_DESCRICAO, TETOS, VERSAO_REGRAS_LEAD)
+    from etl_processor import LIMITE_CATEGORIA
     from raio_x import CHAVES_RESULTADO
 
     def invalido():
@@ -251,11 +304,17 @@ def validar_avaliacao(result):
     if not _raio_x_valido(result["raio_x"]) or not _meta_valida(result["meta"], result["versao"]):
         raise invalido()
     linhas = result["linhas"]
-    if (not isinstance(linhas, dict) or set(linhas) != {"colunas", "valores"}
+    if (not isinstance(linhas, dict) or set(linhas) != {"colunas", "valores", "categorias"}
             or linhas["colunas"] != list(COLUNAS) or not isinstance(linhas["valores"], list)):
         raise invalido()
-    anos_do_envio = {int(ano) for ano in result["meta"]["arquivos_por_ano"]}
-    marcas = {"variacao", "conflito_cadastral", "estoque_negativo"}
+    # Categorias: texto do relatório (vai para a staging, que expira; nunca para a meta), cada uma uma vez.
+    categorias = linhas["categorias"]
+    if (not isinstance(categorias, list) or len(set(map(str, categorias))) != len(categorias)
+            or not all(_texto_de_cadastro(nome, LIMITE_CATEGORIA) for nome in categorias)):
+        raise invalido()
+    meta = result["meta"]
+    anos_do_envio = {int(ano) for ano in meta["arquivos_por_ano"]}
+    posicao = {nome: i for i, nome in enumerate(COLUNAS)}
     vistos = set()
     for linha in linhas["valores"]:
         if not isinstance(linha, list) or len(linha) != len(COLUNAS):
@@ -263,26 +322,83 @@ def validar_avaliacao(result):
         for nome, valor in zip(COLUNAS, linha):
             if nome == "ano_exercicio":
                 valido = _inteiro(valor, ANO_MINIMO, ANO_MAXIMO_DO_BANCO) and valor in anos_do_envio
-            elif nome in ("linhas", "meses"):
+            elif nome in COLUNAS_CONTAGEM:
                 valido = _inteiro(valor)
             elif nome == "chave_produto":
                 valido = isinstance(valor, str) and _CHAVE_PRODUTO.fullmatch(valor) is not None
             elif nome == "descricao_produto":
-                valido = isinstance(valor, str) and 0 < len(valor) <= LIMITE_DESCRICAO and bool(valor.strip())
-            elif nome in marcas:
+                valido = _texto_gravavel(valor, LIMITE_DESCRICAO)
+            elif nome in COLUNAS_MARCA:
                 valido = type(valor) is bool
             elif nome == "codigo_produto":
-                valido = valor is None or (isinstance(valor, str) and 0 < len(valor) <= 60 and bool(valor.strip()))
+                valido = valor is None or _texto_gravavel(valor, 60)
+            elif nome == "categoria":
+                valido = valor is None or _inteiro(valor, 0, len(categorias) - 1)
+            elif nome == "estoque_final":
+                # O estoque pode ser negativo; o teto vale para o módulo (NUMERIC(14,3)).
+                valido = valor is None or (_numero(valor) and abs(valor) < TETOS[nome])
+            elif nome in COLUNAS_DINHEIRO or nome in COLUNAS_QUANTIDADE:
+                # O teto da coluna do banco (o motor já recusa acima dele com mensagem): um processo
+                # isolado com defeito não derruba a gravação com estouro de NUMERIC.
+                valido = _numero(valor, 0) and valor < TETOS.get(nome, 0)
             else:
-                valido = _numero(valor, 0)
+                valido = False  # coluna sem regra de conferência: nunca passa calada
             if not valido:
                 raise invalido()
+        if not _linha_coerente(linha, posicao, meta):
+            raise invalido()
         # Uma linha por produto e ano: a unicidade da staging (lead, ano, produto).
-        par = (linha[COLUNAS.index("ano_exercicio")], linha[COLUNAS.index("chave_produto")])
+        par = (linha[posicao["ano_exercicio"]], linha[posicao["chave_produto"]])
         if par in vistos:
             raise invalido()
         vistos.add(par)
     return result
+
+
+def _texto_de_cadastro(valor, limite: int) -> bool:
+    """Texto de 1 a `limite` caracteres, com algo além de espaços e sem caractere de controle."""
+    return (isinstance(valor, str) and 0 < len(valor) <= limite and bool(valor.strip())
+            and all(caractere.isprintable() for caractere in valor))
+
+
+# Folga de arredondamento entre somas de dinheiro com 2 casas (centavos de floats somados).
+_FOLGA_CENTAVOS = 0.011
+
+
+def _linha_coerente(linha: list, posicao: dict, meta: dict) -> bool:
+    """As colunas da Etapa 2 batem entre si e com a cobertura do ano na meta."""
+    def valor(nome):
+        return linha[posicao[nome]]
+    ano = str(valor("ano_exercicio"))
+    relatorios = meta["arquivos_por_ano"][ano]
+    if not (0 <= valor("meses_margem_negativa") <= valor("meses_com_custo") <= valor("meses") <= relatorios):
+        return False
+    # Toda linha tem venda em ao menos um relatório, com ao menos uma linha por relatório; o giro de um
+    # lançamento conta os relatórios desde a primeira venda, que incluem os relatórios com venda.
+    if not (1 <= valor("meses") <= valor("linhas")):
+        return False
+    if not (valor("meses") <= valor("relatorios_desde_primeira_venda") <= relatorios):
+        return False
+    if valor("meses_completos") > valor("meses") or (valor("ultimo_mes_negativo") and not valor("meses_margem_negativa")):
+        return False
+    # Venda com custo <= venda nos relatórios com a coluna de custo <= venda bruta.
+    if not (valor("faturamento_com_custo") <= valor("faturamento_em_relatorio_com_custo") + _FOLGA_CENTAVOS
+            and valor("faturamento_em_relatorio_com_custo") <= valor("valor_venda_bruto") + _FOLGA_CENTAVOS):
+        return False
+    if valor("quantidade_mesmos_meses") > valor("quantidade") + 0.0011:
+        return False
+    if valor("meses_com_custo") and not meta["relatorios_com_custo_por_ano"][ano]:
+        return False
+    # NCM ou categoria só faltam num ano em que algum relatório trouxe a coluna; o estoque, idem.
+    if valor("ncm_ausente") and not meta["relatorios_com_ncm_por_ano"][ano]:
+        return False
+    if (valor("categoria_ausente") or valor("categoria") is not None) and not meta["relatorios_com_categoria_por_ano"][ano]:
+        return False
+    if valor("categoria_ausente") and valor("categoria") is not None:
+        return False
+    if valor("estoque_final") is not None and not meta["relatorios_com_estoque_por_ano"][ano]:
+        return False
+    return True
 
 
 def run_calculation(path_vendas, path_compras, limits=None):

@@ -74,6 +74,13 @@ ZOOM_150 = (911, 512, 1.5)  # 1366 px a 150%: viewport CSS menor, escala maior
 NOME_LONGO = "Distribuidora Internacional de Materiais Elétricos, Hidráulicos e Ferragens do Vale do Paraíba Ltda"
 FANTASIA_LONGA = "Distribuidora Internacional Vale do Paraíba (unidade matriz)"
 EMAIL_LONGO = "financeiro.contabilidade.administrativo@distribuidora-internacional-materiais.example.invalid"
+# Categorias do lead extenso no limite de 80 caracteres que a staging guarda (matriz por categoria).
+CATEGORIAS_LONGAS = [
+    "Presentes, cestas e kits sazonais de fim de ano com embalagem especial e laço",
+    "Mercearia fina, cafés especiais de origem controlada e bebidas quentes premium",
+    "Utilidades domésticas, canecas térmicas, garrafas e acessórios de cozinha inox",
+]
+assert all(len(nome) <= 80 for nome in CATEGORIAS_LONGAS)
 PRODUTOS_LONGOS = [
     "Kit presente premium de café especial torrado e moído com chocolate artesanal 70% cacau e caneca personalizada",
     "Caneca térmica inox 450 ml com tampa antivazamento e cabo emborrachado edição limitada",
@@ -355,11 +362,13 @@ class NavegadorCase(ContratosCase):
         self.db.session.commit()
 
     def _lead_extenso(self):
-        """Avaliação de Cenário com nomes longos e valores de nove dígitos, em dois anos, para as
-        telas do consultor: a lista e o detalhe com os blocos da triagem e as tabelas de itens."""
+        """Avaliação de Cenário com nomes e categorias longos e valores de nove dígitos, em dois anos,
+        para as telas do consultor: a lista e o detalhe com a matriz por categoria, os blocos da
+        triagem e as tabelas de itens."""
+        from calendar import monthrange
         import tempfile
         import avaliacao_cenario
-        from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
+        from tests.raio_x_support import avaliar_como_o_worker
         with tempfile.TemporaryDirectory(prefix="lead-navegador-") as pasta:
             caminhos = []
             for ano, mes in ((2024, 11), (2024, 12), (2025, 1), (2025, 2)):
@@ -368,9 +377,14 @@ class NavegadorCase(ContratosCase):
                     queda = ano == 2025 and i % 2 == 1  # venda média cai 80% de um ano para o outro
                     quantidade, valor = (300, 360_000) if queda else (1500, 1_800_000 + 100 * i)
                     custo = "" if i == 2 else ("1900000,00" if i % 2 == 1 else "1000000,00")
-                    linhas.append(f"{i};{nome};{quantidade};1234,56;{valor},00;{custo}")
+                    categoria = CATEGORIAS_LONGAS[i % len(CATEGORIAS_LONGAS)]
+                    linhas.append(f"{i};{nome};{categoria};{quantidade};1234,56;{valor},00;{custo}")
+                fim = monthrange(ano, mes)[1]
+                texto = (f"Relatorio de vendas por produto\nPeriodo: 01/{mes:02d}/{ano} a {fim:02d}/{mes:02d}/{ano}\n"
+                         "Codigo;Produto;Categoria;Qtde;Preco Unitario;Valor Total;Total Custo\n"
+                         + "".join(linha + "\n" for linha in linhas))
                 caminho = Path(pasta) / f"arquivo_{ano}_{mes:02d}.csv"
-                caminho.write_bytes(relatorio_do_mes(ano, mes, linhas))
+                caminho.write_bytes(texto.encode("utf-8"))
                 caminhos.append(str(caminho))
             resultado = avaliar_como_o_worker(caminhos)
         lead = avaliacao_cenario.registrar(resultado, contato={

@@ -980,6 +980,98 @@ def _situacao_das_linhas(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
             for linha in bloco.itertuples(index=False, name=None)]
 
 
+# =====================================================================
+# Colunas de cadastro (NCM e categoria), só para a Avaliação de Cenário
+# =====================================================================
+# Lidas DEPOIS da escolha do cabeçalho, só nas colunas fora do mapa e que não são de situação, e só
+# quando quem chama pede (_vendas_do_bruto(..., cadastro=True)): a análise mensal e o Raio-X do
+# cliente não mudam (golden tests/test_cadastro_regression.py). Nada disto entra no ALIAS_VENDAS.
+_RE_TITULO_NCM = re.compile(r"\bncm\b|\bclassificacao fiscal\b")
+# Categoria do produto, na ordem de preferência: o título "categoria" e, depois, do nível mais amplo ao
+# mais específico. Título de código, fiscal ou de outro assunto não é categoria ("Cód. Grupo", "Grupo
+# Tributário", "Grupo de Clientes").
+_NIVEIS_DE_CATEGORIA = ("categoria", "departamento", "depto", "secao", "grupo", "familia", "subgrupo")
+_RE_TITULO_FORA_DE_CATEGORIA = re.compile(
+    r"\b(?:cod|codigo|id|ncm|tribut\w*|fiscal|icms|ipi|pis|cofins|cst|cfop|preco|cliente|clientes|"
+    r"fornecedor|fornecedores|pagamento|situacao|status)\b"
+)
+# Marcadores de categoria não configurada no ERP (comparados como _norm_chave). "Diversos" e "Outros"
+# podem ser departamentos reais e ficam como categoria.
+_CATEGORIAS_GENERICAS = frozenset({
+    "sem grupo", "sem categoria", "sem departamento", "sem secao", "sem familia", "sem subgrupo",
+    "nao definido", "nao definida", "nao informado", "nao informada", "nao classificado", "nao classificada",
+    "a classificar", "indefinido", "indefinida", "padrao", "geral", "nenhum", "nenhuma", "null", "none", "nan",
+    "n a", "na", "nd", "0", "00", "000", "999", "9999",
+})
+LIMITE_CATEGORIA = 80
+# Palavra de cadastro no título da coluna lida como código ou como produto: o dicionário de vendas pegou
+# a coluna errada ("Cód. NCM" antes de "Código", "Grupo do Produto" antes da descrição).
+_RE_TITULO_DE_CADASTRO = re.compile(r"\b(?:ncm|grupo|categoria|departamento|depto|secao|familia|subgrupo)\b")
+_RE_NUMERO_INTEIRO_DO_XLSX = re.compile(r"\d+\.0+")
+
+
+def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int) -> dict:
+    """{"ncm": índice, "categoria": índice} das colunas de cadastro fora do mapa (as ausentes ficam fora)."""
+    titulos = [[_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
+               for i in range(idx_cab, idx_cab + linhas_cab)]
+    usadas = set(mapa.values())
+    ncm, niveis = None, {}
+    for indice, partes in enumerate(zip(*titulos)):
+        chave = " ".join(partes).strip()
+        if not chave or indice in usadas or _RE_COLUNA_SITUACAO.search(chave):
+            continue
+        if _RE_TITULO_NCM.search(chave):
+            if ncm is None:
+                ncm = indice
+            continue
+        if _RE_TITULO_FORA_DE_CATEGORIA.search(chave):
+            continue
+        palavras = chave.split()
+        for nivel in _NIVEIS_DE_CATEGORIA:
+            if nivel in palavras and nivel not in niveis:
+                niveis[nivel] = indice
+                break
+    colunas = {} if ncm is None else {"ncm": ncm}
+    for nivel in _NIVEIS_DE_CATEGORIA:
+        if nivel in niveis:
+            colunas["categoria"] = niveis[nivel]
+            break
+    return colunas
+
+
+def normalizar_ncm(valor):
+    """NCM com 8 dígitos ou None: só os dígitos ("0402.10.10"), sem o ".0" da célula numérica do XLSX,
+    com o zero à esquerda que o número perdeu (7 dígitos). Vazio, só zeros ou outro tamanho: None."""
+    if _celula_vazia(valor):
+        return None
+    texto = str(valor).strip()
+    if _RE_NUMERO_INTEIRO_DO_XLSX.fullmatch(texto):
+        texto = texto.split(".", 1)[0]
+    digitos = "".join(c for c in texto if c.isdigit())
+    if len(digitos) == 7:
+        digitos = "0" + digitos
+    if len(digitos) != 8 or set(digitos) == {"0"}:
+        return None
+    return digitos
+
+
+def normalizar_categoria(valor):
+    """Categoria do produto como o relatório escreve (espaços colapsados, até 80 caracteres, sem
+    caractere de controle) ou None, se vazia ou marcador de categoria não configurada."""
+    if _celula_vazia(valor):
+        return None
+    # Espaço especial (NBSP, TAB, espaço fino) vira espaço antes de tirar os não imprimíveis: senão
+    # "Frios e Laticinios" grudaria em "FrioseLaticinios" e a mesma categoria viraria várias.
+    texto = "".join(" " if c.isspace() else c for c in str(valor) if c.isprintable() or c.isspace())
+    texto = " ".join(texto.split())
+    if _RE_NUMERO_INTEIRO_DO_XLSX.fullmatch(texto):
+        texto = texto.split(".", 1)[0]
+    chave = _norm_chave(texto)
+    if not chave or chave in _CATEGORIAS_GENERICAS:
+        return None
+    return texto[:LIMITE_CATEGORIA].strip() or None
+
+
 def _aplicar_situacao_das_vendas(df: pd.DataFrame, nome: str) -> pd.DataFrame:
     """
     Descarta as linhas canceladas e transforma devoluções e trocas em dedução: valor e
@@ -1034,9 +1126,14 @@ def carregar_vendas(caminho: str) -> pd.DataFrame:
     return _vendas_do_bruto(_ler_bruto(caminho), os.path.basename(caminho))
 
 
-def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
+def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) -> pd.DataFrame:
     """carregar_vendas a partir da matriz já lida: o Raio-X lê cada arquivo uma vez só e
-    tira dela também o período do cabeçalho (_extrair_periodo_base)."""
+    tira dela também o período do cabeçalho (_extrair_periodo_base).
+
+    `cadastro=True` (só a Avaliação de Cenário pede) traz também, em colunas com "_", o NCM e a
+    categoria do relatório, quando ele tem essas colunas, e se o estoque de cada linha foi informado;
+    attrs["cadastro"] diz quais colunas existem e se o código ou o produto foram lidos de uma coluna
+    de cadastro (cabeçalho ambíguo). Sem o parâmetro, nada muda."""
     if bruto.empty:
         raise ETLValidationError(f"O arquivo de vendas '{nome}' está totalmente vazio.")
 
@@ -1049,6 +1146,16 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
     situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab)
     if situacao is not None:
         df["_situacao"] = situacao
+    info_cadastro = None
+    if cadastro:
+        colunas = _colunas_de_cadastro(bruto, idx, mapa, linhas_cab)
+        bloco = bruto.iloc[idx + linhas_cab:]
+        for chave, coluna in colunas.items():
+            df["_" + chave] = bloco.iloc[:, coluna].tolist()
+        info_cadastro = {
+            "ncm": "ncm" in colunas, "categoria": "categoria" in colunas,
+            "ambiguo": any(_RE_TITULO_DE_CADASTRO.search(cabecalhos.get(c, "")) for c in ("codigo", "produto")),
+        }
     df = _filtrar_linhas_validas(df, "produto", _NUMERICAS_VENDAS)
 
     # Conversões numéricas — NaN vira 0 (linha sem qtd/valor não impacta KPI)
@@ -1071,7 +1178,10 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
     if "valor_custo" in df.columns:
         df["valor_custo"] = _converter_serie_monetaria(df["valor_custo"], qualidade, csv)
     if "estoque" in df.columns:
-        df["estoque"] = _converter_serie(df["estoque"]).fillna(0.0)
+        estoque = _converter_serie(df["estoque"])
+        if cadastro:
+            df["_estoque_informado"] = estoque.notna()
+        df["estoque"] = estoque.fillna(0.0)
 
     # 'lucro' é DETECTADO e DESCARTADO — terminologia NEXO proíbe usar.
     if "lucro" in df.columns:
@@ -1090,6 +1200,8 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str) -> pd.DataFrame:
     df.attrs["qualidade"] = _fechar_qualidade(qualidade)
     df.attrs["cabecalhos"] = cabecalhos
     df.attrs["celulas_recodificadas"] = int(bruto.attrs.get("celulas_recodificadas", 0))
+    if info_cadastro is not None:
+        df.attrs["cadastro"] = info_cadastro
     return df
 
 

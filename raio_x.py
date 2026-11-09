@@ -56,7 +56,7 @@ import pandas as pd
 from etl_inputs import ETLInputError
 from etl_processor import (
     ETLValidationError, _converter_serie_monetaria, _extrair_periodo_base, _ler_bruto, _nome_exibivel,
-    _reais as _brl, _vendas_do_bruto,
+    _reais as _brl, _vendas_do_bruto, normalizar_categoria, normalizar_ncm,
 )
 
 # 11.4: saneamento de 11/2026 (rodapés, quantidades, títulos de reserva, codificação e os campos de
@@ -148,13 +148,18 @@ def _conflitos(df: pd.DataFrame, codigos: pd.Series | None) -> tuple[set, set, s
     return codigos_ruins, nomes_ruins, envolvidos
 
 
-def _ler_arquivo(caminho: str, indice: int):
-    """(produtos, resumo do arquivo, produtos em conflito) de um relatório de vendas."""
+def _ler_arquivo(caminho: str, indice: int, *, cadastro: bool = False):
+    """(produtos, resumo do arquivo, produtos em conflito) de um relatório de vendas.
+
+    `cadastro=True` (só a Avaliação de Cenário pede) acrescenta, sem mudar nada do Raio-X: em
+    `produtos`, o NCM e a categoria de cada produto vendido (quando o relatório tem as colunas) e o
+    último estoque informado; no resumo, os ajustes de bonificação e devolução por produto
+    (`_ajustes`) e o que o relatório trouxe de cadastro (`_cadastro`)."""
     rotulo = f"Arquivo {indice + 1}"
     try:
         bruto = _ler_bruto(caminho)
         periodo = _extrair_periodo_base(bruto) if not bruto.empty else None
-        df = _vendas_do_bruto(bruto, rotulo.lower())
+        df = _vendas_do_bruto(bruto, rotulo.lower(), cadastro=cadastro)
     except ETLValidationError as erro:
         if erro.code != "data":
             raise  # limite de tamanho, linhas ou células: a mensagem do ETL já é segura
@@ -281,7 +286,50 @@ def _ler_arquivo(caminho: str, indice: int):
         "_nomes_conflito": nomes_ruins,
         "_estoque_negativo": estoque_negativo,
     }
+    if cadastro:
+        _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, devolvidas_com_custo, valor)
     return produtos, resumo, envolvidos
+
+
+def _primeiro_valor(serie: pd.Series):
+    """O primeiro valor não nulo da série (ou None)."""
+    validos = serie.dropna()
+    return validos.iloc[0] if not validos.empty else None
+
+
+def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, devolvidas_com_custo, valor) -> None:
+    """Só para a Avaliação de Cenário (avaliacao_motor): o cadastro e os ajustes do arquivo por produto."""
+    info = df.attrs.get("cadastro") or {}
+    estoque_informado = df["_estoque_informado"] if "_estoque_informado" in df.columns else None
+    resumo["_cadastro"] = {
+        "ncm": bool(info.get("ncm")), "categoria": bool(info.get("categoria")),
+        "ambiguo": bool(info.get("ambiguo")), "estoque": estoque_informado is not None,
+    }
+    vendidos = df.loc[venda, "_prod_norm"]
+    if info.get("ncm"):
+        ncm = df.loc[venda, "_ncm"].map(normalizar_ncm)
+        produtos["ncm"] = ncm.groupby(vendidos).agg(_primeiro_valor)
+    if info.get("categoria"):
+        categoria = df.loc[venda, "_categoria"].map(normalizar_categoria)
+        produtos["categoria"] = categoria.groupby(vendidos).agg(_primeiro_valor)
+    if estoque_informado is not None:
+        # O último estoque informado do produto no arquivo (a linha mais de baixo), em qualquer linha do
+        # produto: o relatório "vendas x estoque" lista o item com quantidade 0 e o saldo atual. A marca
+        # de estoque negativo já olha todas as linhas (_estoque_negativo).
+        informado = estoque_informado
+        estoques = df.loc[informado, "estoque"].groupby(df.loc[informado, "_prod_norm"]).last()
+        produtos["estoque"] = estoques
+        # Todos os produtos com saldo informado no arquivo, inclusive os que não venderam nele: o motor do
+        # lead usa o saldo mais recente do ano (o relatório "vendas x estoque" lista o item parado).
+        resumo["_estoques"] = estoques
+    # Bonificação e devolução por produto, inclusive de produto sem venda no arquivo: as mesmas máscaras
+    # dos totais do resumo (custo_bonificacoes, custo_devolucoes e devolucoes_com_custo).
+    ajustes = pd.DataFrame({
+        "custo_bonificacoes": custo_linha.where(bonificadas, 0.0),
+        "custo_devolucoes": custo_linha.where(devolvidas_com_custo, 0.0),
+        "devolucoes_com_custo": valor.abs().round(2).where(devolvidas_com_custo, 0.0),
+    }).groupby(df["_prod_norm"]).sum()
+    resumo["_ajustes"] = ajustes[(ajustes != 0).any(axis=1)]
 
 
 # ---------------------------------------------------------------------------
@@ -416,15 +464,16 @@ def diagnosticar(caminhos: list) -> dict:
     return _combinar(*_ler_envio(caminhos))
 
 
-def _ler_envio(caminhos: list):
+def _ler_envio(caminhos: list, *, cadastro: bool = False):
     """(por_arquivo, resumos, envolvidos): cada relatório lido uma vez por _ler_arquivo e os
     agregados por produto e arquivo em ordem cronológica estável (arquivo sem período conta como
-    o mais antigo). A Avaliação de Cenário (avaliacao_motor) parte daqui, como o Raio-X."""
+    o mais antigo). A Avaliação de Cenário (avaliacao_motor) parte daqui, como o Raio-X, com
+    `cadastro=True` (ver _ler_arquivo)."""
     if not 1 <= len(caminhos) <= MAX_ARQUIVOS:
         raise ETLInputError("raio_x_arquivos", f"Envie de 1 a {MAX_ARQUIVOS} relatórios de vendas.")
     partes, resumos, envolvidos = [], [], set()
     for indice, caminho in enumerate(caminhos):
-        produtos, resumo, conflitantes = _ler_arquivo(caminho, indice)
+        produtos, resumo, conflitantes = _ler_arquivo(caminho, indice, cadastro=cadastro)
         partes.append(produtos.reset_index())
         resumos.append(resumo)
         envolvidos |= conflitantes

@@ -4,6 +4,9 @@
 {% block title %}{{ lead.nome_loja }} · Avaliação de Cenário — NEXO Admin{% endblock %}
 {% block page_title %}Avaliação de Cenário{% endblock %}
 
+{% macro pct(valor) %}{% if valor is not none %}{{ ('%.1f'|format(valor * 100))|replace('.', ',') }}%{% else %}—{% endif %}{% endmacro %}
+{% macro reais(valor) %}{% if valor is not none %}R$ {{ m.brl(valor) }}{% else %}—{% endif %}{% endmacro %}
+
 {% block content %}
 <div class="page-head">
     <div>
@@ -12,10 +15,11 @@
     </div>
     <div class="page-head-actions">
         <a href="{{ url_for('leads.lista') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar aos leads</a>
+        {% if situacao == 'atual' %}<a href="{{ url_for('leads.diagnostico_json', lead_id=lead.id) }}" class="btn-ghost"><i class="bi bi-filetype-json" aria-hidden="true"></i> Diagnóstico em JSON</a>{% endif %}
     </div>
 </div>
 
-{% if lead.status == 'expirado' or not linhas_pdv %}
+{% if lead.status == 'expirado' or not linhas_pdv or situacao == 'expirado' %}
 <div class="aviso-contrato" role="status">
     <i class="bi bi-hourglass-bottom" aria-hidden="true"></i>
     <div>
@@ -28,15 +32,23 @@
     <i class="bi bi-shield-lock" aria-hidden="true"></i>
     <div>
         <strong>Retenção dos dados de PDV.</strong>
-        <p>Os totais por produto e ano deste lead saem em {{ m.horario(expira_em) }}, se ele não virar cliente. O resumo da avaliação fica.</p>
+        <p>Os totais por produto e ano deste lead, e com eles a matriz por categoria, saem em {{ m.horario(expira_em) }}, se ele não virar cliente. O resumo da avaliação fica.</p>
     </div>
 </div>
-{% if not triagem_atual %}
+{% if not linhas_atuais %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+    <div>
+        <strong>Dados gravados por outra versão das regras.</strong>
+        <p>Os blocos e os itens abaixo são os da avaliação original; motivos, impacto e matriz por categoria só aparecem com um novo envio dos relatórios.</p>
+    </div>
+</div>
+{% elif not triagem_da_versao_atual %}
 <div class="aviso-contrato" role="status">
     <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
     <div>
         <strong>Triagem feita com regras anteriores.</strong>
-        <p>Os blocos abaixo são os da versão {{ lead.versao_triagem or 'sem versão' }}; os motivos de cada produto só aparecem com as regras atuais. Use "Refazer a triagem" ou envie os relatórios de novo.</p>
+        <p>Os blocos e os itens abaixo são os da versão {{ lead.versao_triagem or 'sem versão' }}; os motivos e o impacto de cada produto e a matriz por categoria só aparecem com as regras atuais. Use "Refazer a triagem" ou envie os relatórios de novo.</p>
     </div>
 </div>
 {% endif %}
@@ -52,9 +64,9 @@
     </div>
     <div class="col-12 col-sm-6 col-xl-4">
         <div class="kpi-tile">
-            <div class="kpi-top"><span class="kpi-label">Valor recuperável</span><span class="kpi-icon is-amber"><i class="bi bi-cash-coin" aria-hidden="true"></i></span></div>
+            <div class="kpi-top"><span class="kpi-label">Potencial recuperável</span><span class="kpi-icon is-amber"><i class="bi bi-cash-coin" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</div>
-            <div class="kpi-foot">Vendas abaixo do preço de referência ou do custo, somadas por produto e ano.</div>
+            <div class="kpi-foot">Retroativo: vendas abaixo do preço de referência ou do custo, somadas por produto e ano.</div>
         </div>
     </div>
     <div class="col-12 col-sm-6 col-xl-4">
@@ -64,6 +76,29 @@
             <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}{{ lead.arquivos or 0 }} relatório(s)</div>
         </div>
     </div>
+    {% if triagem_da_versao_atual %}
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens sem custo em nenhuma venda</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_sem_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos nos relatórios com a coluna de custo sem nenhum custo informado.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com alguma venda abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_abaixo_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos com ao menos uma venda por valor menor que o custo da própria venda.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com omissão no ERP</span><span class="kpi-icon is-amber"><i class="bi bi-clipboard-x" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.itens_omissao_erp is not none %}{{ m.num(lead.itens_omissao_erp) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Conflito de cadastro, custo só em parte das vendas ou implausível, estoque negativo, sem NCM ou sem categoria.</div>
+        </div>
+    </div>
+    {% else %}
     <div class="col-12 col-sm-6">
         <div class="kpi-tile">
             <div class="kpi-top"><span class="kpi-label">Itens com venda sem custo</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
@@ -78,7 +113,58 @@
             <div class="kpi-foot">Produtos vendidos, em algum ano, por valor médio inferior ao custo médio registrado.</div>
         </div>
     </div>
+    {% endif %}
 </div>
+
+{% if situacao == 'atual' and totais %}
+<section class="nexo-card mb-4" aria-labelledby="matrizTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="matrizTitulo"><i class="bi bi-grid-3x3-gap text-purple" aria-hidden="true"></i> Matriz por categoria</h2>
+            <p class="sub">Margem e custo informados pelo PDV nas vendas com custo, como no Raio-X; não é a margem de lucro nem o CMV contábil. Ordenada por impacto no último ano.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% for aviso in avisos %}<p class="field-hint mb-2">{{ aviso }}</p>{% endfor %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Categoria</th><th class="text-end">Itens</th><th class="text-end">Faturamento no último ano</th><th class="text-end">Participação</th><th class="text-end">Margem bruta estimada</th><th class="text-end">CMV líquido</th><th class="text-end">Vendas abaixo do custo</th><th class="text-end">Potencial recuperável</th><th class="text-end">Impacto</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in (categorias or []) %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ linha.categoria }}</span>{% if linha.a_confirmar.itens %}<br><small class="t-mut">{{ m.num(linha.a_confirmar.itens) }} item(ns) a confirmar</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(linha.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.faturamento_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.participacao_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.margem_bruta_estimada.percentual if linha.margem_bruta_estimada else none) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.cmv_liquido) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.vendas_abaixo_do_custo) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.impacto) }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="fw-bold">
+                        <td>Total{% if totais.a_confirmar.itens %}<br><small class="t-mut">{{ m.num(totais.a_confirmar.itens) }} item(ns) a confirmar</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(totais.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.faturamento_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(totais.participacao_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(totais.margem_bruta_estimada.percentual if totais.margem_bruta_estimada else none) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.cmv_liquido) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.vendas_abaixo_do_custo) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.impacto) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        </div>
+        <p class="field-hint mt-2 mb-0">Faturamento de itens de venda contínua: {{ reais(totais.faturamento_venda_continua) }} · estoque parado: {{ reais(totais.estoque_parado) }} · perdas operacionais: não calculadas (exigem relatório de perdas ou inventário).</p>
+    </div>
+</section>
+{% endif %}
 
 {% for bloco in ['urgencia', 'atencao', 'eletiva'] %}
 {% set resumo = resumos[bloco] %}
@@ -86,14 +172,14 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="bloco{{ bloco }}">{{ rotulos_blocos[bloco] }}{% if resumo %} · {{ m.num(resumo.itens) }} produto(s){% endif %}</h2>
-            {% if resumo %}<p class="sub">Faturamento R$ {{ m.brl(resumo.faturamento) }} · recuperável R$ {{ m.brl(resumo.recuperavel) }}</p>{% endif %}
+            {% if resumo %}<p class="sub">Faturamento R$ {{ m.brl(resumo.faturamento) }} · potencial recuperável R$ {{ m.brl(resumo.recuperavel) }}</p>{% endif %}
         </div>
     </div>
     <div class="nexo-card-body">
         {% if resumo and resumo.motivos %}
         <ul class="mb-3">
             {% for motivo, quantos in resumo.motivos.items() %}
-            <li>{{ rotulos_motivos.get(motivo, motivo) }}: {{ m.num(quantos) }}</li>
+            <li>{{ rotulo_do_motivo(motivo) }}: {{ m.num(quantos) }}</li>
             {% endfor %}
         </ul>
         {% endif %}
@@ -102,23 +188,24 @@
         <div class="table-responsive-x">
             <table class="nexo-table">
                 <thead>
-                    <tr><th>Produto</th><th>Anos</th><th class="text-end">Faturamento</th><th class="text-end">Recuperável</th><th>Motivos</th></tr>
+                    <tr><th>Produto</th><th>Anos</th><th class="text-end">Faturamento</th><th class="text-end">Potencial recuperável</th><th class="text-end">Impacto</th><th>Motivos</th></tr>
                 </thead>
                 <tbody>
                     {% for item in itens[bloco] %}
                     <tr>
-                        <td class="col-nome"><span class="text-break">{{ item.nome }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}</td>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
                         <td class="t-mono">{{ item.anos | join(', ') }}</td>
                         <td class="text-end fw-num">R$ {{ m.brl(item.faturamento) }}</td>
-                        <td class="text-end fw-num">R$ {{ m.brl(item.recuperavel) }}</td>
-                        <td>{{ item.motivos | join('; ') }}</td>
+                        <td class="text-end fw-num">R$ {{ m.brl(item.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{% if item.a_confirmar %}a confirmar{% elif item.impacto is none %}—{% else %}R$ {{ m.brl(item.impacto) }}{% endif %}</td>
+                        <td>{{ item.motivos | map(attribute='rotulo') | join('; ') }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
         </div>
-        {% if resumo and resumo.itens > itens[bloco] | length %}<p class="field-hint mt-2 mb-0">Mostrando os {{ itens[bloco] | length }} de maior valor recuperável.</p>{% endif %}
+        {% if resumo and resumo.itens > itens[bloco] | length %}<p class="field-hint mt-2 mb-0">Mostrando os {{ itens[bloco] | length }} de maior {{ 'impacto' if situacao == 'atual' else 'potencial recuperável' }}.</p>{% endif %}
         {% elif not resumo or not resumo.itens %}
         <p class="t-mut mb-0">Nenhum produto neste bloco.</p>
         {% endif %}
@@ -130,11 +217,11 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="refazerTitulo"><i class="bi bi-arrow-repeat text-purple" aria-hidden="true"></i> Refazer a avaliação</h2>
-            <p class="sub">Refazer a triagem usa os dados gravados e as regras atuais ({{ versao_triagem_atual }}; a deste lead é {{ lead.versao_triagem or 'sem versão' }}); um novo envio troca os dados do lead pelos dos relatórios enviados.</p>
+            <p class="sub">Refazer a triagem usa os dados gravados, as regras atuais ({{ versao_triagem_atual }}; a deste lead é {{ lead.versao_triagem or 'sem versão' }}) e os limiares gravados no lead; um novo envio troca os dados do lead pelos dos relatórios enviados.</p>
         </div>
     </div>
     <div class="nexo-card-body">
-        {% if linhas_pdv and lead.status != 'expirado' %}
+        {% if linhas_pdv and lead.status != 'expirado' and situacao != 'expirado' and linhas_atuais %}
         <form method="POST" action="{{ url_for('leads.retriar', lead_id=lead.id) }}" class="mb-4" data-envio-unico>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn-ghost"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refazer a triagem</button>
