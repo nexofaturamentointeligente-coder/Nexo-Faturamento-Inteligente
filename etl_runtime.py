@@ -245,6 +245,20 @@ def _meta_valida(meta, versao) -> bool:
         return False
     if not _inteiro(meta["relatorios_cabecalho_ambiguo"], 0, arquivos):
         return False
+    if not _inteiro(meta["relatorios_varias_unidades"], 0, arquivos):
+        return False
+    # Etapa 3: períodos cobertos em ordem, sem sobreposição, nos anos do envio.
+    periodos = meta["periodos_cobertos"]
+    if not isinstance(periodos, list) or not 1 <= len(periodos) <= MAX_ARQUIVOS:
+        return False
+    anterior = None
+    for par in periodos:
+        if (not isinstance(par, list) or len(par) != 2 or not all(isinstance(d, str) for d in par)
+                or not (_data_iso(par[0]) and _data_iso(par[1])) or par[0] > par[1]
+                or par[0][:4] not in anos or par[1][:4] not in anos
+                or (anterior is not None and par[0] <= anterior)):
+            return False
+        anterior = par[1]
     ajustes = meta["ajustes_sem_venda_por_ano"]
     return (isinstance(ajustes, dict) and set(ajustes) == anos
             and all(isinstance(ajustes[ano], dict) and set(ajustes[ano]) == set(CHAVES_AJUSTES)
@@ -287,8 +301,8 @@ def validar_avaliacao(result):
 def _validar_avaliacao(result):
     from etl_inputs import ETLInputError
     from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_RESULTADO as CHAVES_AVALIACAO, COLUNAS,
-                                 COLUNAS_CONTAGEM, COLUNAS_DINHEIRO, COLUNAS_MARCA, COLUNAS_QUANTIDADE,
-                                 LIMITE_DESCRICAO, TETOS, VERSAO_REGRAS_LEAD)
+                                 COLUNAS_CONTAGEM, COLUNAS_DATA, COLUNAS_DINHEIRO, COLUNAS_MARCA,
+                                 COLUNAS_QUANTIDADE, LIMITE_DESCRICAO, TETOS, VERSAO_REGRAS_LEAD)
     from etl_processor import LIMITE_CATEGORIA
     from raio_x import CHAVES_RESULTADO
 
@@ -334,6 +348,11 @@ def _validar_avaliacao(result):
                 valido = valor is None or _texto_gravavel(valor, 60)
             elif nome == "categoria":
                 valido = valor is None or _inteiro(valor, 0, len(categorias) - 1)
+            elif nome in COLUNAS_DATA:
+                # Data do fim do último relatório com venda: ISO, do próprio ano e dentro dos períodos cobertos.
+                periodos = meta["periodos_cobertos"]
+                valido = (isinstance(valor, str) and _data_iso(valor) and valor[:4] == str(linha[posicao["ano_exercicio"]])
+                          and periodos[0][0] <= valor <= periodos[-1][1])
             elif nome == "estoque_final":
                 # O estoque pode ser negativo; o teto vale para o módulo (NUMERIC(14,3)).
                 valido = valor is None or (_numero(valor) and abs(valor) < TETOS[nome])

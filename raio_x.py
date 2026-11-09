@@ -297,13 +297,31 @@ def _primeiro_valor(serie: pd.Series):
     return validos.iloc[0] if not validos.empty else None
 
 
+def _texto_da_unidade(valor) -> str:
+    """A loja ou filial da linha como texto comparável ("" quando a célula está vazia): sem diferença de
+    espaços nem de maiúsculas, e o código 1 igual a 1.0 (a célula numérica do XLSX)."""
+    if valor is None or (isinstance(valor, float) and valor != valor):
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    texto = " ".join(str(valor).split()).casefold()
+    if texto.endswith(".0") and texto[:-2].isdigit():
+        texto = texto[:-2]
+    return texto
+
+
 def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, devolvidas_com_custo, valor) -> None:
     """Só para a Avaliação de Cenário (avaliacao_motor): o cadastro e os ajustes do arquivo por produto."""
     info = df.attrs.get("cadastro") or {}
     estoque_informado = df["_estoque_informado"] if "_estoque_informado" in df.columns else None
+    unidades_das_vendas = None
+    if "_unidade" in df.columns:
+        unidades_das_vendas = df.loc[venda, "_unidade"].map(_texto_da_unidade)
+    varias_unidades = unidades_das_vendas is not None and unidades_das_vendas[unidades_das_vendas != ""].nunique() >= 2
     resumo["_cadastro"] = {
         "ncm": bool(info.get("ncm")), "categoria": bool(info.get("categoria")),
         "ambiguo": bool(info.get("ambiguo")), "estoque": estoque_informado is not None,
+        "varias_unidades": bool(varias_unidades), "produto_de_loja": bool(info.get("produto_de_loja")),
     }
     vendidos = df.loc[venda, "_prod_norm"]
     if info.get("ncm"):
@@ -317,7 +335,14 @@ def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, 
         # produto: o relatório "vendas x estoque" lista o item com quantidade 0 e o saldo atual. A marca
         # de estoque negativo já olha todas as linhas (_estoque_negativo).
         informado = estoque_informado
-        estoques = df.loc[informado, "estoque"].groupby(df.loc[informado, "_prod_norm"]).last()
+        if varias_unidades:
+            # Relatório com várias lojas: o estoque da rede é a soma do último estoque de cada loja (o da
+            # última linha seria o de uma loja só). Linha sem loja conta como uma loja "sem nome".
+            unidade = df.loc[informado, "_unidade"].map(_texto_da_unidade)
+            por_loja = df.loc[informado, "estoque"].groupby([df.loc[informado, "_prod_norm"], unidade]).last()
+            estoques = por_loja.groupby(level=0).sum()
+        else:
+            estoques = df.loc[informado, "estoque"].groupby(df.loc[informado, "_prod_norm"]).last()
         produtos["estoque"] = estoques
         # Todos os produtos com saldo informado no arquivo, inclusive os que não venderam nele: o motor do
         # lead usa o saldo mais recente do ano (o relatório "vendas x estoque" lista o item parado).

@@ -1006,7 +1006,19 @@ _CATEGORIAS_GENERICAS = frozenset({
 LIMITE_CATEGORIA = 80
 # Palavra de cadastro no título da coluna lida como código ou como produto: o dicionário de vendas pegou
 # a coluna errada ("Cód. NCM" antes de "Código", "Grupo do Produto" antes da descrição).
-_RE_TITULO_DE_CADASTRO = re.compile(r"\b(?:ncm|grupo|categoria|departamento|depto|secao|familia|subgrupo)\b")
+_RE_TITULO_DE_CADASTRO = re.compile(
+    r"\b(?:ncm|grupo|categoria|departamento|depto|secao|familia|subgrupo|loja|filial|estabelecimento|empresa|cnpj)\b")
+# Coluna de loja ou filial (só no modo cadastro, para o lead): "Unidade" sozinha fica de fora, porque no
+# PDV ela é unidade de medida (UN, KG, CX); caixa, PDV e terminal são divisões da mesma loja.
+_RE_TITULO_UNIDADE = re.compile(r"\b(?:loja|filial|estabelecimento|unidade de negocio|unid negocio)\b")
+# Título de número da loja ("Estoque Loja", "Preço Filial", "Qtd. Loja"): é medida, não a loja; a coluna
+# segue as regras de antes (NCM, categoria ou nada).
+_RE_TITULO_MEDIDA = re.compile(
+    r"\b(?:preco|precos|valor|valores|vlr|vl|custo|custos|qtd|qtde|quant\w*|estoque|estoques|saldo|saldos|"
+    r"total|totais|margem|venda|vendas|faturamento|desconto|descontos|perc\w*|markup|lucro|media|giro|"
+    r"cobertura|minimo|maximo|pedido|pedidos|compra|compras|comissao|meta|data|dt|dia|mes|ano)\b")
+# Título de produto: "Produto Loja" ou "Descrição do Produto (Filial)" ainda é o produto.
+_RE_TITULO_DE_PRODUTO = re.compile(r"\b(?:produto|produtos|mercadoria|mercadorias|item|itens|sku)\b")
 _RE_NUMERO_INTEIRO_DO_XLSX = re.compile(r"\d+\.0+")
 
 
@@ -1015,10 +1027,16 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
     titulos = [[_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
                for i in range(idx_cab, idx_cab + linhas_cab)]
     usadas = set(mapa.values())
-    ncm, niveis = None, {}
+    ncm, niveis, unidade = None, {}, None
     for indice, partes in enumerate(zip(*titulos)):
         chave = " ".join(partes).strip()
         if not chave or indice in usadas or _RE_COLUNA_SITUACAO.search(chave):
+            continue
+        if (_RE_TITULO_UNIDADE.search(chave) and not _RE_TITULO_NCM.search(chave)
+                and not _RE_TITULO_MEDIDA.search(chave)
+                and not any(nivel in chave.split() for nivel in _NIVEIS_DE_CATEGORIA)):
+            if unidade is None:
+                unidade = indice
             continue
         if _RE_TITULO_NCM.search(chave):
             if ncm is None:
@@ -1032,6 +1050,8 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
                 niveis[nivel] = indice
                 break
     colunas = {} if ncm is None else {"ncm": ncm}
+    if unidade is not None:
+        colunas["unidade"] = unidade
     for nivel in _NIVEIS_DE_CATEGORIA:
         if nivel in niveis:
             colunas["categoria"] = niveis[nivel]
@@ -1153,8 +1173,13 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) 
         for chave, coluna in colunas.items():
             df["_" + chave] = bloco.iloc[:, coluna].tolist()
         info_cadastro = {
-            "ncm": "ncm" in colunas, "categoria": "categoria" in colunas,
+            "ncm": "ncm" in colunas, "categoria": "categoria" in colunas, "unidade": "unidade" in colunas,
             "ambiguo": any(_RE_TITULO_DE_CADASTRO.search(cabecalhos.get(c, "")) for c in ("codigo", "produto")),
+            # A coluna lida como código ou como produto é de loja ou filial ("Cód. Loja" antes do código,
+            # "Descrição Loja" antes da descrição do produto): os "produtos" seriam as lojas; o lead recusa.
+            "produto_de_loja": any(_RE_TITULO_UNIDADE.search(cabecalhos.get(c, ""))
+                                   and not _RE_TITULO_DE_PRODUTO.search(cabecalhos.get(c, ""))
+                                   for c in ("codigo", "produto")),
         }
     df = _filtrar_linhas_validas(df, "produto", _NUMERICAS_VENDAS)
 

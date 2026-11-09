@@ -577,7 +577,7 @@ class QuantizacaoTests(unittest.TestCase):
                        quantidade=1.0005, quantidade_com_custo=2.0004, valor_venda_bruto=2.675, recuperavel=0.125,
                        custo_total=1.005, variacao=False, conflito_cadastral=False, estoque_negativo=False,
                        ultimo_mes_negativo=False, ncm_ausente=False, categoria_ausente=False,
-                       estoque_final=2.0005, categoria=None)
+                       estoque_final=2.0005, categoria=None, fim_ultimo_relatorio_com_venda="2025-03-31")
         linha = avaliacao_cenario.quantizar({"colunas": list(avaliacao_motor.COLUNAS),
                                              "valores": [[valores[c] for c in avaliacao_motor.COLUNAS]]})[0]
         # O valor que o JSON traz ("2.675"), e não o binário do float (2,67499...).
@@ -587,6 +587,8 @@ class QuantizacaoTests(unittest.TestCase):
         # Estoque com 3 casas; sem categoria no envio, a linha grava categoria_produto nula.
         self.assertEqual((linha["estoque_final"], linha["categoria_produto"]), (Decimal("2.001"), None))
         self.assertNotIn("categoria", linha)
+        # Etapa 3: a data do fim do último relatório com venda vira date (coluna DATE).
+        self.assertEqual(linha["fim_ultimo_relatorio_com_venda"], date(2025, 3, 31))
         com_categoria = avaliacao_cenario.quantizar({
             "colunas": list(avaliacao_motor.COLUNAS), "categorias": ["BEBIDAS", "LIMPEZA"],
             "valores": [[{**valores, "categoria": 1}[c] for c in avaliacao_motor.COLUNAS]]})[0]

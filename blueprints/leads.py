@@ -56,10 +56,10 @@ limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_f
 
 MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
                     "nenhum arquivo foi lido.")
-MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13 e 7c4e2a9b5d31, "
-                        "ainda não aplicadas neste banco: nenhum arquivo foi lido.")
-# Coluna da revisão mais nova de que a tela depende (7c4e2a9b5d31, Etapa 2).
-_COLUNA_DO_ESQUEMA = "categoria_produto"
+MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13, 7c4e2a9b5d31 e "
+                        "9b3e5d7f1a28, ainda não aplicadas neste banco: nenhum arquivo foi lido.")
+# Coluna da revisão mais nova de que a tela depende (9b3e5d7f1a28, Etapa 3).
+_COLUNA_DO_ESQUEMA = "fim_ultimo_relatorio_com_venda"
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada.
 CODIGO_OCUPADO = "busy"
@@ -70,7 +70,7 @@ _esquema_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
 
 
 def esquema_disponivel() -> bool:
-    """True quando a staging da Etapa 2 (revisão 7c4e2a9b5d31, sobre a 5e1b9c3a7d20) existe neste banco.
+    """True quando a staging da Etapa 3 (revisão 9b3e5d7f1a28, sobre a 7c4e2a9b5d31) existe neste banco.
 
     O mesmo critério de validacao_pdv: a presença fica fixa para o engine, e a ausência é
     reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo. Vem antes de
@@ -185,7 +185,7 @@ def _lead_para_payload(lead: LeadAvaliacao) -> dict:
     }
 
 
-def _diagnostico(lead: LeadAvaliacao, limite: int) -> tuple[dict, list, list]:
+def _diagnostico(lead: LeadAvaliacao, limite: int, parametros=None) -> tuple[dict, list, list]:
     """(payload do diagnóstico, linhas da staging, registros gravados) do lead, sem gravar nada."""
     registros = list(db.session.scalars(
         select(BrainstormingDadosPdv).where(BrainstormingDadosPdv.lead_id == lead.id)
@@ -193,7 +193,8 @@ def _diagnostico(lead: LeadAvaliacao, limite: int) -> tuple[dict, list, list]:
     ))
     linhas = [avaliacao_cenario.linha_da_staging(r) for r in registros]
     payload = diagnostico_cenario.montar_payload(_lead_para_payload(lead), linhas, agora=agora_utc(),
-                                                 retencao_dias=RETENCAO_DIAS, limite=limite)
+                                                 retencao_dias=RETENCAO_DIAS, limite=limite,
+                                                 parametros_inteligencia=parametros)
     return payload, linhas, registros
 
 
@@ -220,6 +221,20 @@ def _itens_gravados(registros: list) -> dict:
         lista.sort(key=lambda item: (-item["potencial_recuperavel"], -item["faturamento"], item["produto"]))
         itens[bloco] = lista[:ITENS_POR_BLOCO]
     return itens
+
+
+# Parâmetros do simulador e da auditoria de preço que o consultor pode trocar pela consulta
+# (?descontos=0.1,0.25&fracao_liquidada=0.5&markup_informado=0.35&cobertura_alvo_dias=45).
+_PARAMETROS_DA_CONSULTA = ("descontos", "fracao_liquidada", "markup_informado", "cobertura_alvo_dias")
+
+
+def _parametros_da_consulta(args):
+    """Os parâmetros da inteligência pedidos na consulta, validados (ValueError com a mensagem)."""
+    import inteligencia_estoque
+    ajustes = {nome: args.get(nome) for nome in _PARAMETROS_DA_CONSULTA if args.get(nome) not in (None, "")}
+    if not ajustes:
+        return None
+    return inteligencia_estoque.PARAMETROS_PADRAO.com_ajustes(ajustes)
 
 
 def _limiares_legiveis(lead: LeadAvaliacao):
@@ -384,7 +399,14 @@ def diagnostico_json(lead_id):
             resposta.status_code = 404
         else:
             limite = request.args.get("limite", default=diagnostico_cenario.ITENS_POR_BLOCO_PADRAO, type=int)
-            payload, _linhas, _registros = _diagnostico(lead, limite)
+            try:
+                parametros = _parametros_da_consulta(request.args)
+            except ValueError as erro:
+                resposta = jsonify({"erro": "parametros_invalidos", "mensagem": str(erro)})
+                resposta.status_code = 400
+                resposta.headers["Cache-Control"] = "no-store"
+                return resposta
+            payload, _linhas, _registros = _diagnostico(lead, limite, parametros)
             # Registro da leitura só com identificadores (sem nome de produto nem contato).
             current_app.logger.info("Diagnóstico do lead %s lido pelo consultor %s.", lead.id, current_user.id_usuario)
             resposta = jsonify(payload)

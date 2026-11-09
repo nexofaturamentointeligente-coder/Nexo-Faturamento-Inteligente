@@ -28,6 +28,11 @@ motivo de margem: distância até a margem de referência x venda com custo) e, 
 parado, também do item que não vendeu no último ano; item de custo implausível tem impacto zero e
 aparece como "a confirmar". A ordenação é pelo impacto do último ano, depois o acumulado e o nome.
 
+Inteligência de estoque e de preço (Etapa 3, inteligencia_estoque.calcular): estoque parado por
+idade (60, 90 e 180 dias sem venda), estoque excedente, simulador de liquidação da Urgência e auditoria
+de preço pelo markup de referência, na seção "inteligencia" do payload; nula sem a coluna de estoque
+em nenhum relatório (só o estoque) ou sem os períodos cobertos na meta (envio de antes da Etapa 3).
+
 Payload (montar_payload, audiência: consultor): só sai pela rota admin_required
 `/admin/leads/<id>/diagnostico.json`, nunca leva o contato do lead e só leva texto do PDV (nome,
 código, categoria) enquanto as linhas existem e estão dentro da retenção de 30 dias. Linhas de outra
@@ -44,9 +49,10 @@ from fractions import Fraction
 import math
 
 import avaliacao_motor
+import inteligencia_estoque
 import triagem_cenario
 
-VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.1"
+VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.2"
 FRACAO_VENDA_CONTINUA = Fraction(3, 4)
 COBERTURA_MINIMA_DA_CATEGORIA = Fraction(1, 2)
 ITENS_POR_BLOCO_PADRAO = 30
@@ -439,7 +445,7 @@ def ler_objeto(texto):
 
 
 def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
-                   limite: int = ITENS_POR_BLOCO_PADRAO) -> dict:
+                   limite: int = ITENS_POR_BLOCO_PADRAO, parametros_inteligencia=None) -> dict:
     """O payload do consultor. `lead`: os campos do lead (id, status, versões, período, arquivos,
     score_saude_cadastral, plano_recomendado_codigo, vazamento_total_reais, itens_*, resumos_json
     {bloco: texto}, meta_json, limiares_triagem_json); `registros`: as linhas da staging no formato de
@@ -469,7 +475,7 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         "resumos": {bloco: ler_objeto(lead.get("resumos_json", {}).get(bloco)) for bloco in triagem_cenario.BLOCOS},
         "limiares": ler_objeto(lead.get("limiares_triagem_json")),
         "situacao": "atual", "dados_pdv_ate": None, "cobertura": None, "totais": None, "categorias": None,
-        "categorias_publicadas": False, "cobertura_categoria": None, "blocos": None,
+        "categorias_publicadas": False, "cobertura_categoria": None, "blocos": None, "inteligencia": None,
         "definicoes": DEFINICOES, "avisos": [],
     }
     expira_em = min((r["criado_em"] for r in registros), default=None)
@@ -514,6 +520,20 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         "cobertura_categoria": matriz["cobertura_categoria"],
         "blocos": blocos,
     })
+    # A inteligência (Etapa 3) à parte: um dado que ela não consegue ler tira só a seção dela, nunca a
+    # matriz e os blocos.
+    try:
+        inteligencia = inteligencia_estoque.calcular(
+            registros, cobertura, triagem, meta, parametros_inteligencia or inteligencia_estoque.PARAMETROS_PADRAO)
+    except _DADO_ILEGIVEL:
+        inteligencia = None
+        payload["avisos"].append("A inteligência de estoque e de preço não pôde ser calculada com os dados gravados "
+                                 "deste lead: envie os relatórios de novo.")
+    else:
+        if inteligencia["estoque"] is None:
+            payload["avisos"].append("Os relatórios não trazem a coluna de estoque: o estoque parado por idade, o "
+                                     "excedente e o simulador de liquidação não foram calculados.")
+    payload["inteligencia"] = inteligencia
     if not matriz["categorias_publicadas"]:
         payload["avisos"].append("Os relatórios não trazem categoria em ao menos metade do faturamento: a matriz "
                                  "por categoria não é publicada; os totais valem.")
@@ -521,6 +541,11 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         payload["avisos"].append(f"{cobertura.cabecalho_ambiguo} relatório(s) com cabeçalho ambíguo (por exemplo, "
                                  "\"Cód. NCM\" lido como código do produto): NCM e categoria desses relatórios não foram "
                                  "avaliados, e o conflito de cadastro não foi avaliado no envio inteiro.")
+    varias_unidades = meta.get("relatorios_varias_unidades") or 0
+    if varias_unidades:
+        payload["avisos"].append(f"{varias_unidades} relatório(s) com várias lojas (coluna de loja ou filial): o "
+                                 "estoque é a soma das lojas, e a variação de preço entre lojas pode ser preço "
+                                 "regional; confira antes de tratar como vazamento. A matriz não separa as lojas.")
     if triagem.sem_mes_em_comum:
         payload["avisos"].append("Os dois últimos anos do envio não têm mês em comum (por exemplo, novembro a "
                                  "outubro): a queda do ritmo de venda não foi avaliada, para a sazonalidade não "

@@ -1,6 +1,6 @@
 # Avaliação de Cenário (leads)
 
-Situação em 08/11/2026: a Etapa 1 (saneamento, worker, triagem e infraestrutura) está no commit `53020e6`. A Etapa 2 (triagem com limiares configuráveis, marcas de omissão no ERP, matriz por categoria e diagnóstico em JSON) está pronta e testada, **sem commit e sem nada aplicado no Supabase**. As migrações só entram com autorização do dono (seção 9).
+Situação em 09/11/2026: a Etapa 1 (saneamento, worker, triagem e infraestrutura) está no commit `53020e6`, a Etapa 2 (triagem com limiares configuráveis, marcas de omissão no ERP, matriz por categoria e diagnóstico em JSON) no `227f495` e a Etapa 3 (inteligência de estoque e de preço: estoque parado por idade, excedente, simulador de liberação de caixa e auditoria de preço) no commit seguinte, no ramo `avaliacao-cenario-etapas-2-a-4`. **Nada foi aplicado no Supabase**: as migrações só entram com autorização do dono (seção 9).
 
 O consultor envia os relatórios mensais de vendas de um lead, ou seja, de quem ainda não é cliente. O motor do Raio-X roda no processo isolado do ETL, numa passada única. O servidor grava a matriz produto × ano, as marcas, a triagem (Urgência, Atenção e Eletiva) e o resumo do lead. A tela do consultor e a rota JSON mostram a matriz por categoria e os itens de cada bloco, com motivo e impacto.
 
@@ -66,11 +66,11 @@ Limite: 20 envios por hora por consultor, somando novo envio e reenvio (`limite_
 
 **Lista.** Mostra as 100 avaliações mais recentes, em ordem da coluna "Avaliado em": o instante da autorização do lead (`consentimento_em`, renovado a cada reenvio) ou, sem ele, a criação do lead. Um lead antigo reavaliado volta para o topo. Quando há mais avaliações, a lista avisa: "Mostrando as 100 avaliações mais recentes de N".
 
-Banco sem as migrações: a lista mostra o aviso de migrações pendentes; as demais telas redirecionam com o mesmo aviso e a rota JSON responde 503 (`{"erro": "esquema_pendente"}`, com `Retry-After`), sem ler arquivo nem consultar as tabelas de lead. A checagem é por engine e olha a coluna `categoria_produto`, da revisão `7c4e2a9b5d31`. A presença fica gravada; a ausência é reavaliada a cada 30 s, então a migração aplicada passa a valer sem reiniciar o processo.
+Banco sem as migrações: a lista mostra o aviso de migrações pendentes; as demais telas redirecionam com o mesmo aviso e a rota JSON responde 503 (`{"erro": "esquema_pendente"}`, com `Retry-After`), sem ler arquivo nem consultar as tabelas de lead. A checagem é por engine e olha a coluna `fim_ultimo_relatorio_com_venda`, da revisão `9b3e5d7f1a28` (Etapa 3). A presença fica gravada; a ausência é reavaliada a cada 30 s, então a migração aplicada passa a valer sem reiniciar o processo.
 
 ## 2. Regras do motor do lead (`avaliacao_motor.py`)
 
-Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.3"`, sobre as regras do Raio-X `raio-x-2026-11.4`. A 11.3 acrescentou a leitura do cadastro (NCM, categoria e estoque), os ajustes de bonificação e devolução por produto e as contagens de que a triagem da Etapa 2 precisa. O motor não importa banco, Flask nem configuração; há teste que garante isso.
+Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.4"`, sobre as regras do Raio-X `raio-x-2026-11.4`. A 11.3 acrescentou a leitura do cadastro (NCM, categoria e estoque), os ajustes de bonificação e devolução por produto e as contagens de que a triagem da Etapa 2 precisa. A 11.4 (Etapa 3) acrescentou a data da última venda de cada produto no ano, os períodos cobertos do envio e a leitura do relatório com várias lojas. O motor não importa banco, Flask nem configuração; há teste que garante isso.
 
 - **Ano de exercício.** Cada relatório precisa do período no cabeçalho ("Período: dd/mm/aaaa a dd/mm/aaaa"), dentro de um mesmo ano civil, entre 2000 e o ano corrente, e começando até hoje. A recusa traz o número do arquivo:
   - `avaliacao_sem_periodo`: o relatório não tem período;
@@ -83,8 +83,10 @@ Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.3"`, sobre as regras do Raio-X `rai
   - **NCM:** a coluna cujo título fala em NCM. Ficam só os dígitos ("0901.21.00" vale 09012100); o "4012010.0" que o XLSX entrega como número perde o ".0" e ganha o zero à esquerda; só zeros ou outro tamanho valem como ausente.
   - **Categoria:** a coluna de nível mais alto entre categoria, departamento (depto), seção, grupo, família e subgrupo. Título com código, NCM, termos fiscais (tributário, ICMS, IPI, PIS, COFINS, CST, CFOP), preço, cliente, fornecedor, pagamento, situação ou status não conta. Marcadores de categoria não configurada ("SEM GRUPO", "Geral", "Padrão", "Não definido", "999", célula vazia) valem como ausente; "Diversos" e "Outros" ficam como categoria. Até 80 caracteres.
   - **Estoque:** o último valor informado do produto no ano, lido de qualquer linha dele no relatório, inclusive com quantidade 0 (o relatório "vendas x estoque" lista o item parado com o saldo); pode ser negativo. Só entra quando o produto vendeu no ano: o item que aparece num ano só com estoque, sem venda, não ganha linha (limitação, seção 10).
-  - **Cabeçalho ambíguo:** quando o título que o Raio-X leu como código ou nome do produto tem palavra de cadastro ("Cód. NCM" antes de "Código", "Grupo do Produto" antes de "Descrição"), NCM e categoria desse relatório não são avaliados, e o conflito de cadastro não é avaliado **no envio inteiro** (a linha da staging soma o produto no ano e não sabe de que relatório veio o conflito). A meta conta o relatório em `relatorios_cabecalho_ambiguo`.
-- **Matriz produto × ano.** Tem uma linha por produto e ano, com 31 colunas (`avaliacao_motor.COLUNAS`):
+  - **Loja ou filial (11.4):** a coluna fora do dicionário cujo título fala em loja, filial, estabelecimento ou unidade de negócio. "Unidade" sozinha fica de fora (no PDV é a unidade de medida: UN, KG, CX), e também o título de número da loja ("Estoque Loja", "Margem Loja", "Meta Filial": preço, valor, custo, quantidade, estoque, saldo, total, margem, venda, desconto, meta, data) e o de categoria ("Departamento Loja" segue como categoria). Com duas lojas ou mais nas vendas do relatório ("Centro" e "CENTRO " são a mesma; o código 1 e o 1.0 do XLSX também), o estoque do produto é a **soma do último saldo de cada loja** (o da última linha seria o de uma loja só), e a meta conta o relatório em `relatorios_varias_unidades`. A matriz não separa as lojas (seção 10).
+  - **Coluna de loja no lugar do produto (11.4):** quando a coluna que o dicionário leu como código ou descrição do produto é de loja ("Cód. Loja" ou "Descrição Loja" antes das colunas do produto), os "produtos" seriam as lojas: o envio é recusado (`avaliacao_cabecalho_loja`), com a orientação de exportar as colunas de loja depois das do produto, ou sem elas. Título com "produto", "mercadoria" ou "item" ("Produto Loja") segue como produto, mas o relatório conta como cabeçalho ambíguo.
+  - **Cabeçalho ambíguo:** quando o título que o Raio-X leu como código ou nome do produto tem palavra de cadastro ("Cód. NCM" antes de "Código", "Grupo do Produto" antes de "Descrição"; na 11.4, também loja, filial, estabelecimento, empresa e CNPJ), NCM e categoria desse relatório não são avaliados, e o conflito de cadastro não é avaliado **no envio inteiro** (a linha da staging soma o produto no ano e não sabe de que relatório veio o conflito). A meta conta o relatório em `relatorios_cabecalho_ambiguo`.
+- **Matriz produto × ano.** Tem uma linha por produto e ano, com 32 colunas (`avaliacao_motor.COLUNAS`):
   - `ano_exercicio`, `chave_produto`, `codigo_produto` e `descricao_produto`, com o nome e o código do mês mais recente, limpos de caractere de controle (o espaço especial vira espaço; o código fica com até 60 caracteres). Nome só com espaços vira a chave normalizada do produto ("CAFE"), porque a coluna exige texto;
   - `quantidade`, `valor_venda_bruto`, `quantidade_com_custo`, `faturamento_com_custo`, `custo_total`, `perda`, `vazamento_preco` e `recuperavel`;
   - `linhas` e `meses`. `meses` conta os relatórios com venda no ano: são meses quando os relatórios são mensais;
@@ -103,11 +105,13 @@ Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.3"`, sobre as regras do Raio-X `rai
     | `categoria` | índice na lista `linhas["categorias"]`; nulo sem categoria |
     | `ncm_ausente`, `categoria_ausente` | o relatório traz a coluna e o produto veio sem o dado |
     | `custo_bonificacoes`, `custo_devolucoes`, `devolucoes_com_custo` | custo das bonificações, custo e receita das devoluções com custo, pelas mesmas máscaras da auditoria do Raio-X |
+  - **nova na 11.4:** `fim_ultimo_relatorio_com_venda`, o fim do último relatório do ano em que o produto vendeu, cortado no dia do envio (o mês corrente exportado inteiro, lido em 09/11, vale 09/11), em data ISO. O relatório em que o produto só aparece com o saldo (quantidade 0) não conta como venda. É a base dos dias sem venda da seção 5.1;
 - **Cobertura de cada ano** (meta). Para cada ano, a meta guarda:
   - `arquivos_por_ano`, `dias_por_ano` (contados até hoje: o mês corrente exportado inteiro, lido em 08/11, cobre só 8 dias) e `relatorios_mensais_por_ano`;
   - `relatorios_com_custo_por_ano`, `relatorios_com_ncm_por_ano`, `relatorios_com_categoria_por_ano`, `relatorios_com_estoque_por_ano` e `relatorios_completos_por_ano`;
   - `dias_mesmos_meses_por_ano`: os dias da **janela dos mesmos meses** em cada ano. A janela são os meses do calendário que os dois últimos anos do envio cobrem, só quando os relatórios dos dois são todos mensais, e no último ano só com os relatórios completos (o mês corrente, parcial, fica de fora dos dois lados). Os anos mais antigos e o envio de um ano só ficam com 0. Envio de 12 meses de novembro a outubro não tem mês em comum: janela 0 nos dois anos;
-  - `ajustes_sem_venda_por_ano`: o custo de bonificação e de devolução de produto sem venda no ano, sem nome de produto (a matriz não tem linha para ele, e o total da matriz por categoria precisa fechar com o Raio-X).
+  - `ajustes_sem_venda_por_ano`: o custo de bonificação e de devolução de produto sem venda no ano, sem nome de produto (a matriz não tem linha para ele, e o total da matriz por categoria precisa fechar com o Raio-X);
+  - **na 11.4:** `periodos_cobertos`, os períodos dos relatórios em ordem, com o fim cortado em hoje e os vizinhos unidos (`[["2025-09-01", "2025-11-09"]]`; um mês sem relatório separa dois períodos), e `relatorios_varias_unidades`, os relatórios com duas lojas ou mais. Só datas e contagens, sem texto do PDV.
 
   É a base do ritmo de venda e das contagens da triagem.
 - **Mesmas regras por linha do Raio-X.** Leitura, limpeza, custo unitário ou total, perda abaixo do custo, vazamento de preço, recuperável, bonificação e devolução são os do Raio-X, sem cópia. `EquivalenciaTests` confere que a staging somada reproduz o Raio-X, e a rota JSON tem teste que fecha os totais com a auditoria do Raio-X dos mesmos arquivos.
@@ -121,7 +125,7 @@ Versão: `VERSAO_REGRAS_LEAD = "lead-2026-11.3"`, sobre as regras do Raio-X `rai
   | Vazamento total do lead | menos de 10¹⁰ |
 
   O SQLite não impõe `NUMERIC(p, s)`, por isso a conferência é feita no código.
-- **Saída.** O JSON é colunar: `{"colunas": [...], "valores": [[...], ...], "categorias": [...]}`. Número inteiro sai como inteiro, para o JSON ficar menor. O resultado fica abaixo do teto rígido de 4 MiB do worker, com 4 KiB de folga para o envelope; acima disso, a recusa `avaliacao_grande` explica o motivo. Medido com 24 relatórios mensais de 2.000 produtos (nome de 60 caracteres, código de 12 dígitos, NCM, categoria e estoque): **253 bytes por linha produto × ano na 11.3, contra 196 na 11.2** com os mesmos arquivos. Cabem perto de **16.400 linhas** (eram 21.100). O prazo de 120 s do processo isolado continua sendo o limite que chega antes (seção 10).
+- **Saída.** O JSON é colunar: `{"colunas": [...], "valores": [[...], ...], "categorias": [...]}`. Número inteiro sai como inteiro, para o JSON ficar menor. O resultado fica abaixo do teto rígido de 4 MiB do worker, com 4 KiB de folga para o envelope; acima disso, a recusa `avaliacao_grande` explica o motivo. Medido com 24 relatórios mensais de 2.000 produtos (nome de 60 caracteres, código de 12 dígitos, NCM, categoria e estoque): **253 bytes por linha produto × ano na 11.3, contra 196 na 11.2** com os mesmos arquivos. Cabem perto de **16.400 linhas** (eram 21.100). A data da 11.4 acrescenta 13 bytes por linha: num segundo ensaio com o mesmo formato (departamento como categoria), 219 bytes na 11.3 contra 232 na 11.4, cerca de 6% a mais; aplicado à primeira medida, o teto fica perto de **15.600 linhas**. O prazo de 120 s do processo isolado continua sendo o limite que chega antes (seção 10).
 - **Meta.** Guarda só contagens, versões e valores agregados, sem nome de produto nem texto livre: as versões das regras do lead e do Raio-X, arquivos por ano, a cobertura, arquivos com custo, linhas lidas, qualidade dos valores, situação (quantidade de linhas e valor em R$ dos cancelamentos e das devoluções), células recodificadas e as contagens e ajustes acima. Ao gravar, o processo pai acrescenta em `meta_json` os motivos da recomendação do plano (`motivos_recomendacao`). As categorias, que são texto do relatório, vão só para a staging, que expira; nunca para a meta.
 
 ## 3. Staging e lead
@@ -171,10 +175,22 @@ Cuidados da revisão:
 - `lead_avaliacao` é a tabela-mãe da staging (`ON DELETE CASCADE`). No SQLite, o modo batch recriaria a tabela-mãe e apagaria as linhas de PDV em cascata; por isso a revisão usa ADD e DROP COLUMN direto nela, e a CHECK do lead fica só no PostgreSQL (o SQLite de testes a recebe quando a tabela nasce dos modelos). Há teste que prova que o upgrade não apaga linha de PDV.
 - O downgrade trava `usuario` e as duas tabelas no PostgreSQL (`usuario` primeiro, porque a `5e1b9c3a7d20`, logo abaixo na mesma transação, o trava) e **recusa** enquanto houver linha gravada pelas regras `lead-2026-11.3` ou lead com as colunas novas preenchidas ("Downgrade da Etapa 2 da Avaliação de Cenário recusado..."). O expurgo de 30 dias apaga as linhas, mas não as colunas do lead: para descer, depois do backup, é preciso apagar esses leads ou anular `itens_omissao_erp` e `limiares_triagem_json` deles. Sem esses dados, remove colunas e CHECKs e mantém as linhas antigas.
 
+### Revisão `9b3e5d7f1a28` (Etapa 3)
+
+Expand nas duas tabelas, de novo sem reescrever linha: ADD COLUMN anulável sem padrão e uma CHECK.
+
+| Tabela | Coluna | Tipo |
+|---|---|---|
+| `brainstorming_dados_pdv` | `fim_ultimo_relatorio_com_venda` | `DATE`, anulável (nula nas linhas de antes), com `ck_brainstorming_dados_pdv_ultima_venda` (entre 2000-01-01 e 2100-12-31) |
+| `lead_avaliacao` | `resumo_inteligencia_json` | `TEXT`, anulável: o resumo numérico da inteligência (seção 5.1), sem nome de produto nem de categoria, porque fica depois do expurgo |
+
+Como na `7c4e2a9b5d31`, o lead recebe ADD e DROP COLUMN direto (o modo batch, no SQLite, recriaria a tabela-mãe e apagaria as linhas de PDV em cascata). O downgrade trava `usuario` e as duas tabelas no PostgreSQL, na mesma ordem, e **recusa** enquanto houver linha das regras `lead-2026-11.4`, linha com a data preenchida ou lead com o resumo novo ("Downgrade da Etapa 3 da Avaliação de Cenário recusado..."). Sem esses dados, remove as colunas e a CHECK e mantém as linhas e os leads.
+
 `models.py` (`LeadAvaliacao` e `BrainstormingDadosPdv`) espelha as migrações, e testes comparam os dois no SQLite e no PostgreSQL.
 
 Gravação (`avaliacao_cenario.registrar`):
-- dinheiro com 2 casas e quantidade e estoque com 3, em `Decimal` (`quantizar`); a categoria sai do índice para o texto. Marcas e triagem saem sempre do valor gravado, então refazê-las dá o mesmo resultado;
+- dinheiro com 2 casas e quantidade e estoque com 3, em `Decimal` (`quantizar`); a categoria sai do índice para o texto e a data da última venda vira `date`. Marcas e triagem saem sempre do valor gravado, então refazê-las dá o mesmo resultado;
+- o resumo da inteligência (`resumo_inteligencia_json`) é calculado das mesmas linhas, na gravação e na retriagem. Ele é auxiliar: um dado que ele não consegue ler deixa o resumo nulo, sem impedir a gravação do lead;
 - no reenvio, o lead é travado (`FOR UPDATE`) antes das linhas, na mesma ordem do expurgo.
 
 ## 4. Triagem e marcas (`triagem_cenario.py`)
@@ -256,7 +272,7 @@ Os resumos dos blocos (`resumo_urgencia_json`, `resumo_atencao_json` e `resumo_e
 
 ## 5. Diagnóstico: matriz por categoria e payload (`diagnostico_cenario.py`)
 
-Função pura, sem banco nem Flask, sobre as linhas da staging e o resumo do lead. Versão: `VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.1"`. A tela do consultor e a rota JSON usam o mesmo payload.
+Função pura, sem banco nem Flask, sobre as linhas da staging e o resumo do lead. Versão: `VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.2"` (a 11.2 acrescentou a seção `inteligencia`, seção 5.1). A tela do consultor e a rota JSON usam o mesmo payload.
 
 **O que o lead não tem.** O fluxo do lead recebe só relatórios de **vendas**. Por isso:
 - **Compras** não entram no cruzamento: não há relatório de compras do lead;
@@ -291,7 +307,8 @@ O potencial recuperável e o estoque parado ficam separados porque não se somam
   - `desatualizado`: linhas de outra `VERSAO_REGRAS_LEAD`, triagem de outra versão, meta ou limiares ilegíveis. Só o resumo gravado;
   - `expirado`: lead expirado, sem linhas ou com as linhas além dos 30 dias (pela data do envio, mesmo antes de o expurgo rodar). Só o resumo gravado;
 - itens por bloco até `?limite=` (padrão 30, entre 1 e 200; um limite que não é número vale o padrão);
-- `definicoes` com o texto de cada campo e `avisos` (matriz não publicada, cabeçalho ambíguo, retenção);
+- `definicoes` com o texto de cada campo e `avisos` (matriz não publicada, cabeçalho ambíguo, retenção; na 11.2, relatórios sem estoque, relatório com várias lojas e inteligência que não pôde ser calculada);
+- a seção `inteligencia` (seção 5.1), com os parâmetros do simulador e da auditoria de preço trocáveis pela consulta: `?descontos=0.1,0.25&fracao_liquidada=0.5&markup_informado=0.35&cobertura_alvo_dias=45`. Valor em texto decimal com ponto (até 6 casas, só dígitos ASCII) e dias em inteiro; parâmetro fora da faixa ou ilegível responde **400** (`{"erro": "parametros_invalidos", "mensagem": ...}`, com `Cache-Control: no-store`), sem calcular nada; outros nomes na consulta são ignorados;
 - números finitos: JSON gravado com `NaN`, `Infinity` ou número que estoura (`1e999`), ou aninhado sem fim, é ignorado; meta, limiares ou resumo fora do formato deixam o lead "desatualizado", sem erro 500;
 - toda linha precisa ser do próprio lead (`lead_id`): linha de outro lead faz o montador recusar (`ValueError`), para um filtro esquecido nunca misturar leads;
 - até 60 categorias na matriz (as de maior impacto); as demais saem somadas em "Demais categorias (N)".
@@ -299,6 +316,23 @@ O potencial recuperável e o estoque parado ficam separados porque não se somam
 **Tela do consultor.** A mesma matriz (com a linha de total), os indicadores das três marcas e os itens de cada bloco, com categoria, impacto e motivos, e o atalho "Diagnóstico em JSON". Com linhas ou triagem de outra versão, a tela lista os itens no **bloco gravado**, sem motivos, impacto nem matriz, e avisa a versão.
 
 **Dashboard do cliente.** Não foi aberto: o lead ainda não é cliente nem tem acesso ao portal. O payload já separa a audiência; a exposição ao cliente depende da conversão do lead e do recorte por plano (seção 10).
+
+### 5.1 Inteligência de estoque e de preço (Etapa 3, `inteligencia_estoque.py`)
+
+Funções puras no processo pai, sobre as linhas da staging, a triagem e a meta. Versão: `VERSAO_INTELIGENCIA = "inteligencia-lead-2026-11.1"`. Somas em `Decimal`; dinheiro arredondado em centavos na saída. O lead envia só relatórios de **vendas**: o estoque é o saldo que o relatório de vendas imprime e as datas são as dos períodos dos relatórios. Itens de custo implausível ("a confirmar") ficam fora de tudo.
+
+**Parâmetros** (`ParametrosInteligencia`, como os limiares da triagem): faixas de dias `(60, 90, 180)`, cobertura-alvo de 60 dias, descontos simulados `0, 10%, 20% e 30%`, fração do estoque vendida 1, mínimo de 3 itens por categoria para a referência de markup, markup informado (nenhum), tolerância de preço de 0,5% e 30 itens por lista. A validação recusa float, booleano, NaN, faixa fora de ordem e valor fora da faixa.
+
+1. **Estoque parado por idade e cauda longa** (`estoque_parado_por_idade`). Itens com estoque e custo informados há pelo menos 60, 90 ou 180 dias sem venda, e o capital imobilizado neles (estoque × custo médio do ano mais recente com custo): é o valor de oportunidade de liberar capital. As faixas saem separadas (60 a 89, 90 a 179, 180 ou mais) e acumuladas (`acima_de`: 60 ou mais, 90 ou mais, 180 ou mais), com a participação no capital em estoque e os 30 itens de maior capital. Os **dias sem venda são um piso**: contados do fim do último relatório em que o produto vendeu até o fim da cobertura do envio, **só nos dias que algum relatório cobre**. Um mês sem relatório não conta, porque a venda pode ter acontecido nele; o item fica com a marca `com_lacuna`. Com relatório anual, quem vendeu no ano tem piso 0 (a venda pode ter sido no último dia).
+2. **Estoque excedente** (giro baixíssimo de quem ainda vende). Itens com menos de 60 dias sem venda e estoque para mais dias que a cobertura-alvo, no ritmo do último ano (quantidade ÷ dias cobertos). O capital liberável é o estoque acima da cobertura-alvo, ao custo: o que se libera sem deixar o item faltar. As faixas de dias de estoque começam na primeira faixa (60); o item entre a cobertura-alvo e ela entra só no total.
+3. **Simulador de liberação de caixa** (`simular_liquidacao`). Para os itens da **Urgência** com estoque, custo e preço: a receita do estoque ao preço médio praticado no último ano com venda e o capital ao custo. Cada cenário aplica o desconto e a fração do estoque vendida e dá o caixa e o resultado contra o custo; `desconto_de_equilibrio` é o desconto em que o caixa empata com o custo (negativo: nem sem desconto o estoque paga o custo). Os itens fora saem contados (a confirmar, sem estoque, sem custo, sem preço). É uma tabela de sensibilidade, não uma sugestão de desconto nem uma garantia de venda.
+4. **Auditoria de preço** (`auditar_precos`). No último ano, nas vendas com custo, o preço praticado médio contra custo médio × (1 + markup de referência). A referência é a da **categoria**: o menor entre o markup agregado dela (venda ÷ custo − 1) e a mediana dos markups dos itens, com ao menos 3 itens; o menor dos dois é a escolha conservadora. O consultor pode informar o **markup do segmento** (`markup_informado`), que vale para todos os itens. Nenhuma referência de mercado é inventada: sem categoria com itens suficientes e sem markup informado, o item fica "sem referência". Item com conflito de cadastro fica de fora (a não ser com cabeçalho ambíguo, quando o conflito não é confiável). A diferença de cada item abaixo da referência (fora da tolerância) se separa em `ja_contado_no_recuperavel` (o que o potencial recuperável da Etapa 2 já conta) e `adicional`, para não somar duas vezes. Não considera demanda, concorrência nem promoção, e não é lucro.
+
+**No payload** (`inteligencia`): `versao`, `parametros`, `estoque` (parado e excedente), `simulador`, `auditoria_de_preco` e `definicoes`. Sem a coluna de estoque em nenhum relatório, `estoque` e `simulador` ficam nulos (zero diria "nada parado", o que não se sabe), com aviso. Um dado que a inteligência não consegue ler tira só a seção dela, com aviso: a matriz e os blocos continuam.
+
+**Resumo gravado** (`resumo_inteligencia_json`): só números (capital em estoque, capital e itens parados acima de cada faixa, capital excedente liberável, receita e capital da Urgência, diferença de preço adicional e itens abaixo da referência), sem nome de produto nem de categoria, porque fica depois do expurgo das linhas. Sem a coluna de estoque, os campos de estoque e da Urgência ficam nulos (`com_estoque: false`).
+
+**Memória.** O cálculo roda no processo da aplicação, sobre as linhas já carregadas, em uma passada por produto; as listas saem cortadas em 30 itens. Com 20 mil produtos em dois anos, o pico medido pelo `tracemalloc` fica abaixo de 64 MiB (há teste). O motor (no processo isolado de 384 MiB) só ganhou a data e os períodos.
 
 ## 6. Retenção e expurgo (revisão `6a8f2d4c0e13`)
 
@@ -345,7 +379,17 @@ O potencial recuperável e o estoque parado ficam separados porque não se somam
   - **`GravacaoTests`:** gravação (com as três contagens e os limiares), reenvio, recusas, retriagem e reenvio com os limiares gravados, comandos (`retriar --limiares`, `agendar-expurgo` fora do PostgreSQL), resultado malformado sem erro 500, tetos (inclusive a soma que o arredondamento leva ao teto);
   - **`RotasTests`:** só consultor em todas as rotas (inclusive a JSON), diagnóstico em JSON (cabeçalhos, sem contato, triagem refeita igual à gravada, totais iguais à auditoria do Raio-X, limite, 404), desatualizado e vencido só com o resumo, 503 sem esquema, autorização, 503 com `Retry-After`, 413, expurgo pela tela, lista, erro do motor, 422, retriagem, triagem de versão anterior (itens no bloco gravado, sem motivos), CSRF e 404;
   - **`TravaDeCelulasTests`:** CSV e XLSX com 500.004 células são recusados.
-- `tests/test_leads_avaliacao.py` (10): esquema, restrições, unicidade, índice, downgrade até a revisão que recusa, downgrade da Etapa 2 recusado com dados 11.3 e o upgrade da Etapa 2 sem apagar linha de PDV.
+- `tests/test_leads_avaliacao.py` (12): esquema, restrições, unicidade, índice, downgrade até a revisão que recusa, downgrade da Etapa 2 recusado com dados 11.3, o upgrade da Etapa 2 sem apagar linha de PDV, o downgrade da Etapa 3 recusado em cada caso (linha 11.4, data preenchida, resumo no lead) e aceito sem eles, sem perder linha nem lead, e a CHECK da data.
+- `tests/test_inteligencia_estoque.py` (44, Etapa 3; cada uma de 21 mutações do código, das faixas ao contrato, derruba ao menos um teste):
+  - **`ParametrosTests`:** padrão, gravação só com texto e inteiros, validação e ajustes a partir do texto da consulta (vírgula decimal, expoente, dígito não ASCII, nome desconhecido);
+  - **`PeriodosTests`:** períodos da meta, dias cobertos com e sem lacuna e as fronteiras de cada faixa;
+  - **`EstoqueParadoTests`:** faixas, acumulados, capital, lista, excedente e cobertura-alvo, lacuna, relatório anual, venda só no ano anterior, a fronteira exata de 60 dias, faixas configuráveis e a ordem das linhas;
+  - **`SimuladorTests`:** receita, capital, cenários, equilíbrio (inclusive negativo), itens fora, fração e desconto configuráveis;
+  - **`AuditoriaTests`:** referência pelo agregado e pela mediana, conflito de cadastro com e sem cabeçalho ambíguo, markup informado, tolerância, a parte já contada limitada à diferença e mínimo de itens;
+  - **`ResumoEPayloadTests`:** resumo só com números, campos nulos sem estoque, a seção no payload com os parâmetros, falha isolada (data ilegível, meta sem os períodos) e os avisos;
+  - **`MotorTests`, `ContratoTests` e `VariasLojasTests`** (motor real): data da última venda cortada em hoje, saldo de mês sem venda, períodos com lacuna, a inteligência de ponta a ponta, 18 variantes do contrato recusadas (data, períodos, lojas) e a data de outro ano dentro dos períodos, soma do estoque por loja, a mesma loja escrita de jeitos diferentes, "Unidade" e medidas da loja fora da detecção, a recusa da coluna de loja no lugar do produto e o Raio-X do cliente igual com e sem a coluna de loja;
+  - **`GravacaoTests` e `RotaTests`:** o resumo gravado igual ao recalculado das linhas, a retriagem refazendo o resumo, o resumo que falha sem impedir a gravação, os parâmetros pela consulta, o 400 e o acesso só do consultor;
+  - **`MemoriaTests`:** 20 mil produtos em dois anos abaixo de 64 MiB.
 - `tests/test_cadastro_regression.py` (3): o Raio-X e a análise mensal com NCM, categoria, situação, bonificação, devolução e estoque, iguais aos do `53020e6`.
 - Bordas da Etapa 2, escritas depois da verificação adversarial (as lacunas que o teste de mutação achou e as correções):
   - `tests/test_etapa2_triagem_bordas.py` (40, puros): a janela dos mesmos meses (parcial, vazia, ano anterior mais antigo, ano não mensal), o giro de lançamento, o estoque parado em qualquer bloco e no impacto, as fronteiras da margem negativa recorrente, o estoque informado, a ordem por impacto, a margem de referência, as fronteiras exatas e os 23 limiares padrão, o diagnóstico com dado gravado fora do formato (meta, ajustes, limiares, resumos, números não finitos), as linhas de outro lead e o teto de categorias;
@@ -353,7 +397,7 @@ O potencial recuperável e o estoque parado ficam separados porque não se somam
   - `tests/test_etapa2_contrato_gravacao.py` (21): o contrato com cada campo trocado (contagens, texto não imprimível, inteiro enorme, período invertido, teto da meta, JSON aninhado demais vindo do processo isolado), a ida e volta da staging, o cabeçalho ambíguo na gravação e na retriagem, a retenção de 30 dias na retriagem (função, tela e comando), os limiares de outra versão ou ilegíveis, o teto do vazamento total, o log só com identificadores, a lista sem o esquema, o resumo e a meta fora do formato e o downgrade com lead expirado que guarda as colunas da Etapa 2.
 
 **PostgreSQL real** (cluster temporário; precisa de `NEXO_TEST_POSTGRES_BIN`):
-- `tests/test_leads_postgresql.py`, com 27 verificações. Inclui o agendamento, a gravação pelo serviço (com as contagens e os limiares), as CHECKs da Etapa 2 (cada recusa com o nome da restrição) e o downgrade da `7c4e2a9b5d31`: recusado com dados 11.3, aceito sem eles mantendo as linhas antigas, e o upgrade de novo com os padrões do servidor.
+- `tests/test_leads_postgresql.py`, com 31 verificações. Inclui o agendamento, a gravação pelo serviço (com as contagens e os limiares), as CHECKs da Etapa 2 (cada recusa com o nome da restrição) e o downgrade da `7c4e2a9b5d31`: recusado com dados 11.3, aceito sem eles mantendo as linhas antigas, e o upgrade de novo com os padrões do servidor. Da Etapa 3: a data e o resumo gravados pelo serviço, a CHECK da data e o downgrade da `9b3e5d7f1a28` recusado com dados da 11.4 (tudo desfeito na mesma transação) e aceito sem eles, sem perder linha nem lead.
 - **Ressalva:** o PostgreSQL local não tem pg_cron. O ensaio usa um esquema `cron` simulado, com `schedule`, `unschedule` e a tabela `job`. Isso prova a migração, mas não o pg_cron real do Supabase.
 
 **Só no Linux:** o worker real, que precisa do módulo `resource`, roda em `ContratoTests.test_worker_real_devolve_o_contrato`. Neste Windows, esse teste é pulado.
@@ -362,12 +406,12 @@ O potencial recuperável e o estoque parado ficam separados porque não se somam
 
 ## 9. Aplicação (só com autorização)
 
-Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13` → `7c4e2a9b5d31`, que é a `head`. Todas vêm depois da `b3e9d6c1f7a2`.
+Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13` → `7c4e2a9b5d31` → `9b3e5d7f1a28`, que é a `head`. Todas vêm depois da `b3e9d6c1f7a2`.
 
 1. **Backup.** Faça o backup do banco e confira que dá para voltar (`Docs/OPERACAO_BACKUP_RESTAURACAO.md`).
    - Antes de publicar o código, confira no painel do Render que `ETL_MAX_CELLS_PER_SHEET`, se existir, vale no máximo 500000. O teto passou a ser rígido, e um valor acima dele (o teto antigo era 1.000.000) impede o app de subir.
 2. **pg_cron.** Opcional, mas recomendado: habilite a extensão no Supabase **antes** da `6a8f2d4c0e13`. Se for habilitada depois, rode `flask leads agendar-expurgo`.
-3. **Prévia.** Rode `flask db upgrade b3e9d6c1f7a2:7c4e2a9b5d31 --sql` (ou só a Etapa 2, se as anteriores já estiverem aplicadas: `flask db upgrade 6a8f2d4c0e13:7c4e2a9b5d31 --sql`).
+3. **Prévia.** Rode `flask db upgrade b3e9d6c1f7a2:9b3e5d7f1a28 --sql` (ou só as Etapas 2 e 3, se as anteriores já estiverem aplicadas: `flask db upgrade 6a8f2d4c0e13:9b3e5d7f1a28 --sql`).
 4. **Aplicação.** Rode `flask db upgrade`.
 5. **Conferência.**
    - Estrutura:
@@ -379,7 +423,7 @@ Ordem: `f4c2a8e1d9b6` → `5e1b9c3a7d20` → `6a8f2d4c0e13` → `7c4e2a9b5d31`, 
      - o detalhe mostra a matriz e os blocos;
      - `/admin/leads/<id>/diagnostico.json` responde com `"situacao": "atual"`.
 
-O código pode ser publicado antes das migrações: a tela mostra o aviso e não lê arquivo. Leads gravados antes da Etapa 2 (regras 11.2) aparecem como "desatualizados" até um novo envio: os blocos e os itens gravados ficam, sem matriz nem motivos novos. A avaliação roda no worker isolado do ETL e só funciona no Linux do Render.
+O código pode ser publicado antes das migrações: a tela mostra o aviso e não lê arquivo. Leads gravados antes da Etapa 2 (regras 11.2) ou da Etapa 3 (regras 11.3) aparecem como "desatualizados" até um novo envio: os blocos e os itens gravados ficam, sem matriz, motivos novos nem inteligência. A avaliação roda no worker isolado do ETL e só funciona no Linux do Render.
 
 ## 10. Limitações e pendências do dono
 
@@ -404,7 +448,12 @@ O código pode ser publicado antes das migrações: a tela mostra o aviso e não
 
   Por isso, recomende enviar por ano ou usar CSV. Medir no Render antes de usar com leads reais. Outras medidas: o detalhe do lead e a rota JSON refazem a carga das linhas, a triagem, a matriz e os itens a cada visita, de 2 a 4 s com 8 a 16 mil linhas em CPU cheia (no Render, de 15 a 25 s para os maiores leads que cabem no prazo do processo isolado); a gravação usa cerca de 90 MB de memória transitória para 24,6 mil linhas; o `validate_input` antes da leitura repete uma passada do XLSX dentro dos 120 s.
 - **Produto renomeado entre os anos.** A chave do produto é o nome normalizado. Quando o ERP troca a descrição de um código entre os anos ("CAFE PILAO 500G" passa a "CAFE PILAO TRADICIONAL 500G"), o nome antigo aparece como parado e o novo como lançamento, sem conflito de cadastro: o conflito é apurado dentro de cada relatório, como no Raio-X. Decisão do dono: tratar a troca de descrição de um mesmo código entre relatórios como inconsistência cadastral (código reaproveitado para outro produto ou produto renomeado).
-- **Item só com estoque.** O produto listado num ano só com estoque, sem venda, não ganha linha nesse ano: a triagem usa o estoque do último ano em que ele vendeu.
+- **Item só com estoque.** O produto listado num ano só com estoque, sem venda, não ganha linha nesse ano: a triagem usa o estoque do último ano em que ele vendeu. O produto que **nunca vendeu** no envio não tem linha e não aparece no estoque parado.
+- **Estoque não é inventário.** O estoque da inteligência é o saldo que o relatório de vendas imprimiu; os dias sem venda são um piso (só os dias cobertos por relatório). Conferir com o inventário antes de liquidar.
+- **"Há mais de 60 dias".** As faixas contam a partir do número da faixa (60 dias ou mais). Para "mais de 60" no sentido estrito, use as faixas `(61, 91, 181)`.
+- **Markup do segmento.** Não há tabela de markup por segmento no sistema, e nenhuma foi inventada: a referência é a da própria categoria do lead (o menor entre o agregado e a mediana) ou o markup que o consultor informar na consulta. Decisão do dono: se o markup do segmento deve vir de uma tabela (fonte, segmentos, revisão), ela precisa ser definida e versionada.
+- **Várias lojas.** O relatório com várias lojas é lido como a rede: estoque somado, matriz e auditoria sem separação por loja, com aviso (a variação de preço entre lojas pode ser preço regional). Separar por loja (ou PDV) multiplicaria as linhas da staging pelo número de lojas, perto do teto de 4 MiB do processo isolado e do prazo de 120 s; ficou para decisão do dono, com a medida no Render. Caixas e terminais do mesmo PDV não são lojas.
+- **Simulador.** É uma projeção sobre o preço médio praticado, não uma recomendação de desconto: não considera elasticidade, validade nem custo de oportunidade do espaço.
 - **Captação pública.** A rota pública ficou de fora. A fase 1 é só para o consultor, e a abertura depende da LGPD, de anti-abuso (captcha e limite por IP) e da capacidade.
 - **Conversão do lead em cliente.** O status `convertido` existe e bloqueia o reenvio, mas ainda não existe o fluxo que converte o lead.
 - **Envio em lotes.** Mandar um ano por vez e juntar os anos num mesmo lead ficou fora. Hoje, cada envio substitui o anterior.

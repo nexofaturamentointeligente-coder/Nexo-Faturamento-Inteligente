@@ -1354,6 +1354,10 @@ class LeadAvaliacao(db.Model):
     # triagem (só números, triagem_cenario.Limiares.para_dict). Nulas nos leads de antes dela.
     itens_omissao_erp: Mapped[Optional[int]] = mapped_column(Integer)
     limiares_triagem_json: Mapped[Optional[str]] = mapped_column(Text)
+    # Revisão 9b3e5d7f1a28 (Etapa 3): o resumo numérico da inteligência de estoque e de preço (capital
+    # parado por faixa, excedente, Urgência a preço médio e ao custo, diferença de preço), sem nome de
+    # produto nem de categoria; fica depois do expurgo, como os resumos dos blocos.
+    resumo_inteligencia_json: Mapped[Optional[str]] = mapped_column(Text)
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)
@@ -1462,6 +1466,9 @@ class BrainstormingDadosPdv(db.Model):
     # Relatórios do ano desde a primeira venda do produto no ano: a base do giro de um lançamento.
     relatorios_desde_primeira_venda: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
                                                                  server_default=text("0"))
+    # Revisão 9b3e5d7f1a28 (Etapa 3, lead-2026-11.4): o fim (até o envio) do último relatório do ano em que
+    # o produto vendeu, base dos dias sem venda. Nulo nas linhas de antes.
+    fim_ultimo_relatorio_com_venda: Mapped[Optional[date]] = mapped_column(Date)
 
     lead = relationship("LeadAvaliacao", back_populates="dados_pdv")
 
@@ -1488,6 +1495,8 @@ class BrainstormingDadosPdv(db.Model):
                         name="ck_brainstorming_dados_pdv_etapa2_meses"),
         CheckConstraint("categoria_produto IS NULL OR length(trim(categoria_produto)) > 0",
                         name="ck_brainstorming_dados_pdv_categoria"),
+        CheckConstraint("fim_ultimo_relatorio_com_venda IS NULL OR fim_ultimo_relatorio_com_venda "
+                        "BETWEEN '2000-01-01' AND '2100-12-31'", name="ck_brainstorming_dados_pdv_ultima_venda"),
         Index("ix_brainstorming_dados_pdv_lead", "lead_id"),
         Index("ix_brainstorming_dados_pdv_criado_em", "criado_em"),
     )

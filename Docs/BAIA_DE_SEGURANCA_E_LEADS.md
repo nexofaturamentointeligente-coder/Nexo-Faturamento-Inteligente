@@ -153,6 +153,7 @@ Esta revisão é só o esquema, a retenção e o expurgo. O restante está em `D
 - o processamento no worker isolado;
 - a staging ampliada (revisão `5e1b9c3a7d20`);
 - as colunas da Etapa 2: cadastro, ajustes, contagens da triagem e limiares (revisão `7c4e2a9b5d31`);
+- as colunas da Etapa 3: a data da última venda na staging e o resumo numérico da inteligência no lead (revisão `9b3e5d7f1a28`);
 - a triagem, a matriz por categoria e o diagnóstico em JSON;
 - a tela do consultor (`/admin/leads`).
 
@@ -160,7 +161,7 @@ Esta revisão é só o esquema, a retenção e o expurgo. O restante está em `D
 
 - `tests/test_security_gatekeeper.py` (40): assinaturas e disfarces, BOM não reconhecido, fórmula depois de separador interno, cópia XLSX compacta, recusa por tamanho com orientação própria, XLS verdadeiro, UTF-16, neutralização sem mudar número (inclusive quantidade com sinal e unidade) nem chave de produto, KPIs iguais aos da leitura de antes da Baia, idempotência, cópia neutralizada de CSV e XLSX conferida pelo motor, macros/ActiveX/OLE/vínculos descartados, onze variantes com conteúdo ativo fora dos caminhos de costume (aba renomeada, aba com outra extensão, aba em UTF-16, aba no lugar do tema, dos estilos em UTF-16 ou das propriedades, OLE fora de xl/embeddings, OLE com nome de printerSettings, relação externa, DDE fora de xl/externalLinks e nome definido com DDE), título que começa com `<`, cópia perto do teto, estrutura mínima, recusa sem deixar arquivo, teto de 50 MiB em blocos, log sem conteúdo, envio do cliente e do consultor pelo portal, Raio-X e o worker real (só no Linux).
 - `tests/test_leads_avaliacao.py` (10, SQLite): colunas e índices, cifrão, padrões, restrições, CASCADE, regra do expurgo, comando (simulação e aplicação), downgrade, downgrade da Etapa 2 recusado com dados novos e upgrade da Etapa 2 sem apagar linha de PDV.
-- `tests/test_leads_postgresql.py` (27 verificações em PostgreSQL real): RLS, políticas, privilégios, UUID e padrões do banco, cifrão pelo ORM e por SQL, restrições, política restritiva com uma linha gravada, GRANT e uma política permissiva intrusa, gravação pelo serviço da Avaliação de Cenário, função endurecida e fora do alcance da Data API, mesmo resultado da função e da regra em SQLAlchemy (com o resumo mantido), expurgo concorrente com quem grava o lead, comando, CASCADE, downgrade recusado e aceito, novo upgrade, o job do expurgo num `pg_cron` simulado (agendado no upgrade, removido no downgrade e agendado de novo) e a Etapa 2 (CHECKs novas e o downgrade da `7c4e2a9b5d31` recusado com dados 11.3 e aceito sem eles).
+- `tests/test_leads_postgresql.py` (31 verificações em PostgreSQL real): RLS, políticas, privilégios, UUID e padrões do banco, cifrão pelo ORM e por SQL, restrições, política restritiva com uma linha gravada, GRANT e uma política permissiva intrusa, gravação pelo serviço da Avaliação de Cenário, função endurecida e fora do alcance da Data API, mesmo resultado da função e da regra em SQLAlchemy (com o resumo mantido), expurgo concorrente com quem grava o lead, comando, CASCADE, downgrade recusado e aceito, novo upgrade, o job do expurgo num `pg_cron` simulado (agendado no upgrade, removido no downgrade e agendado de novo) a Etapa 2 (CHECKs novas e o downgrade da `7c4e2a9b5d31` recusado com dados 11.3 e aceito sem eles) e a Etapa 3 (a data e o resumo gravados pelo serviço, a CHECK da data e o downgrade da `9b3e5d7f1a28` recusado com dados 11.4 e aceito sem eles).
 - Ajustados: `tests/test_backup_restore.py` (32 tabelas e uma linha de cada tabela nova) e `tests/test_contratos_postgresql.py` (tabelas posteriores).
 
 ## 4. Aplicação (só com autorização)
@@ -170,7 +171,7 @@ Esta revisão é só o esquema, a retenção e o expurgo. O restante está em `D
 3. Aplicar: `flask db upgrade f4c2a8e1d9b6`.
 4. Conferir: as duas tabelas, RLS ligado, 4 políticas, nenhum privilégio de `anon`/`authenticated`, a função e `has_function_privilege('anon', 'expurgar_brainstorming_pdv(integer)', 'EXECUTE') = false`.
 
-O código da Baia não depende da migração e funciona antes dela. A tela `/admin/leads` depende também das revisões `5e1b9c3a7d20` (staging ampliada) e `7c4e2a9b5d31` (Etapa 2); antes delas, a tela mostra o aviso de migrações pendentes e não lê arquivo nenhum. A `6a8f2d4c0e13`, entre as duas, só agenda o expurgo no `pg_cron`. Aplique as três, nessa ordem; a `7c4e2a9b5d31` é a `head`. Ver `Docs/AVALIACAO_DE_CENARIO.md`, seção 9.
+O código da Baia não depende da migração e funciona antes dela. A tela `/admin/leads` depende também das revisões `5e1b9c3a7d20` (staging ampliada), `7c4e2a9b5d31` (Etapa 2) e `9b3e5d7f1a28` (Etapa 3); antes delas, a tela mostra o aviso de migrações pendentes e não lê arquivo nenhum. A `6a8f2d4c0e13`, entre as duas primeiras, só agenda o expurgo no `pg_cron`. Aplique as quatro, nessa ordem; a `9b3e5d7f1a28` é a `head`. Ver `Docs/AVALIACAO_DE_CENARIO.md`, seção 9.
 
 ## 5. Pendências do dono
 

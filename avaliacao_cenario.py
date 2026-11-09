@@ -31,6 +31,7 @@ from sqlalchemy import delete, insert, select, update
 
 import avaliacao_motor
 from etl_inputs import ETLInputError
+import inteligencia_estoque
 import etl_runtime
 from extensions import db
 from horario import agora_utc
@@ -82,6 +83,9 @@ def quantizar(linhas: dict) -> list:
                 linha[nome] = _decimal(linha[nome], _CENTAVO)
         if linha.get("estoque_final") is not None:
             linha["estoque_final"] = _decimal(linha["estoque_final"], _MILESIMO)
+        for nome in avaliacao_motor.COLUNAS_DATA:
+            if linha.get(nome) is not None:
+                linha[nome] = date.fromisoformat(linha[nome])
         indice = linha.pop("categoria", None)
         linha["categoria_produto"] = categorias[indice] if indice is not None else None
         saida.append(linha)
@@ -120,6 +124,16 @@ def _conferir_tetos(registros: list, vazamento_total: Decimal) -> None:
 
 def _json(valor) -> str:
     return json.dumps(valor, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def resumo_da_inteligencia(linhas: list, cobertura, triagem, meta: dict) -> str | None:
+    """O resumo numérico da inteligência de estoque e de preço (sem nome de produto nem de categoria),
+    gravado no lead para a lista mostrar sem refazer nada. Meta sem os períodos cobertos: nada."""
+    try:
+        return _json(inteligencia_estoque.resumo(inteligencia_estoque.calcular(linhas, cobertura, triagem, meta)))
+    except (ValueError, KeyError, TypeError, AttributeError, ArithmeticError, RecursionError):
+        # O resumo é auxiliar: um dado que ele não lê não impede a gravação do lead.
+        return None
 
 
 def _aplicar_triagem(lead: LeadAvaliacao, triagem, vazamento_total: Decimal) -> None:
@@ -193,6 +207,7 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
         meta = resultado["meta"]
         cobertura = triagem_cenario.Cobertura.do_envio(meta)
         triagem = triagem_cenario.triar(linhas, cobertura, limiares)
+        resumo_inteligencia = resumo_da_inteligencia(linhas, cobertura, triagem, resultado["meta"])
         registros = _registros(linhas, triagem, resultado["versao"], cobertura)
         vazamento_total = sum((r["vazamento_estimado_reais"] for r in registros), Decimal("0.00"))
         raio = resultado["raio_x"]
@@ -208,7 +223,7 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
     agora = agora_utc()
     try:
         lead = _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, agora, score, recomendacao,
-                       periodo_inicio, periodo_fim, meta, meta_json, vazamento_total)
+                       periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia)
     except LeadIndisponivel:
         raise
     except (ValueError, UnicodeError):
@@ -219,7 +234,7 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
 
 
 def _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, agora, score, recomendacao,
-            periodo_inicio, periodo_fim, meta, meta_json, vazamento_total) -> LeadAvaliacao:
+            periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia) -> LeadAvaliacao:
     with db.session.begin_nested():
         if lead_id is None:
             lead = LeadAvaliacao(**contato, registrado_por=registrado_por, consentimento_em=agora)
@@ -244,6 +259,7 @@ def _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, ago
         lead.periodo_fim = periodo_fim
         lead.arquivos = meta["arquivos"]
         lead.meta_json = meta_json
+        lead.resumo_inteligencia_json = resumo_inteligencia
         _aplicar_triagem(lead, triagem, vazamento_total)
         lead.status = "concluido"
         db.session.flush()
@@ -297,10 +313,11 @@ def retriar(lead_id, limiares=None, *, agora=None) -> LeadAvaliacao:
             raise LeadIndisponivel("Os limiares gravados no lead estão ilegíveis: refaça com flask leads retriar "
                                    "<id> --limiares ou envie os relatórios de novo.") from None
         try:
-            cobertura = triagem_cenario.Cobertura.do_envio(json.loads(lead.meta_json or "{}"))
+            meta = json.loads(lead.meta_json or "{}")
+            cobertura = triagem_cenario.Cobertura.do_envio(meta)
             linhas = [linha_da_staging(r) for r in registros]
             triagem = triagem_cenario.triar(linhas, cobertura, limiares)
-        except (ValueError, RecursionError):
+        except (ValueError, RecursionError, TypeError, AttributeError):
             raise LeadIndisponivel("O lead não guarda os metadados do envio: envie os relatórios de novo.") from None
         confiavel = not cobertura.cabecalho_ambiguo
         mudancas = []
@@ -311,6 +328,7 @@ def retriar(lead_id, limiares=None, *, agora=None) -> LeadAvaliacao:
         _conferir_tetos(mudancas, vazamento_total)
         db.session.execute(update(BrainstormingDadosPdv), mudancas)
         _aplicar_triagem(lead, triagem, vazamento_total)
+        lead.resumo_inteligencia_json = resumo_da_inteligencia(linhas, cobertura, triagem, meta)
         db.session.flush()
     lead.aviso_limiares = aviso_limiares
     return lead

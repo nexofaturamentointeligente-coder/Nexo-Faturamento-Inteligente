@@ -31,10 +31,13 @@ Regras próprias do lead:
         ambíguo ("Cód. NCM" lido como código do produto) não alimenta NCM nem categoria;
       - os ajustes de bonificação e devolução do produto (os do CMV líquido do Raio-X); os de produto
         sem venda no ano vão para a meta, por ano, para os totais fecharem com o Raio-X.
+  - Etapa 3 (lead-2026-11.4): o fim (até hoje) do último relatório do ano em que o produto vendeu
+    (fim_ultimo_relatorio_com_venda), base dos dias sem venda da inteligência de estoque.
   - Cobertura de cada ano (meta): relatórios, dias cobertos pelos períodos, se todos os relatórios
     do ano são mensais e, por ano, quantos trazem custo, NCM, categoria e estoque e quantos estão
-    completos. É a base do ritmo de venda e de cada verificação da triagem: sem a coluna, a
-    verificação não se aplica.
+    completos; e os períodos cobertos do envio (periodos_cobertos: [início, fim até hoje], contíguos
+    unidos), que dizem quantos dias cobertos há depois de uma data. É a base do ritmo de venda e de cada
+    verificação da triagem: sem a coluna, a verificação não se aplica.
 
 Saída (JSON; o worker tem teto rígido de 4 MiB, conferido aqui antes de devolver):
   - "raio_x": o resultado de raio_x.diagnosticar para os mesmos arquivos (o resumo do lead sai
@@ -61,7 +64,7 @@ from etl_limits import get_limits
 from etl_processor import LIMITE_CATEGORIA
 import raio_x
 
-VERSAO_REGRAS_LEAD = "lead-2026-11.3"
+VERSAO_REGRAS_LEAD = "lead-2026-11.4"
 ANO_MINIMO = 2000
 ANO_MAXIMO_DO_BANCO = 2100  # ck_brainstorming_dados_pdv_ano
 CHAVES_RESULTADO = frozenset({"versao", "raio_x", "linhas", "meta"})
@@ -75,6 +78,8 @@ CHAVES_META = frozenset({
     "relatorios_com_custo_por_ano", "relatorios_com_ncm_por_ano", "relatorios_com_categoria_por_ano",
     "relatorios_com_estoque_por_ano", "relatorios_completos_por_ano", "dias_mesmos_meses_por_ano",
     "relatorios_cabecalho_ambiguo", "ajustes_sem_venda_por_ano",
+    # Etapa 3: os períodos cobertos do envio (datas, sem texto) e os relatórios com várias lojas.
+    "periodos_cobertos", "relatorios_varias_unidades",
 })
 # Contagens de relatórios por ano (inteiros de 0 ao número de relatórios do ano).
 CHAVES_RELATORIOS_POR_ANO = (
@@ -99,6 +104,8 @@ COLUNAS = (
     "meses_completos", "quantidade_mesmos_meses", "estoque_final", "categoria", "ncm_ausente",
     "categoria_ausente", "custo_bonificacoes", "custo_devolucoes", "devolucoes_com_custo",
     "relatorios_desde_primeira_venda",
+    # Etapa 3 (lead-2026-11.4).
+    "fim_ultimo_relatorio_com_venda",
 )
 # Tipo de cada coluna, para a conferência do contrato (etl_runtime.validar_avaliacao) e a gravação.
 COLUNAS_DINHEIRO = ("valor_venda_bruto", "faturamento_com_custo", "custo_total", "perda", "vazamento_preco",
@@ -109,6 +116,7 @@ COLUNAS_CONTAGEM = ("linhas", "meses", "meses_com_custo", "meses_margem_negativa
                     "relatorios_desde_primeira_venda")
 COLUNAS_MARCA = ("variacao", "conflito_cadastral", "estoque_negativo", "ultimo_mes_negativo", "ncm_ausente",
                  "categoria_ausente")
+COLUNAS_DATA = ("fim_ultimo_relatorio_com_venda",)
 # Folga para o envelope do worker ({"ok": true, "result": ..., "runtime": {...}}).
 _FOLGA_ENVELOPE = 4096
 # Maior valor absoluto que cada coluna numérica da staging guarda (NUMERIC(p, s) do banco:
@@ -192,6 +200,19 @@ def _janela_mesmos_meses(resumos: list, anos: dict, hoje: date) -> tuple[frozens
     return frozenset(dentro), dias
 
 
+def _periodos_cobertos(resumos: list, hoje: date) -> list:
+    """[[início, fim], ...] em ordem, com o fim cortado em hoje e os períodos contíguos unidos (os
+    sobrepostos já foram recusados)."""
+    unidos: list = []
+    for resumo in sorted(resumos, key=lambda r: r["inicio"]):
+        inicio, fim = resumo["inicio"], min(resumo["fim"], hoje)
+        if unidos and (inicio - unidos[-1][1]).days <= 1:
+            unidos[-1][1] = max(unidos[-1][1], fim)
+        else:
+            unidos.append([inicio, fim])
+    return [[inicio.isoformat(), fim.isoformat()] for inicio, fim in unidos]
+
+
 def _recusar_sobreposicao(resumos: list) -> None:
     """Dois relatórios com o mesmo mês somariam a venda duas vezes na matriz do lead."""
     anterior = None
@@ -240,7 +261,8 @@ def _cadastro(resumo: dict) -> dict:
     info = resumo.get("_cadastro") or {}
     confiavel = not info.get("ambiguo")
     return {"ncm": bool(info.get("ncm")) and confiavel, "categoria": bool(info.get("categoria")) and confiavel,
-            "estoque": bool(info.get("estoque")), "ambiguo": bool(info.get("ambiguo"))}
+            "estoque": bool(info.get("estoque")), "ambiguo": bool(info.get("ambiguo")),
+            "varias_unidades": bool(info.get("varias_unidades"))}
 
 
 def _centavos(valor) -> int:
@@ -315,6 +337,7 @@ def _linhas_produto_ano(por_arquivo, resumos: list, anos: dict, hoje: date) -> t
     negativos = grupos["estoque_negativo"].any().reindex(indice).to_numpy()
     meses = grupos["arquivo"].nunique().reindex(indice).to_numpy()
     primeiros = grupos["arquivo"].first().reindex(indice).to_numpy()
+    ultimos = grupos["arquivo"].last().reindex(indice).to_numpy()
     com_custo = base[base["_com_custo"]].groupby(["ano_exercicio", "produto"], sort=True)
     ultimo_negativo = com_custo["_negativo"].last().reindex(indice).fillna(False).to_numpy()
     # Último saldo informado de cada produto no ano, em ordem cronológica dos relatórios do ano, inclusive
@@ -382,6 +405,7 @@ def _linhas_produto_ano(por_arquivo, resumos: list, anos: dict, hoje: date) -> t
             bool(ultimo_negativo[i]), int(coluna["_completo"][i]), _finito(coluna["_qtd_janela"][i], 3), estoque,
             categoria, bool(ncm_avaliado[i] and not ncm_ok[i]), bool(cat_avaliada[i] and not cat_ok[i]),
             _finito(bonificacao, 2), _finito(devolucao, 2), _finito(receita_devolvida, 2), int(desde_a_primeira),
+            min(por_indice[int(ultimos[i])]["fim"], hoje).isoformat(),
         ])
     ajustes_sem_venda = {ano: {chave: _finito(valores[posicao], 2) for posicao, chave in enumerate(CHAVES_AJUSTES)}
                          for ano, valores in sem_venda.items()}
@@ -445,6 +469,8 @@ def _meta(resumos: list, anos: dict, hoje: date, ajustes_sem_venda: dict) -> dic
         "dias_mesmos_meses_por_ano": dict(sorted(dias_janela.items())),
         "relatorios_cabecalho_ambiguo": sum(1 for r in resumos if _cadastro(r)["ambiguo"]),
         "ajustes_sem_venda_por_ano": dict(sorted(ajustes_sem_venda.items())),
+        "periodos_cobertos": _periodos_cobertos(resumos, hoje),
+        "relatorios_varias_unidades": sum(1 for r in resumos if _cadastro(r)["varias_unidades"]),
     }
     meta.update({chave: dict(sorted(contagens[chave].items())) for chave in CHAVES_RELATORIOS_POR_ANO})
     return meta
@@ -456,6 +482,12 @@ def avaliar_cenario(caminhos: list, *, ano_maximo: int | None = None, hoje: date
     hoje = date.today() if hoje is None else hoje
     ano_maximo = hoje.year if ano_maximo is None else ano_maximo
     anos = {r["indice"]: _ano_do_arquivo(r, ano_maximo, hoje) for r in resumos}
+    for resumo in resumos:
+        if (resumo.get("_cadastro") or {}).get("produto_de_loja"):
+            raise ETLInputError("avaliacao_cabecalho_loja", (
+                f"Arquivo {resumo['indice'] + 1}: a coluna lida como código ou descrição do produto é de loja ou "
+                "filial (por exemplo, \"Descrição Loja\" antes da descrição do produto). Exporte o relatório com as "
+                "colunas de loja depois das do produto, ou sem elas."))
     _recusar_sobreposicao(resumos)
     linhas, categorias, ajustes_sem_venda = _linhas_produto_ano(por_arquivo, resumos, anos, hoje)
     conferir_tetos(linhas)

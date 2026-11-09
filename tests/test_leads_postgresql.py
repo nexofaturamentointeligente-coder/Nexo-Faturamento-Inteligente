@@ -41,9 +41,10 @@ from tests.test_contratos_postgresql import ROOT, TOOLS, _PrivateCluster, _safe_
 
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
 # Head das tabelas de lead: a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging,
-# 6a8f2d4c0e13 agenda o expurgo no pg_cron e 7c4e2a9b5d31 (Etapa 2) acrescenta as colunas de cadastro,
-# ajustes e limiares.
-REVISAO_LEADS = "7c4e2a9b5d31"
+# 6a8f2d4c0e13 agenda o expurgo no pg_cron, 7c4e2a9b5d31 (Etapa 2) acrescenta as colunas de cadastro,
+# ajustes e limiares e 9b3e5d7f1a28 (Etapa 3), a data da última venda e o resumo da inteligência.
+REVISAO_LEADS = "9b3e5d7f1a28"
+REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
 COLUNAS_DA_ETAPA_2 = {
     "brainstorming_dados_pdv": {
@@ -55,6 +56,9 @@ COLUNAS_DA_ETAPA_2 = {
 }
 CHECKS_DA_ETAPA_2 = {"ck_brainstorming_dados_pdv_etapa2_somas", "ck_brainstorming_dados_pdv_etapa2_meses",
                      "ck_brainstorming_dados_pdv_categoria", "ck_lead_avaliacao_omissao"}
+COLUNAS_DA_ETAPA_3 = {"brainstorming_dados_pdv": {"fim_ultimo_relatorio_com_venda"},
+                      "lead_avaliacao": {"resumo_inteligencia_json"}}
+CHECKS_DA_ETAPA_3 = {"ck_brainstorming_dados_pdv_ultima_venda"}
 JOB_DO_EXPURGO = ("nexo_expurgo_leads_pdv", "15 6 * * *", "SELECT * FROM public.expurgar_brainstorming_pdv(30)")
 # O pg_cron do Supabase, reduzido ao que a revisão 6a8f2d4c0e13 usa: o ensaio prova o agendamento sem
 # instalar a extensão no cluster temporário.
@@ -93,6 +97,9 @@ CHECKS = (
     "purge_job_removed_on_downgrade", "purge_job_back_on_upgrade",
     # 5. Etapa 2
     "etapa2_constraints_enforced", "etapa2_downgrade_refused_with_new_data", "etapa2_downgrade_and_upgrade_again",
+    # 6. Etapa 3
+    "etapa3_service_writes_dates_and_summary", "etapa3_constraints_enforced", "etapa3_downgrade_refused_with_new_data",
+    "etapa3_downgrade_and_upgrade_again",
 )
 
 
@@ -151,6 +158,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_migracao()
         self._etapa_servico()
         self._etapa_avaliacao_etapa_2()
+        self._etapa_avaliacao_etapa_3()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
         self._etapa_downgrade()
@@ -342,6 +350,11 @@ class _ClusterDosLeads(_PrivateCluster):
         self.check("etapa2_constraints_enforced", recusas_certas and aceitos == 4, f"recusas={recusas} aceitos={aceitos}")
 
         self.stage = "downgrade da Etapa 2 com dados das regras novas"
+        # Sem dado da Etapa 3, a 9b3e5d7f1a28 desce na mesma transação: a recusa é a da 7c4e2a9b5d31 (linhas
+        # das regras lead-2026-11.3 e o lead com itens_omissao_erp).
+        self._executar("UPDATE brainstorming_dados_pdv SET versao_regras = 'lead-2026-11.3', "
+                       "fim_ultimo_relatorio_com_venda = NULL")
+        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL")
         antes = self._contagens()
         try:
             self._migrar(downgrade, REVISAO_ANTES_DA_ETAPA_2)
@@ -377,6 +390,89 @@ class _ClusterDosLeads(_PrivateCluster):
                    and [tuple(l) for l in padroes] == [(0, False, Decimal("0.00"), None, None)]
                    and self._jobs() == [JOB_DO_EXPURGO],
                    f"colunas={colunas_depois} checks={checks_depois} ficou={ficou} padroes={padroes}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+    # ------------------------------------------------- 6. Etapa 3 (9b3e5d7f1a28)
+    def _colunas_e_checks_da_etapa_3(self):
+        colunas = {tabela: {nome for (nome,) in self._sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = :t", t=tabela)} & COLUNAS_DA_ETAPA_3[tabela] for tabela in COLUNAS_DA_ETAPA_3}
+        checks = {nome for (nome,) in self._sql(
+            "SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname = ANY(:nomes)",
+            nomes=sorted(CHECKS_DA_ETAPA_3))}
+        return colunas, checks
+
+    def _etapa_avaliacao_etapa_3(self):
+        from datetime import date
+        from flask_migrate import downgrade, upgrade
+        from sqlalchemy.exc import IntegrityError
+
+        self.stage = "gravação da Etapa 3 pelo serviço"
+        id_lead = self._registrar_pelo_servico()
+        linhas = [tuple(l) for l in self._sql(
+            "SELECT ano_exercicio, versao_regras, fim_ultimo_relatorio_com_venda FROM brainstorming_dados_pdv "
+            "WHERE lead_id = :i ORDER BY ano_exercicio, fim_ultimo_relatorio_com_venda", i=str(id_lead))]
+        bruto = self._sql("SELECT resumo_inteligencia_json FROM lead_avaliacao WHERE id = :i", i=str(id_lead))[0][0]
+        try:
+            resumo = json.loads(bruto)
+        except (TypeError, ValueError):
+            resumo = None
+        # Novembro de 2024 e janeiro de 2025: a data é o fim do último relatório do ano com venda; os
+        # relatórios não trazem estoque, então o resumo diz isso (nulo, e não zero).
+        esperado = ([(2024, "lead-2026-11.4", date(2024, 11, 30))] * 2
+                    + [(2025, "lead-2026-11.4", date(2025, 1, 31))] * 2)
+        self.check("etapa3_service_writes_dates_and_summary",
+                   linhas == esperado and isinstance(resumo, dict)
+                   and resumo.get("versao") == "inteligencia-lead-2026-11.1" and resumo.get("com_estoque") is False
+                   and resumo.get("capital_em_estoque") is None and "itens_abaixo_do_preco_de_referencia" in resumo,
+                   f"linhas={linhas} resumo={str(resumo)[:200]}")
+
+        self.stage = "CHECK da Etapa 3"
+        recusas = []
+        for valor in (date(1999, 12, 31), date(2101, 1, 1)):
+            try:
+                self._executar("UPDATE brainstorming_dados_pdv SET fim_ultimo_relatorio_com_venda = :d", d=valor)
+                recusas.append(None)
+            except IntegrityError as erro:
+                recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
+        self._executar("UPDATE brainstorming_dados_pdv SET fim_ultimo_relatorio_com_venda = :d", d=date(2000, 1, 1))
+        aceitos = self._sql("SELECT count(*) FROM brainstorming_dados_pdv "
+                            "WHERE fim_ultimo_relatorio_com_venda = DATE '2000-01-01'")[0][0]
+        self.check("etapa3_constraints_enforced",
+                   recusas == ["ck_brainstorming_dados_pdv_ultima_venda"] * 2 and aceitos == 4,
+                   f"recusas={recusas} aceitos={aceitos}")
+
+        self.stage = "downgrade da Etapa 3 com dados das regras novas"
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ETAPA_2)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        colunas, checks = self._colunas_e_checks_da_etapa_3()
+        self.check("etapa3_downgrade_refused_with_new_data",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and colunas == COLUNAS_DA_ETAPA_3 and checks == CHECKS_DA_ETAPA_3,
+                   f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade da Etapa 3 sem os dados novos e novo upgrade"
+        self._executar("UPDATE brainstorming_dados_pdv SET versao_regras = 'lead-2026-11.3', "
+                       "fim_ultimo_relatorio_com_venda = NULL")
+        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL")
+        estado = self._estado()
+        self._migrar(downgrade, REVISAO_ETAPA_2)
+        revisao_depois = self._revisao()
+        colunas_depois, checks_depois = self._colunas_e_checks_da_etapa_3()
+        ficou = self._estado()
+        self._migrar(upgrade, "head")
+        colunas_de_volta, checks_de_volta = self._colunas_e_checks_da_etapa_3()
+        self.check("etapa3_downgrade_and_upgrade_again",
+                   revisao_depois == REVISAO_ETAPA_2 and colunas_depois == {t: set() for t in COLUNAS_DA_ETAPA_3}
+                   and checks_depois == set() and ficou == estado and self._revisao() == self.head
+                   and colunas_de_volta == COLUNAS_DA_ETAPA_3 and checks_de_volta == CHECKS_DA_ETAPA_3
+                   and self._estado() == estado and self._diferencas_metadata() == []
+                   and self._jobs() == [JOB_DO_EXPURGO],
+                   f"revisão={revisao_depois} colunas={colunas_depois} checks={checks_depois} ficou={ficou}")
         self._executar("DELETE FROM lead_avaliacao")
 
     def _etapa_migracao(self):

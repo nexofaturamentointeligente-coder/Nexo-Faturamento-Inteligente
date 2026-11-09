@@ -80,6 +80,11 @@ def meta(anos: dict, **trocas) -> dict:
         "dias_mesmos_meses_por_ano": {a: d for a, (_r, d, _m) in texto.items()},
         "relatorios_cabecalho_ambiguo": 0,
         "ajustes_sem_venda_por_ano": {a: {chave: 0 for chave in avaliacao_motor.CHAVES_AJUSTES} for a in texto},
+        # Etapa 3: cada ano coberto do dia 1º de janeiro até os dias do ano (sem passar de 31/12).
+        "periodos_cobertos": [
+            [f"{a}-01-01", min(date(int(a), 1, 1) + timedelta(days=d - 1), date(int(a), 12, 31)).isoformat()]
+            for a, (_r, d, _m) in sorted(texto.items())],
+        "relatorios_varias_unidades": 0,
     }
     dados.update(trocas)
     return dados
