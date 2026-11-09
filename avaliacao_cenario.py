@@ -25,16 +25,17 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
 import json
 
 from sqlalchemy import delete, insert, select, update
 
 import avaliacao_motor
 from etl_inputs import ETLInputError
-import inteligencia_estoque
 import etl_runtime
 from extensions import db
 from horario import agora_utc
+import inteligencia_estoque
 from leads_avaliacao import RETENCAO_DIAS
 from models import BrainstormingDadosPdv, LeadAvaliacao
 import raio_x
@@ -281,6 +282,34 @@ def linha_da_staging(registro: BrainstormingDadosPdv) -> dict:
     linha["versao_regras"] = registro.versao_regras
     linha["criado_em"] = registro.criado_em
     return linha
+
+
+# Colunas da tela além das da triagem: o bloco gravado e o vazamento estimado (os itens no bloco
+# gravado, quando a triagem ou as regras são de outra versão).
+_COLUNAS_DA_TELA = ("bloco_triagem", "vazamento_estimado_reais")
+_COLUNAS_DO_LEAD = (*_COLUNAS_DA_STAGING, "lead_id", "versao_regras", "criado_em", *_COLUNAS_DA_TELA)
+
+
+def linhas_do_lead(lead_id) -> tuple[list, int]:
+    """(linhas, assinatura): as linhas da staging do lead no formato de linha_da_staging, com o bloco
+    gravado e o vazamento estimado, em ordem de ano e produto, lidas numa consulta só e sem montar
+    objetos do ORM (a parte mais lenta da carga). A assinatura é o sha256 do conteúdo lido, em texto
+    (o hash() do Python dá o mesmo valor para -1 e -2): muda com qualquer valor de qualquer linha, e o
+    cache do diagnóstico (blueprints/leads.py) a usa na chave."""
+    colunas = [getattr(BrainstormingDadosPdv, nome) for nome in _COLUNAS_DO_LEAD]
+    brutas = [tuple(valores) for valores in db.session.execute(
+        select(*colunas).where(BrainstormingDadosPdv.lead_id == lead_id)
+        .order_by(BrainstormingDadosPdv.ano_exercicio, BrainstormingDadosPdv.chave_produto))]
+    assinatura = hashlib.sha256(json.dumps(brutas, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
+    linhas = []
+    for valores in brutas:
+        linha = dict(zip(_COLUNAS_DO_LEAD, valores))
+        for nome in (*_QUANTIDADES, *_DINHEIRO):
+            linha[nome] = Decimal(linha[nome])
+        if linha["estoque_final"] is not None:
+            linha["estoque_final"] = Decimal(linha["estoque_final"])
+        linhas.append(linha)
+    return linhas, assinatura
 
 
 def retriar(lead_id, limiares=None, *, agora=None) -> LeadAvaliacao:

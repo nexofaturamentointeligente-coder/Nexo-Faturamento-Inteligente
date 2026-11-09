@@ -72,7 +72,7 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
     """(resultado do Raio-X, nomes seguros dos arquivos), na ordem em que foram enviados.
 
     `executar` troca a operação do processo isolado (padrão: etl_runtime.run_raio_x; a Avaliação
-    de Cenário usa etl_runtime.run_avaliacao_cenario) e `origem` marca o log da Baia. O resto da
+    de Cenário passa o executor dela, também de etl_runtime) e `origem` marca o log da Baia. O resto da
     entrada (teto, assinatura, recusa de arquivo repetido e diretório temporário) é o mesmo."""
     executar = etl_runtime.run_raio_x if executar is None else executar
     arquivos = [arquivo for arquivo in arquivos if arquivo is not None and arquivo.filename]

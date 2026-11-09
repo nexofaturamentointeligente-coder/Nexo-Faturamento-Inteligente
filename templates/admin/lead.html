@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
+{% import "_planos.html" as pl %}
 
 {% block title %}{{ lead.nome_loja }} · Avaliação de Cenário — NEXO Admin{% endblock %}
 {% block page_title %}Avaliação de Cenário{% endblock %}
 
 {% macro pct(valor) %}{% if valor is not none %}{{ ('%.1f'|format(valor * 100))|replace('.', ',') }}%{% else %}—{% endif %}{% endmacro %}
 {% macro reais(valor) %}{% if valor is not none %}R$ {{ m.brl(valor) }}{% else %}—{% endif %}{% endmacro %}
+{% macro dias(valor) %}{% if valor is not none %}{{ m.num(valor) }} dia{% if valor != 1 %}s{% endif %}{% else %}—{% endif %}{% endmacro %}
 
 {% block content %}
 <div class="page-head">
@@ -116,6 +118,61 @@
     {% endif %}
 </div>
 
+{% if caixa_resgatavel %}
+<section class="nexo-card mb-4" aria-labelledby="caixaTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="caixaTitulo"><i class="bi bi-safe2 text-purple" aria-hidden="true"></i> Resumo executivo: caixa resgatável</h2>
+            <p class="sub">Quatro fontes de caixa de naturezas diferentes: não se somam.{% if inteligencia is none %} Valores do resumo gravado no envio de {{ m.horario(lead.consentimento_em or lead.criado_em) }}.{% endif %}</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <ul class="list-unstyled mb-0">
+            {% for parcela in caixa_resgatavel %}
+            <li class="{{ 'mb-3' if not loop.last else '' }}">
+                <div class="d-flex justify-content-between flex-wrap gap-2"><span class="text-break">{{ parcela.rotulo }}</span><strong class="fw-num">{{ reais(parcela.valor) }}</strong></div>
+                {# Barra só decorativa: o valor está no texto; sem valor, nada de barra (nulo não é zero). #}
+                {% if parcela.valor is not none %}<div class="progress mt-1" style="height: .5rem" aria-hidden="true"><div class="progress-bar" style="width: {{ parcela.proporcao }}%"></div></div>{% endif %}
+                <small class="t-mut">{{ parcela.natureza }}</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% if itens_sem_estoque_com_custo %}<p class="field-hint mt-2 mb-0">{{ m.num(itens_sem_estoque_com_custo) }} produto(s) com custo e sem estoque informado ficam fora das parcelas de estoque: as somas de estoque são parciais.</p>{% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="nexo-card mb-4" aria-labelledby="triagemTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="triagemTitulo"><i class="bi bi-diagram-3 text-purple" aria-hidden="true"></i> Matriz de triagem</h2>
+            <p class="sub">Produtos de cada bloco, com o faturamento e o potencial recuperável do resumo gravado, e os motivos mais frequentes.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Bloco</th><th class="text-end">Produtos</th><th class="text-end">Faturamento</th><th class="text-end">Potencial recuperável</th><th>Motivos mais frequentes</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in matriz_triagem %}
+                    <tr>
+                        <td class="col-nome"><a href="#bloco{{ linha.bloco }}">{{ linha.rotulo }}</a></td>
+                        <td class="text-end fw-num">{% if linha.itens is not none %}{{ m.num(linha.itens) }}{% else %}—{% endif %}</td>
+                        <td class="text-end fw-num">{{ reais(linha.faturamento) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.recuperavel) }}</td>
+                        <td>{% for rotulo, quantos in linha.motivos %}{{ rotulo }}: {{ m.num(quantos) }}{% if not loop.last %}; {% endif %}{% else %}—{% endfor %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+    </div>
+</section>
+
 {% if situacao == 'atual' and totais %}
 <section class="nexo-card mb-4" aria-labelledby="matrizTitulo">
     <div class="nexo-card-head">
@@ -164,6 +221,212 @@
         <p class="field-hint mt-2 mb-0">Faturamento de itens de venda contínua: {{ reais(totais.faturamento_venda_continua) }} · estoque parado: {{ reais(totais.estoque_parado) }} · perdas operacionais: não calculadas (exigem relatório de perdas ou inventário).</p>
     </div>
 </section>
+{% endif %}
+
+{% if inteligencia %}
+{% set estoque = inteligencia.estoque %}
+{% if estoque %}
+<section class="nexo-card mb-4" aria-labelledby="estoqueTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="estoqueTitulo"><i class="bi bi-box-seam text-purple" aria-hidden="true"></i> Estoque parado e excedente</h2>
+            <p class="sub">Capital em estoque de {{ reais(estoque.capital_em_estoque) }} (estoque informado no relatório de vendas × custo médio). Dias sem venda contados só nos períodos cobertos pelos relatórios: são um piso.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Sem venda há</th><th class="text-end">Produtos</th><th class="text-end">Capital imobilizado</th><th class="text-end">Acumulado (esta faixa ou mais)</th></tr>
+                </thead>
+                <tbody>
+                    {% for faixa in estoque.parado.faixas %}
+                    {% set acumulado = estoque.parado.acima_de[faixa.dias_minimos | string] %}
+                    <tr>
+                        <td class="col-nome">{{ faixa.faixa }}</td>
+                        <td class="text-end fw-num">{{ m.num(faixa.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(faixa.capital) }}</td>
+                        <td class="text-end fw-num">{{ reais(acumulado.capital) }} · {{ m.num(acumulado.itens) }} produto(s)</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        <p class="field-hint mt-2">Parado: {{ reais(estoque.parado.capital) }}, {{ pct(estoque.parado.participacao_no_estoque) }} do capital em estoque{% if estoque.parado.itens_com_lacuna %}; {{ m.num(estoque.parado.itens_com_lacuna) }} produto(s) com mês sem relatório no meio (a venda pode ter acontecido nele){% endif %}. Fora da conta: {{ m.num(estoque.itens_sem_custo) }} sem custo e {{ m.num(estoque.itens_sem_estoque_informado) }} sem estoque informado.</p>
+        {% if estoque.parado.lista %}
+        <h3 class="h6 mt-3">Maiores capitais parados</h3>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Sem venda há</th><th class="text-end">Estoque</th><th class="text-end">Custo médio</th><th class="text-end">Capital</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in estoque.parado.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ dias(item.dias_sem_venda) }}{% if item.com_lacuna %}<br><small class="t-mut">piso, com lacuna</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ pl.qtd(item.estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.custo_medio) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+        <h3 class="h6 mt-3">Estoque excedente (giro baixo de quem ainda vende)</h3>
+        <p class="field-hint">{{ m.num(estoque.excedente.itens) }} produto(s) com estoque para mais de {{ dias(estoque.excedente.cobertura_alvo_dias) }} no ritmo de venda do último ano; acima disso, {{ reais(estoque.excedente.capital_liberavel) }} ao custo podem ser liberados sem faltar produto.</p>
+        {% if estoque.excedente.lista %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Dias de estoque</th><th class="text-end">Estoque</th><th class="text-end">Capital em estoque</th><th class="text-end">Capital liberável</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in estoque.excedente.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(item.dias_de_estoque) }}</td>
+                        <td class="text-end fw-num">{{ pl.qtd(item.estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital_em_estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital_liberavel) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="nexo-card mb-4" aria-labelledby="simuladorTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="simuladorTitulo"><i class="bi bi-calculator text-purple" aria-hidden="true"></i> Simulador de liberação de caixa (Urgência)</h2>
+            <p class="sub">Projeção sobre o estoque dos produtos da Urgência ao preço médio praticado no último ano com venda: não é sugestão de desconto nem garantia de venda.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if erro_parametros %}<div class="aviso-contrato is-alerta mb-3" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><div><strong>Parâmetros não aplicados.</strong><p>{{ erro_parametros }} Os valores abaixo usam os parâmetros padrão.</p></div></div>{% endif %}
+        {% set simulador = inteligencia.simulador %}
+        {% if simulador %}
+        <p class="field-hint">{{ m.num(simulador.itens) }} produto(s) da Urgência com estoque, custo e preço: {{ reais(simulador.receita_a_preco_medio) }} a preço médio, {{ reais(simulador.capital_ao_custo) }} ao custo{% set equilibrio = simulador.desconto_de_equilibrio %}{% if simulador.abaixo_do_custo_sem_desconto %}; mesmo sem desconto o caixa fica abaixo do custo (só empataria vendendo {% if equilibrio is none or (0 - equilibrio) < 0.001 %}menos de 0,1%{% else %}{{ pct(0 - equilibrio) }}{% endif %} acima do preço médio){% elif equilibrio is not none %}; o caixa empata com o custo com {{ pct(equilibrio) }} de desconto{% endif %}. Fora: {{ m.num(simulador.itens_fora.sem_estoque_informado) }} sem estoque informado, {{ m.num(simulador.itens_fora.estoque_zerado) }} com estoque zerado ou negativo, {{ m.num(simulador.itens_fora.sem_custo) }} sem custo, {{ m.num(simulador.itens_fora.sem_preco) }} sem preço e {{ m.num(simulador.itens_fora.a_confirmar) }} a confirmar.</p>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Desconto</th><th class="text-end">Fração do estoque vendida</th><th class="text-end">Caixa</th><th class="text-end">Resultado contra o custo</th></tr>
+                </thead>
+                <tbody>
+                    {% for cenario in simulador.cenarios %}
+                    <tr>
+                        <td class="col-nome fw-num">{{ pct(cenario.desconto) }}</td>
+                        <td class="text-end fw-num">{{ pct(cenario.fracao_liquidada) }}</td>
+                        <td class="text-end fw-num">{{ reais(cenario.caixa) }}</td>
+                        <td class="text-end fw-num">{{ reais(cenario.resultado_contra_o_custo) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% else %}
+        <p class="t-mut">Os relatórios não trazem estoque informado (a coluna falta ou vem vazia): sem estoque, não há o que simular.</p>
+        {% endif %}
+        <form method="GET" action="{{ url_for('leads.detalhe', lead_id=lead.id) }}#simuladorTitulo" class="mt-3">
+            <div class="row g-3">
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simDescontos">Descontos</label>
+                    <input type="text" class="form-control" id="simDescontos" name="descontos" maxlength="60" value="{{ simulador_descontos }}" aria-describedby="simDescontosDica">
+                    <p class="field-hint mt-1 mb-0" id="simDescontosDica">Frações separadas por vírgula (0.1,0.25) ou, com vírgula decimal, por ponto e vírgula (0,1;0,25): 10% e 25%. Os dois formatos não se misturam.</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simFracao">Fração do estoque vendida</label>
+                    <input type="text" class="form-control" id="simFracao" name="fracao_liquidada" maxlength="8" inputmode="decimal" value="{{ simulador_fracao }}" aria-describedby="simFracaoDica">
+                    <p class="field-hint mt-1 mb-0" id="simFracaoDica">Maior que 0 e até 1, com ponto ou vírgula (0,5 = metade).</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simMarkup">Markup do segmento</label>
+                    <input type="text" class="form-control" id="simMarkup" name="markup_informado" maxlength="8" inputmode="decimal" value="{{ request.args.get('markup_informado', '') }}" aria-describedby="simMarkupDica">
+                    <p class="field-hint mt-1 mb-0" id="simMarkupDica">Opcional; 0,35 = 35%. Sem ele, a referência é a da categoria.</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simCobertura">Cobertura-alvo (dias)</label>
+                    <input type="text" class="form-control" id="simCobertura" name="cobertura_alvo_dias" maxlength="4" inputmode="numeric" value="{{ request.args.get('cobertura_alvo_dias', '') }}" aria-describedby="simCoberturaDica">
+                    <p class="field-hint mt-1 mb-0" id="simCoberturaDica">Opcional; padrão de 60 dias no excedente.</p>
+                </div>
+            </div>
+            <button type="submit" class="btn-ghost mt-3"><i class="bi bi-calculator" aria-hidden="true"></i> Simular</button>
+        </form>
+    </div>
+</section>
+
+{% set auditoria = inteligencia.auditoria_de_preco %}
+{% if auditoria %}
+<section class="nexo-card mb-4" aria-labelledby="auditoriaTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="auditoriaTitulo"><i class="bi bi-tags text-purple" aria-hidden="true"></i> Auditoria de preço</h2>
+            <p class="sub">Último ano ({{ auditoria.ano }}), vendas com custo: preço praticado médio contra custo médio × (1 + markup de referência){% if auditoria.base == 'informado' %}, com o markup informado de {{ pct(auditoria.markup_informado) }}{% else %}, com a referência de cada categoria (o menor entre o markup agregado e a mediana dos produtos dela){% endif %}. Não considera demanda, concorrência nem promoção.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <p class="field-hint">{{ m.num(auditoria.itens_avaliados) }} produto(s) avaliado(s): {{ m.num(auditoria.itens_abaixo) }} abaixo e {{ m.num(auditoria.itens_acima) }} acima da referência. Diferença de {{ reais(auditoria.diferenca_total) }}, da qual {{ reais(auditoria.ja_contado_no_recuperavel) }} já estão no potencial recuperável; adicional: {{ reais(auditoria.adicional) }}.{% if auditoria.sem_referencia.itens %} Sem referência: {{ m.num(auditoria.sem_referencia.itens) }} produto(s), {{ reais(auditoria.sem_referencia.venda) }} de venda.{% endif %}</p>
+        {% if auditoria.categorias %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Categoria</th><th class="text-end">Produtos abaixo</th><th class="text-end">Markup de referência</th><th class="text-end">Diferença</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in auditoria.categorias[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ linha.categoria or 'Sem categoria' }}</span></td>
+                        <td class="text-end fw-num">{{ m.num(linha.itens) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.markup_referencia) }}<br><small class="t-mut">{{ 'informado' if linha.origem == 'informado' else ('agregado da categoria' if linha.origem == 'agregado' else 'mediana da categoria') }}</small></td>
+                        <td class="text-end fw-num">{{ reais(linha.diferenca) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+        {% if auditoria.lista %}
+        <h3 class="h6 mt-3">Maiores diferenças por produto</h3>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Preço praticado</th><th class="text-end">Preço pela referência</th><th class="text-end">Diferença por unidade</th><th class="text-end">Diferença</th><th class="text-end">Já no recuperável</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in auditoria.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ reais(item.preco_praticado) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.preco_pelo_markup) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.diferenca_por_unidade) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.diferenca) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.ja_contado_no_recuperavel) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
 {% endif %}
 
 {% for bloco in ['urgencia', 'atencao', 'eletiva'] %}

@@ -42,11 +42,21 @@ import statistics
 
 import triagem_cenario
 
-VERSAO_INTELIGENCIA = "inteligencia-lead-2026-11.1"
+# 11.2: a coluna de estoque vazia em todas as linhas vale como estoque não informado (nulo, não zero), e o
+# resumo gravado traz os produtos sem estoque informado (no total, com custo e os já parados). O da 11.1 vale nada.
+VERSAO_INTELIGENCIA = "inteligencia-lead-2026-11.2"
 _ZERO = Decimal("0")
 _UM = Decimal("1")
 _CENTAVO = Decimal("0.01")
 _RE_DECIMAL = re.compile(r"\d{1,6}(?:\.\d{1,6})?", re.ASCII)
+
+
+# O nome que o consultor vê de cada parâmetro (nas mensagens de erro da tela e da rota JSON).
+_ROTULOS_DOS_PARAMETROS = {
+    "descontos": "Descontos", "fracao_liquidada": "Fração do estoque vendida", "markup_informado": "Markup do segmento",
+    "tolerancia_preco": "Tolerância de preço", "cobertura_alvo_dias": "Cobertura-alvo (dias)",
+    "itens_minimos_markup": "Mínimo de produtos por categoria", "itens_listados": "Produtos listados",
+}
 
 
 @dataclass(frozen=True)
@@ -72,18 +82,19 @@ class ParametrosInteligencia:
         for nome in ("cobertura_alvo_dias", "itens_minimos_markup", "itens_listados"):
             valor = getattr(self, nome)
             if type(valor) is not int or not 1 <= valor <= 3650:
-                raise ValueError(f"Parâmetro {nome} precisa ser um inteiro de 1 a 3650.")
+                raise ValueError(f"{_ROTULOS_DOS_PARAMETROS[nome]}: um número inteiro de 1 a 3650.")
         descontos = self.descontos
         if (not isinstance(descontos, tuple) or not 1 <= len(descontos) <= 6
                 or not all(_decimal_valido(d) and _ZERO <= d <= Decimal("0.95") for d in descontos)):
-            raise ValueError("Descontos simulados: de 1 a 6 frações entre 0 e 0,95.")
+            raise ValueError("Descontos: de 1 a 6 frações entre 0 e 0.95, separadas por vírgula (0.1,0.25) "
+                             "ou, com vírgula decimal, por ponto e vírgula (0,1;0,25).")
         if not _decimal_valido(self.fracao_liquidada) or not _ZERO < self.fracao_liquidada <= _UM:
-            raise ValueError("Fração liquidada precisa estar entre 0 (exclusivo) e 1.")
+            raise ValueError("Fração do estoque vendida: maior que 0 e até 1 (0.5 ou 0,5 = metade).")
         if self.markup_informado is not None and (not _decimal_valido(self.markup_informado)
                                                   or not _ZERO <= self.markup_informado <= Decimal("10")):
-            raise ValueError("Markup informado precisa estar entre 0 e 10 (1.000%).")
+            raise ValueError("Markup do segmento: de 0 a 10 (0.35 ou 0,35 = 35%; 10 = 1.000%).")
         if not _decimal_valido(self.tolerancia_preco) or not _ZERO <= self.tolerancia_preco <= Decimal("0.2"):
-            raise ValueError("Tolerância de preço precisa estar entre 0 e 0,2.")
+            raise ValueError("Tolerância de preço: de 0 a 0.2 (0.005 = 0,5%).")
 
     def para_dict(self) -> dict:
         dados = {"versao": VERSAO_INTELIGENCIA}
@@ -98,24 +109,27 @@ class ParametrosInteligencia:
         return dados
 
     def com_ajustes(self, ajustes: dict) -> "ParametrosInteligencia":
-        """Estes parâmetros com alguns trocados, a partir de texto (a consulta da rota): descontos
-        separados por vírgula ("0.1,0.25"), frações e markup em texto decimal simples. Nome
-        desconhecido ou valor ilegível: ValueError."""
+        """Estes parâmetros com alguns trocados, a partir de texto (a consulta da rota e o formulário da
+        tela): frações e markup com ponto ou vírgula decimal (0.5 ou 0,5); os descontos separados por
+        vírgula, com ponto decimal (0.1,0.25), ou por ponto e vírgula, com vírgula decimal (0,1;0,25).
+        Nome desconhecido ou valor ilegível: ValueError, com o nome que o consultor vê."""
         if not isinstance(ajustes, dict):
             raise ValueError("Ajustes ilegíveis.")
         valores = {}
         for nome, texto in ajustes.items():
-            if nome == "descontos":
-                partes = [p.strip() for p in str(texto).split(",") if p.strip()]
-                valores[nome] = tuple(_decimal_de_texto(p) for p in partes)
-            elif nome in ("fracao_liquidada", "markup_informado", "tolerancia_preco"):
-                valores[nome] = _decimal_de_texto(texto)
-            elif nome in ("cobertura_alvo_dias", "itens_minimos_markup", "itens_listados"):
-                if not (str(texto).isascii() and str(texto).isdigit()) or len(str(texto)) > 4:
-                    raise ValueError(f"Parâmetro {nome} ilegível.")
-                valores[nome] = int(str(texto))
-            else:
+            rotulo = _ROTULOS_DOS_PARAMETROS.get(nome)
+            if rotulo is None:
                 raise ValueError(f"Parâmetro desconhecido: {str(nome)[:40]}.")
+            texto = str(texto).strip()
+            if nome == "descontos":
+                partes = texto.split(";") if ";" in texto else texto.split(",")
+                valores[nome] = tuple(_decimal_de_texto(p.strip().replace(",", "."), rotulo) for p in partes if p.strip())
+            elif nome in ("fracao_liquidada", "markup_informado", "tolerancia_preco"):
+                valores[nome] = _decimal_de_texto(texto.replace(",", "."), rotulo)
+            else:
+                if not (texto.isascii() and texto.isdigit()) or len(texto) > 4:
+                    raise ValueError(f"{rotulo}: um número inteiro de 1 a 3650.")
+                valores[nome] = int(texto)
         base = {campo.name: getattr(self, campo.name) for campo in fields(self)}
         base.update(valores)
         return ParametrosInteligencia(**base)
@@ -125,14 +139,25 @@ def _decimal_valido(valor) -> bool:
     return type(valor) is Decimal and valor.is_finite() and bool(_RE_DECIMAL.fullmatch(format(valor, "f")))
 
 
-def _decimal_de_texto(texto) -> Decimal:
+# O exemplo de cada campo na mensagem de valor ilegível (nos descontos, a vírgula também separa a lista).
+_EXEMPLOS_DOS_PARAMETROS = {
+    "Descontos": "frações com ponto separadas por vírgula (0.1,0.25) ou com vírgula separadas por ponto e vírgula "
+                 "(0,1;0,25), sem misturar os dois formatos",
+    "Fração do estoque vendida": "até 6 casas (0.5 ou 0,5)",
+    "Markup do segmento": "até 6 casas (0.35 ou 0,35)",
+    "Tolerância de preço": "até 6 casas (0.005 ou 0,005)",
+}
+
+
+def _decimal_de_texto(texto, rotulo: str = "Valor") -> Decimal:
     texto = str(texto).strip()
     if not _RE_DECIMAL.fullmatch(texto):
-        raise ValueError("Valor decimal ilegível (use ponto e até 6 casas).")
+        exemplo = _EXEMPLOS_DOS_PARAMETROS.get(rotulo, "até 6 casas (0.35 ou 0,35)")
+        raise ValueError(f"{rotulo}: valor decimal ilegível; use {exemplo}.")
     try:
         return Decimal(texto)
     except InvalidOperation:
-        raise ValueError("Valor decimal ilegível.") from None
+        raise ValueError(f"{rotulo}: valor decimal ilegível.") from None
 
 
 PARAMETROS_PADRAO = ParametrosInteligencia()
@@ -272,13 +297,20 @@ def estoque_parado_por_idade(linhas: list, cobertura, triagem, meta: dict,
     excedente_faixas = [{"itens": 0, "capital": _ZERO} for _ in faixas]
     itens_parados, itens_excedentes = [], []
     capital_total = _ZERO
-    sem_custo = com_lacuna = sem_estoque_informado = 0
+    sem_custo = com_lacuna = sem_estoque_informado = sem_estoque_com_custo = sem_estoque_parados = 0
     for chave, por_ano in produtos.items():
         if chave in triagem.a_confirmar:
             continue
         estoque = triagem_cenario._estoque(por_ano)
         if estoque is None:
             sem_estoque_informado += 1
+            # Sem saldo e com custo: com saldo, entraria no capital em estoque (as somas são parciais) e, já na
+            # primeira faixa sem venda, na soma do parado. Sem custo, ficaria fora delas com saldo ou sem.
+            if _custo_medio(por_ano) is not None:
+                sem_estoque_com_custo += 1
+                ultima = _ultima_venda(por_ano)
+                if ultima is not None and _faixa(_dias_cobertos_depois(ultima, periodos), faixas) is not None:
+                    sem_estoque_parados += 1
             continue
         if estoque <= 0:
             continue
@@ -361,6 +393,11 @@ def estoque_parado_por_idade(linhas: list, cobertura, triagem, meta: dict,
         },
         "itens_sem_custo": sem_custo,
         "itens_sem_estoque_informado": sem_estoque_informado,
+        # Dos sem estoque informado, os com custo (só eles deixam as somas de estoque parciais) e, deles, os já
+        # na primeira faixa sem venda (só eles deixam a soma do parado parcial: quem ainda vende não entraria
+        # nela com saldo nenhum).
+        "itens_sem_estoque_com_custo": sem_estoque_com_custo,
+        "itens_parados_sem_estoque_informado": sem_estoque_parados,
     }
 
 
@@ -372,7 +409,7 @@ def simular_liquidacao(linhas: list, cobertura, triagem,
     produtos = _por_produto(linhas)
     rotulos = _rotulos(produtos)
     receita = capital = _ZERO
-    fora = {"a_confirmar": 0, "sem_estoque": 0, "sem_custo": 0, "sem_preco": 0}
+    fora = {"a_confirmar": 0, "sem_estoque_informado": 0, "estoque_zerado": 0, "sem_custo": 0, "sem_preco": 0}
     escolhidos = []
     for chave, por_ano in produtos.items():
         if triagem.blocos.get(chave) != "urgencia":
@@ -382,7 +419,8 @@ def simular_liquidacao(linhas: list, cobertura, triagem,
             continue
         estoque = triagem_cenario._estoque(por_ano)
         if estoque is None or estoque <= 0:
-            fora["sem_estoque"] += 1
+            # Sem saldo no relatório não é o mesmo que saldo zerado (ou negativo, que o PDV também imprime).
+            fora["sem_estoque_informado" if estoque is None else "estoque_zerado"] += 1
             continue
         custo_medio, preco_medio = _custo_medio(por_ano), _preco_medio(por_ano)
         if custo_medio is None:
@@ -404,13 +442,16 @@ def simular_liquidacao(linhas: list, cobertura, triagem,
         cenarios.append({"desconto": float(desconto), "fracao_liquidada": float(fracao), "caixa": _dinheiro(caixa),
                          "resultado_contra_o_custo": _dinheiro(caixa - capital * fracao)})
     equilibrio = (_UM - capital / receita) if receita > 0 else None
+    # O sentido vem da comparação exata, não do valor arredondado (que dá -0.0 perto de zero).
+    abaixo_do_custo = bool(receita > 0 and capital > receita)
     return {
         "escopo": "urgencia",
         "itens": len(escolhidos),
         "itens_fora": fora,
         "receita_a_preco_medio": _dinheiro(receita),
         "capital_ao_custo": _dinheiro(capital),
-        "desconto_de_equilibrio": (round(float(equilibrio), 4) if equilibrio is not None else None),
+        "desconto_de_equilibrio": (round(float(equilibrio), 4) + 0.0 if equilibrio is not None else None),
+        "abaixo_do_custo_sem_desconto": abaixo_do_custo,
         "cenarios": cenarios,
         "lista": [{**_identidade(produtos[chave], rotulos), "estoque": float(estoque),
                    "preco_medio": _dinheiro(preco_medio), "custo_medio": _dinheiro(custo_medio),
@@ -535,11 +576,21 @@ DEFINICOES = {
 }
 
 
+def estoque_informado(linhas: list, cobertura) -> bool:
+    """Se o envio traz estoque informado: a coluna em algum relatório (meta sem a contagem não decide) e o
+    saldo em ao menos uma linha (saldo zero também é informado). A coluna com todas as células vazias é
+    estoque não informado, não zero. O mesmo critério vale para a inteligência e para a matriz por
+    categoria (diagnostico_cenario)."""
+    return ((cobertura.com_estoque is None or any(n > 0 for n in cobertura.com_estoque.values()))
+            and any(linha.get("estoque_final") is not None for linha in linhas))
+
+
 def calcular(linhas: list, cobertura, triagem, meta: dict,
              parametros: ParametrosInteligencia = PARAMETROS_PADRAO) -> dict:
-    """A seção "inteligencia" do payload do consultor. Sem a coluna de estoque em nenhum relatório do
-    envio, o estoque e o simulador ficam nulos (zero ali seria "nada parado", o que não se sabe)."""
-    sem_estoque = cobertura.com_estoque is not None and not any(cobertura.com_estoque.values())
+    """A seção "inteligencia" do payload do consultor. Sem estoque informado (estoque_informado: a coluna
+    falta em todos os relatórios, ou vem vazia em todas as linhas), o estoque e o simulador ficam nulos:
+    zero diria "nada parado", o que não se sabe."""
+    sem_estoque = not estoque_informado(linhas, cobertura)
     return {
         "versao": VERSAO_INTELIGENCIA,
         "parametros": parametros.para_dict(),
@@ -553,7 +604,7 @@ def calcular(linhas: list, cobertura, triagem, meta: dict,
 def resumo(inteligencia: dict) -> dict:
     """O que fica gravado no lead (resumo_inteligencia_json): só números, nenhum nome de produto nem
     de categoria, porque fica depois do expurgo das linhas (30 dias). A lista de leads o mostra sem
-    refazer nada. Sem a coluna de estoque, os campos de estoque e da Urgência ficam nulos."""
+    refazer nada. Sem estoque informado, os campos de estoque e da Urgência ficam nulos."""
     estoque, simulador, auditoria = inteligencia["estoque"], inteligencia["simulador"], inteligencia["auditoria_de_preco"]
     parado = estoque["parado"]["acima_de"] if estoque is not None else None
     return {
@@ -563,6 +614,12 @@ def resumo(inteligencia: dict) -> dict:
         "capital_parado": {chave: valores["capital"] for chave, valores in parado.items()} if parado else None,
         "itens_parados": {chave: valores["itens"] for chave, valores in parado.items()} if parado else None,
         "capital_excedente_liberavel": estoque["excedente"]["capital_liberavel"] if estoque is not None else None,
+        # Produtos sem saldo informado: com algum com custo, as somas de estoque são parciais (a tela avisa). A
+        # lista marca o parado como parcial só pelos com custo já na primeira faixa sem venda.
+        "itens_sem_estoque_informado": estoque["itens_sem_estoque_informado"] if estoque is not None else None,
+        "itens_sem_estoque_com_custo": estoque["itens_sem_estoque_com_custo"] if estoque is not None else None,
+        "itens_parados_sem_estoque_informado": (estoque["itens_parados_sem_estoque_informado"]
+                                                if estoque is not None else None),
         "urgencia_receita_a_preco_medio": simulador["receita_a_preco_medio"] if simulador is not None else None,
         "urgencia_capital_ao_custo": simulador["capital_ao_custo"] if simulador is not None else None,
         "urgencia_itens_com_estoque": simulador["itens"] if simulador is not None else None,

@@ -100,6 +100,8 @@ CHECKS = (
     # 6. Etapa 3
     "etapa3_service_writes_dates_and_summary", "etapa3_constraints_enforced", "etapa3_downgrade_refused_with_new_data",
     "etapa3_downgrade_and_upgrade_again",
+    # 7. Portal (Etapa 4)
+    "portal_lines_isolated_by_lead", "portal_payload_and_cache_on_postgresql",
 )
 
 
@@ -159,6 +161,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_servico()
         self._etapa_avaliacao_etapa_2()
         self._etapa_avaliacao_etapa_3()
+        self._etapa_portal()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
         self._etapa_downgrade()
@@ -423,7 +426,10 @@ class _ClusterDosLeads(_PrivateCluster):
                     + [(2025, "lead-2026-11.4", date(2025, 1, 31))] * 2)
         self.check("etapa3_service_writes_dates_and_summary",
                    linhas == esperado and isinstance(resumo, dict)
-                   and resumo.get("versao") == "inteligencia-lead-2026-11.1" and resumo.get("com_estoque") is False
+                   and resumo.get("versao") == "inteligencia-lead-2026-11.2" and resumo.get("com_estoque") is False
+                   and "itens_parados_sem_estoque_informado" in resumo
+                   and resumo["itens_parados_sem_estoque_informado"] is None
+                   and "itens_sem_estoque_com_custo" in resumo and resumo["itens_sem_estoque_com_custo"] is None
                    and resumo.get("capital_em_estoque") is None and "itens_abaixo_do_preco_de_referencia" in resumo,
                    f"linhas={linhas} resumo={str(resumo)[:200]}")
 
@@ -473,6 +479,39 @@ class _ClusterDosLeads(_PrivateCluster):
                    and self._estado() == estado and self._diferencas_metadata() == []
                    and self._jobs() == [JOB_DO_EXPURGO],
                    f"revisão={revisao_depois} colunas={colunas_depois} checks={checks_depois} ficou={ficou}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+    # ------------------------------------------------- 7. Portal (Etapa 4)
+    def _etapa_portal(self):
+        """As linhas de cada lead, lidas sem ORM, só do próprio lead e com os tipos do PostgreSQL; o
+        diagnóstico do lead, do cache na segunda leitura, sem misturar dois leads com o mesmo envio."""
+        from datetime import date
+        import avaliacao_cenario
+        from blueprints import leads as rotas
+        from models import LeadAvaliacao
+
+        self.stage = "portal: linhas e diagnóstico por lead"
+        primeiro, segundo = self._registrar_pelo_servico(), self._registrar_pelo_servico()
+        with self.app.test_request_context():
+            linhas, assinatura = avaliacao_cenario.linhas_do_lead(primeiro)
+            outras, outra_assinatura = avaliacao_cenario.linhas_do_lead(segundo)
+            isoladas = ({l["lead_id"] for l in linhas} == {primeiro} and {l["lead_id"] for l in outras} == {segundo}
+                        and len(linhas) == len(outras) == 4 and assinatura != outra_assinatura)
+            tipos = all(isinstance(l["quantidade"], Decimal) and isinstance(l["fim_ultimo_relatorio_com_venda"], date)
+                        and l["criado_em"].tzinfo is not None for l in linhas)
+            lead = self.db.session.get(LeadAvaliacao, primeiro)
+            diagnostico = rotas._diagnostico(lead, 30)
+            de_novo = rotas._diagnostico(lead, 30)
+            outro = rotas._diagnostico(self.db.session.get(LeadAvaliacao, segundo), 30)
+            situacoes = (diagnostico.payload["situacao"], outro.payload["situacao"])
+            ids = (diagnostico.payload["lead"]["id"], outro.payload["lead"]["id"])
+            self.db.session.remove()
+        self.check("portal_lines_isolated_by_lead", isoladas and tipos,
+                   f"linhas={len(linhas)}/{len(outras)} tipos={tipos}")
+        self.check("portal_payload_and_cache_on_postgresql",
+                   de_novo is diagnostico and outro is not diagnostico and situacoes == ("atual", "atual")
+                   and ids == (str(primeiro), str(segundo)) and diagnostico.payload["visualizacoes"] is not None,
+                   f"situacoes={situacoes}")
         self._executar("DELETE FROM lead_avaliacao")
 
     def _etapa_migracao(self):

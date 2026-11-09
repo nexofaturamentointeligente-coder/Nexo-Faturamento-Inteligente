@@ -363,25 +363,31 @@ class NavegadorCase(ContratosCase):
 
     def _lead_extenso(self):
         """Avaliação de Cenário com nomes e categorias longos e valores de nove dígitos, em dois anos,
-        para as telas do consultor: a lista e o detalhe com a matriz por categoria, os blocos da
-        triagem e as tabelas de itens."""
+        para as telas do consultor: a lista e o detalhe com o resumo executivo do caixa resgatável, a
+        matriz de triagem, a matriz por categoria, o estoque parado e excedente, o simulador, a
+        auditoria de preço, os blocos da triagem e as tabelas de itens (estoque de nove dígitos).
+        Novembro e dezembro dos dois anos (mês em comum: a queda vale); os produtos de número múltiplo
+        de 3 param de vender em 2025, então há Urgência com estoque (simulador) e estoque parado."""
         from calendar import monthrange
         import tempfile
         import avaliacao_cenario
         from tests.raio_x_support import avaliar_como_o_worker
         with tempfile.TemporaryDirectory(prefix="lead-navegador-") as pasta:
             caminhos = []
-            for ano, mes in ((2024, 11), (2024, 12), (2025, 1), (2025, 2)):
+            for ano, mes in ((2024, 11), (2024, 12), (2025, 11), (2025, 12)):
                 linhas = []
                 for i, nome in enumerate(PRODUTOS_LONGOS, 1):
+                    if ano == 2025 and i % 3 == 0:
+                        continue  # parou de vender: estoque parado e, com o recuperável, Urgência
                     queda = ano == 2025 and i % 2 == 1  # venda média cai 80% de um ano para o outro
                     quantidade, valor = (300, 360_000) if queda else (1500, 1_800_000 + 100 * i)
                     custo = "" if i == 2 else ("1900000,00" if i % 2 == 1 else "1000000,00")
                     categoria = CATEGORIAS_LONGAS[i % len(CATEGORIAS_LONGAS)]
-                    linhas.append(f"{i};{nome};{categoria};{quantidade};1234,56;{valor},00;{custo}")
+                    estoque = 123_456_789 + i
+                    linhas.append(f"{i};{nome};{categoria};{quantidade};1234,56;{valor},00;{custo};{estoque}")
                 fim = monthrange(ano, mes)[1]
                 texto = (f"Relatorio de vendas por produto\nPeriodo: 01/{mes:02d}/{ano} a {fim:02d}/{mes:02d}/{ano}\n"
-                         "Codigo;Produto;Categoria;Qtde;Preco Unitario;Valor Total;Total Custo\n"
+                         "Codigo;Produto;Categoria;Qtde;Preco Unitario;Valor Total;Total Custo;Estoque\n"
                          + "".join(linha + "\n" for linha in linhas))
                 caminho = Path(pasta) / f"arquivo_{ano}_{mes:02d}.csv"
                 caminho.write_bytes(texto.encode("utf-8"))
@@ -519,7 +525,9 @@ class NavegadorCase(ContratosCase):
                 f"{base}/contratos/{self.contrato_longo_id}/prorrogar", f"{base}/contratos/{self.contrato_longo_id}/cobertura",
                 f"{base}/regras-contratuais/ativar",
                 # Avaliação de Cenário: formulário de envio, lista e detalhe com as tabelas da triagem.
-                "/admin/leads", f"/admin/leads/{self.lead_id}"]
+                "/admin/leads", f"/admin/leads/{self.lead_id}",
+                # Com o markup do segmento, a auditoria de preço lista produtos abaixo da referência.
+                f"/admin/leads/{self.lead_id}?markup_informado=0.9"]
 
     def paginas_cliente(self):
         return ["/cliente/dashboard", f"/cliente/analise/{self.analise_id}", "/cliente/historico", "/cliente/upload",
@@ -538,6 +546,24 @@ class OverflowNavegadorTests(NavegadorCase):
                 self.ir(pagina, caminho)
                 self.assert_layout(pagina, largura, f"{caminho} @ {largura}px")
             pagina.context.close()
+
+    def test_lead_extenso_desenha_as_tabelas_da_inteligencia(self):
+        # O assert_layout só mede as tabelas que existem: aqui se confere que as mais largas existem.
+        pagina = self.abrir(1280, 800)
+        self.entrar(pagina, "admin-test@example.invalid")
+        self.ir(pagina, f"/admin/leads/{self.lead_id}?markup_informado=0.9")
+        html = pagina.content()
+        # O base.html acrescenta role="columnheader" a todo th: o cabeçalho é procurado pelo localizador.
+        for texto in ("Resumo executivo: caixa resgatável", "Matriz de triagem", "Maiores capitais parados",
+                      "Maiores diferenças por produto", "123.456.79"):
+            self.assertIn(texto, html)
+        self.assertGreaterEqual(pagina.locator("thead th", has_text="Desconto").count(), 1)
+        # O simulador com produto (não só os quatro cenários de R$ 0,00).
+        import re
+        itens = re.search(r"([\d.]+) produto\(s\) da Urgência com estoque", html)
+        self.assertIsNotNone(itens)
+        self.assertGreater(int(itens.group(1).replace(".", "")), 0)
+        pagina.context.close()
 
     def test_cliente_sem_cortes_em_todas_as_larguras(self):
         for largura, altura in LARGURAS:

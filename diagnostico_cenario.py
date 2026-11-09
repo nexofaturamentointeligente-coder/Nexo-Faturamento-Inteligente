@@ -30,8 +30,15 @@ aparece como "a confirmar". A ordenação é pelo impacto do último ano, depois
 
 Inteligência de estoque e de preço (Etapa 3, inteligencia_estoque.calcular): estoque parado por
 idade (60, 90 e 180 dias sem venda), estoque excedente, simulador de liquidação da Urgência e auditoria
-de preço pelo markup de referência, na seção "inteligencia" do payload; nula sem a coluna de estoque
-em nenhum relatório (só o estoque) ou sem os períodos cobertos na meta (envio de antes da Etapa 3).
+de preço pelo markup de referência, na seção "inteligencia" do payload. Sem estoque informado (a coluna
+falta em todos os relatórios ou vem vazia em todas as linhas), o estoque e o simulador ficam nulos, e o
+estoque parado da matriz também; sem os períodos cobertos na meta (envio de antes da Etapa 3), a seção
+inteira fica nula.
+
+Visualizações (Etapa 4, visualizacoes): séries prontas para gráficos (rótulos e valores numéricos),
+tiradas do próprio payload, sem cálculo novo: a triagem por bloco, as três marcas, o caixa resgatável
+(cada parcela com a natureza dela: retroativo, capital parado, capital liberável ou projeção, que não
+se somam), o estoque por idade, as categorias por impacto, o simulador e a auditoria de preço.
 
 Payload (montar_payload, audiência: consultor): só sai pela rota admin_required
 `/admin/leads/<id>/diagnostico.json`, nunca leva o contato do lead e só leva texto do PDV (nome,
@@ -52,7 +59,7 @@ import avaliacao_motor
 import inteligencia_estoque
 import triagem_cenario
 
-VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.2"
+VERSAO_DIAGNOSTICO = "diagnostico-lead-2026-11.3"
 FRACAO_VENDA_CONTINUA = Fraction(3, 4)
 COBERTURA_MINIMA_DA_CATEGORIA = Fraction(1, 2)
 ITENS_POR_BLOCO_PADRAO = 30
@@ -283,7 +290,8 @@ def matriz_por_categoria(linhas: list, cobertura, triagem, meta: dict) -> dict:
     mensal = bool(cobertura.mensais.get(ultimo))
     completos = (cobertura.completos or {}).get(ultimo) if cobertura.completos is not None else cobertura.relatorios[ultimo]
     venda_continua_mensuravel = mensal and completos is not None and completos >= 2
-    tem_estoque = cobertura.com_estoque is None or any(n > 0 for n in cobertura.com_estoque.values())
+    # O critério da inteligência: a coluna vazia em todas as linhas é estoque não informado (nulo), não zero.
+    tem_estoque = inteligencia_estoque.estoque_informado(linhas, cobertura)
     somas: dict = defaultdict(_vazio)
     total = _vazio()
     total_ultimo_ano = sum((anos[ultimo]["valor_venda_bruto"] for anos in produtos.values() if ultimo in anos), _ZERO)
@@ -433,15 +441,100 @@ def _constante_recusada(nome):
     raise ValueError(f"Constante {nome} fora do JSON.")
 
 
+# Maior inteiro (em dígitos) que um JSON gravado no lead pode trazer: nenhum valor gravado chega perto
+# (contagens e dinheiro abaixo de 10¹²), e um inteiro gigante derrubaria float() e math.isfinite().
+_DIGITOS_DO_MAIOR_INTEIRO = 18
+
+
+def _inteiro_limitado(texto: str) -> int:
+    if len(texto.lstrip("-")) > _DIGITOS_DO_MAIOR_INTEIRO:
+        raise ValueError("Inteiro grande demais no JSON gravado.")
+    return int(texto)
+
+
 def ler_objeto(texto):
-    """O JSON gravado se for um objeto com números finitos; senão (inválido, NaN, Infinity, 1e999 ou
-    aninhado demais), None. O jsonify escreveria um número não finito como JSON inválido."""
+    """O JSON gravado se for um objeto com números finitos; senão (inválido, NaN, Infinity, 1e999,
+    inteiro com mais de 18 dígitos ou aninhado demais), None. O jsonify escreveria um número não finito
+    como JSON inválido."""
     import json
     try:
-        valor = json.loads(texto, parse_constant=_constante_recusada, parse_float=_float_finito) if texto else None
+        valor = (json.loads(texto, parse_constant=_constante_recusada, parse_float=_float_finito,
+                            parse_int=_inteiro_limitado) if texto else None)
     except (ValueError, RecursionError):
         return None
     return valor if isinstance(valor, dict) else None
+
+
+# Resumos gravados no lead (ficam depois do expurgo): validados aqui, num lugar só, para o payload, as
+# visualizações e as telas. Número fora do formato (texto onde vai número, negativo, não finito ou acima
+# do teto do dinheiro) faz o resumo inteiro valer nada, sem erro 500.
+_TETO_DO_RESUMO = avaliacao_motor.TETO_DINHEIRO_DA_META
+_VALORES_DO_RESUMO_DA_INTELIGENCIA = (
+    "capital_em_estoque", "capital_excedente_liberavel", "urgencia_receita_a_preco_medio",
+    "urgencia_capital_ao_custo", "urgencia_itens_com_estoque", "diferenca_de_preco_adicional",
+    "itens_abaixo_do_preco_de_referencia")
+# Contagens do resumo: com estoque informado, inteiros obrigatórios (a falta de uma diria "soma completa", o
+# que não se sabe); sem ele, nulas.
+_CONTAGENS_DO_RESUMO = ("itens_sem_estoque_informado", "itens_sem_estoque_com_custo",
+                        "itens_parados_sem_estoque_informado")
+
+
+def _numero_do_resumo(valor, *, inteiro: bool = False, texto: bool = True):
+    """O número de um resumo gravado se for finito, não negativo e abaixo do teto; senão None. Com
+    `inteiro`, só int (nunca bool, float ou texto); sem `texto`, texto decimal não vale."""
+    if isinstance(valor, bool):
+        return None
+    if inteiro:
+        return valor if type(valor) is int and 0 <= valor < _TETO_DO_RESUMO else None
+    if not isinstance(valor, (int, float)) and not (texto and isinstance(valor, str)):
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numero if math.isfinite(numero) and 0 <= numero < _TETO_DO_RESUMO else None
+
+
+def resumo_de_bloco_valido(resumo):
+    """O resumo gravado de um bloco da triagem (triagem_cenario: itens, faturamento e recuperável em texto
+    decimal, motivos {código: contagem}) só com esse formato e as duas somas presentes; senão None."""
+    if not isinstance(resumo, dict):
+        return None
+    motivos = resumo.get("motivos", {})
+    if (_numero_do_resumo(resumo.get("itens"), inteiro=True) is None or not isinstance(motivos, dict)
+            or not all(isinstance(codigo, str) and _numero_do_resumo(quantos, inteiro=True) is not None
+                       for codigo, quantos in motivos.items())
+            or any(_numero_do_resumo(resumo.get(chave)) is None for chave in ("faturamento", "recuperavel"))):
+        return None
+    return resumo
+
+
+def resumo_inteligencia_valido(resumo):
+    """O resumo numérico da inteligência gravado no lead (inteligencia_estoque.resumo) só se for da
+    versão atual e tiver o formato: com_estoque booleano, valores numéricos (nunca texto) finitos, não
+    negativos e abaixo do teto, ou nulos; faixas {dias em dígitos: valor}, até 5; com estoque informado, as
+    contagens de produtos sem saldo (inteiros, obrigatórias) e, sem ele, nulas. Senão, None: um resumo
+    de outra versão pode dar a um campo outro sentido."""
+    if not isinstance(resumo, dict) or resumo.get("versao") != inteligencia_estoque.VERSAO_INTELIGENCIA:
+        return None
+
+    def valido(valor):
+        return valor is None or _numero_do_resumo(valor, texto=False) is not None
+
+    if type(resumo.get("com_estoque")) is not bool or not all(valido(resumo.get(c)) for c in _VALORES_DO_RESUMO_DA_INTELIGENCIA):
+        return None
+    if resumo["com_estoque"]:
+        if not all(_numero_do_resumo(resumo.get(c), inteiro=True) is not None for c in _CONTAGENS_DO_RESUMO):
+            return None
+    elif not all(resumo.get(c) is None for c in _CONTAGENS_DO_RESUMO):
+        return None
+    for chave in ("capital_parado", "itens_parados"):
+        faixas = resumo.get(chave)
+        if faixas is not None and not (isinstance(faixas, dict) and len(faixas) <= 5 and all(
+                isinstance(dias, str) and dias.isascii() and dias.isdigit() and len(dias) <= 4 and valido(valor)
+                for dias, valor in faixas.items())):
+            return None
+    return resumo
 
 
 def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
@@ -476,7 +569,9 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         "limiares": ler_objeto(lead.get("limiares_triagem_json")),
         "situacao": "atual", "dados_pdv_ate": None, "cobertura": None, "totais": None, "categorias": None,
         "categorias_publicadas": False, "cobertura_categoria": None, "blocos": None, "inteligencia": None,
-        "definicoes": DEFINICOES, "avisos": [],
+        # O resumo numérico gravado no lead (fica depois do expurgo), só se for da versão atual e válido.
+        "resumo_inteligencia": resumo_inteligencia_valido(ler_objeto(lead.get("resumo_inteligencia_json"))),
+        "definicoes": DEFINICOES, "avisos": [], "visualizacoes": None,
     }
     expira_em = min((r["criado_em"] for r in registros), default=None)
     expira_em = expira_em + timedelta(days=retencao_dias) if expira_em is not None else None
@@ -485,11 +580,13 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         payload["situacao"] = "expirado"
         payload["avisos"].append(f"Os dados de PDV deste lead saem {retencao_dias} dias depois do envio: "
                                  "fica só o resumo. Envie os relatórios de novo para ver itens e categorias.")
+        payload["visualizacoes"] = visualizacoes(payload)
         return payload
     if {r.get("versao_regras") for r in registros} != {avaliacao_motor.VERSAO_REGRAS_LEAD}:
         payload["situacao"] = "desatualizado"
         payload["avisos"].append("Os dados deste lead foram gravados por outra versão das regras: envie os "
                                  "relatórios de novo para ver itens e categorias.")
+        payload["visualizacoes"] = visualizacoes(payload)
         return payload
     try:
         meta = ler_objeto(lead.get("meta_json")) or {}
@@ -511,6 +608,7 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         payload["situacao"] = "desatualizado"
         payload["avisos"].append("A triagem deste lead foi feita com regras anteriores ou o resumo gravado está "
                                  "fora do formato: use \"Refazer a triagem\" ou envie os relatórios de novo.")
+        payload["visualizacoes"] = visualizacoes(payload)
         return payload
     payload.update({
         "limiares": limiares.para_dict(),
@@ -531,8 +629,9 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
                                  "deste lead: envie os relatórios de novo.")
     else:
         if inteligencia["estoque"] is None:
-            payload["avisos"].append("Os relatórios não trazem a coluna de estoque: o estoque parado por idade, o "
-                                     "excedente e o simulador de liquidação não foram calculados.")
+            payload["avisos"].append("Os relatórios não trazem estoque informado (a coluna falta ou vem vazia): o "
+                                     "estoque parado por idade, o excedente e o simulador de liquidação não foram "
+                                     "calculados.")
     payload["inteligencia"] = inteligencia
     if not matriz["categorias_publicadas"]:
         payload["avisos"].append("Os relatórios não trazem categoria em ao menos metade do faturamento: a matriz "
@@ -550,4 +649,125 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         payload["avisos"].append("Os dois últimos anos do envio não têm mês em comum (por exemplo, novembro a "
                                  "outubro): a queda do ritmo de venda não foi avaliada, para a sazonalidade não "
                                  "parecer parada. Envie os mesmos meses dos dois anos para comparar.")
+    payload["visualizacoes"] = visualizacoes(payload)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Visualizações (Etapa 4)
+# ---------------------------------------------------------------------------
+CATEGORIAS_NO_GRAFICO = 10
+NATUREZAS_DO_CAIXA = {
+    "retroativo": "Já aconteceu: o que se recupera no preço daqui para a frente, se a causa for corrigida.",
+    "capital_parado": ("Capital em estoque sem venda, ao custo, pelo último saldo informado nos relatórios "
+                       "(não é inventário)."),
+    "capital_liberavel": "Capital acima da cobertura-alvo em itens que ainda vendem (ao custo).",
+    "projecao": "Projeção: receita do estoque da Urgência ao preço médio praticado, sem desconto.",
+}
+
+
+def _valor_do_resumo(valor):
+    """Número de um resumo gravado (texto decimal ou número) como float finito; o resto vale None."""
+    if isinstance(valor, bool) or valor is None:
+        return None
+    if isinstance(valor, int):
+        return valor
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return None
+    return numero if math.isfinite(numero) else None
+
+
+def _serie(nome, unidade, valores) -> dict:
+    return {"nome": nome, "unidade": unidade, "valores": list(valores)}
+
+
+def visualizacoes(payload: dict) -> dict:
+    """Séries para gráficos, a partir do payload já montado (nada é recalculado). Cada visualização:
+    {"titulo", "tipo": "barras" ou "linhas", "rotulos": [...], "series": [{"nome", "unidade" ("BRL",
+    "itens" ou "fracao"), "valores": [...]}]} e, no caixa resgatável, "naturezas" (uma por rótulo).
+    Só rótulos fixos, nomes de categoria (enquanto as linhas existem) e números: nunca o contato."""
+    saida = {}
+    blocos = triagem_cenario.BLOCOS
+    resumos = payload.get("resumos") or {}
+
+    def do_bloco(bloco, chave):
+        resumo = resumo_de_bloco_valido(resumos.get(bloco))
+        return _valor_do_resumo(resumo.get(chave)) if resumo is not None else None
+
+    saida["triagem"] = {
+        "titulo": "Matriz de triagem", "tipo": "barras",
+        "rotulos": [triagem_cenario.ROTULOS_DOS_BLOCOS[b] for b in blocos],
+        "series": [_serie("Produtos", "itens", (do_bloco(b, "itens") for b in blocos)),
+                   _serie("Faturamento", "BRL", (do_bloco(b, "faturamento") for b in blocos)),
+                   _serie("Potencial recuperável", "BRL", (do_bloco(b, "recuperavel") for b in blocos))],
+    }
+    contagens = payload.get("contagens") or {}
+    saida["marcas"] = {
+        "titulo": "Marcas do cadastro", "tipo": "barras",
+        "rotulos": ["Venda sem custo", "Venda abaixo do custo", "Omissão no ERP"],
+        "series": [_serie("Produtos", "itens", (contagens.get(nome) for nome in (
+            "itens_venda_sem_custo", "itens_venda_abaixo_custo", "itens_omissao_erp")))],
+    }
+    # Caixa resgatável: do cálculo atual ou, sem ele (linhas expiradas, de outra versão ou ilegíveis), do
+    # resumo gravado no lead. Com o cálculo atual, só ele vale: sem estoque informado, as parcelas de
+    # estoque ficam nulas, diga o resumo gravado o que disser.
+    calculada = payload.get("inteligencia") is not None
+    inteligencia = payload.get("inteligencia") or {}
+    estoque, simulador = inteligencia.get("estoque"), inteligencia.get("simulador")
+    gravado = {} if calculada else (payload.get("resumo_inteligencia") or {})
+    # A primeira faixa (a menor, como na lista de leads), do cálculo atual ou do resumo gravado válido.
+    if estoque is not None:
+        acima_de = estoque["parado"]["acima_de"]
+        primeira = min(acima_de, key=int) if acima_de else None
+        parado = acima_de[primeira]["capital"] if primeira else None
+        excedente = estoque["excedente"]["capital_liberavel"]
+    else:
+        acima = gravado.get("capital_parado") or {}
+        primeira = min(acima, key=int) if acima else None
+        parado = _valor_do_resumo(acima.get(primeira)) if primeira else None
+        excedente = _valor_do_resumo(gravado.get("capital_excedente_liberavel"))
+    urgencia = (simulador["receita_a_preco_medio"] if simulador is not None
+                else _valor_do_resumo(gravado.get("urgencia_receita_a_preco_medio")))
+    rotulo_parado = f"Estoque parado há {primeira} dias ou mais" if primeira else "Estoque parado"
+    saida["caixa_resgatavel"] = {
+        "titulo": "Caixa resgatável (as parcelas não se somam)", "tipo": "barras",
+        "rotulos": ["Potencial recuperável", rotulo_parado, "Estoque excedente", "Estoque da Urgência a preço médio"],
+        "naturezas": ["retroativo", "capital_parado", "capital_liberavel", "projecao"],
+        "series": [_serie("Valor", "BRL", (payload["lead"].get("potencial_recuperavel_total"), parado, excedente, urgencia))],
+    }
+    if estoque is not None:
+        faixas = estoque["parado"]["faixas"]
+        saida["estoque_por_idade"] = {
+            "titulo": "Estoque parado por idade", "tipo": "barras", "rotulos": [f["faixa"] for f in faixas],
+            "series": [_serie("Capital", "BRL", (f["capital"] for f in faixas)),
+                       _serie("Produtos", "itens", (f["itens"] for f in faixas))],
+        }
+    categorias = [c for c in (payload.get("categorias") or []) if c.get("categoria") is not None]
+    if payload.get("categorias_publicadas") and categorias:
+        topo = categorias[:CATEGORIAS_NO_GRAFICO]
+        saida["categorias_por_impacto"] = {
+            "titulo": "Categorias por impacto no último ano", "tipo": "barras", "rotulos": [c["categoria"] for c in topo],
+            "series": [_serie("Impacto", "BRL", (c.get("impacto") for c in topo)),
+                       _serie("Potencial recuperável", "BRL", (c.get("potencial_recuperavel") for c in topo)),
+                       _serie("Estoque parado", "BRL", (c.get("estoque_parado") for c in topo))],
+        }
+    if simulador is not None and simulador["cenarios"]:
+        cenarios = simulador["cenarios"]
+        saida["simulador"] = {
+            "titulo": "Simulador de liberação de caixa (Urgência)", "tipo": "linhas",
+            "rotulos": [f"{c['desconto'] * 100:g}%".replace(".", ",") for c in cenarios],
+            "series": [_serie("Caixa", "BRL", (c["caixa"] for c in cenarios)),
+                       _serie("Resultado contra o custo", "BRL", (c["resultado_contra_o_custo"] for c in cenarios))],
+        }
+    auditoria = inteligencia.get("auditoria_de_preco")
+    if auditoria is not None and auditoria["categorias"]:
+        topo = auditoria["categorias"][:CATEGORIAS_NO_GRAFICO]
+        saida["auditoria_de_preco"] = {
+            "titulo": "Diferença para o preço de referência", "tipo": "barras",
+            "rotulos": [c["categoria"] if c["categoria"] is not None else "Sem categoria" for c in topo],
+            "series": [_serie("Diferença", "BRL", (c["diferenca"] for c in topo)),
+                       _serie("Produtos abaixo", "itens", (c["itens"] for c in topo))],
+        }
+    return saida

@@ -89,7 +89,9 @@
                         <th>Loja e contato</th>
                         <th>Situação</th>
                         <th class="text-end">Saúde</th>
-                        <th class="text-end">Recuperável</th>
+                        <th>Triagem</th>
+                        <th>Marcas</th>
+                        <th class="text-end">Caixa resgatável</th>
                         <th>Plano sugerido</th>
                         <th>Avaliado em</th>
                         <th class="text-end col-acao">Ações</th>
@@ -97,11 +99,15 @@
                 </thead>
                 <tbody>
                     {% for lead in leads %}
+                    {% set painel = paineis.get(lead.id, {}) %}
+                    {% set triagem = painel.get('triagem', {}) %}
                     <tr>
                         <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong><br><small class="t-mut text-break">{{ lead.nome_contato }}</small><br><small class="t-mut t-email">{{ lead.email }}</small></td>
                         <td>{{ badge_lead(lead.status) }}</td>
                         <td class="text-end fw-num">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}{% else %}—{% endif %}</td>
-                        <td class="text-end fw-num">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</td>
+                        <td><span class="text-nowrap">{% for bloco, sigla in [('urgencia', 'U'), ('atencao', 'A'), ('eletiva', 'E')] %}<abbr title="{{ rotulos_blocos[bloco] }}">{{ sigla }}</abbr> {% if triagem.get(bloco) is not none %}{{ m.num(triagem.get(bloco)) }}{% else %}—{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</span></td>
+                        <td><small class="d-block">{{ m.num(lead.itens_venda_sem_custo or 0) }} sem custo</small><small class="d-block">{{ m.num(lead.itens_venda_abaixo_custo or 0) }} abaixo do custo</small><small class="d-block">{% if lead.itens_omissao_erp is not none %}{{ m.num(lead.itens_omissao_erp) }}{% else %}—{% endif %} com omissão no ERP</small></td>
+                        <td class="text-end fw-num">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}<br><small class="t-mut">recuperável</small>{% if painel.get('parado') %}<br>R$ {{ m.brl(painel.parado.capital) }}<br><small class="t-mut">parado há {{ painel.parado.dias }} dias ou mais{% if painel.parado.parcial %} (parcial){% endif %}</small>{% endif %}</td>
                         <td>{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</td>
                         <td>{{ m.horario(lead.consentimento_em or lead.criado_em) }}</td>
                         <td class="text-end col-acao">

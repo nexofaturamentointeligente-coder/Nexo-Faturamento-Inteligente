@@ -230,7 +230,26 @@ class EstoqueParadoTests(unittest.TestCase):
                          [("Produto C", 184, 120.0, 20.0, 6.0), ("Produto A", 61, 60.0, 10.0, 6.0),
                           ("Produto B", 92, 30.0, 5.0, 6.0)])
         self.assertEqual((parado["itens_com_lacuna"], resultado["itens_sem_custo"],
-                          resultado["itens_sem_estoque_informado"]), (0, 1, 1))
+                          resultado["itens_sem_estoque_informado"], resultado["itens_sem_estoque_com_custo"],
+                          resultado["itens_parados_sem_estoque_informado"]), (0, 1, 1, 1, 1))
+
+    def test_sem_estoque_informado_ja_parado_so_a_partir_da_primeira_faixa(self):
+        # Sem saldo: conta como sem estoque informado; com custo, também como sem estoque com custo (as somas de
+        # estoque ficam parciais) e, a partir de 60 dias cobertos sem venda, como parado sem estoque (com saldo,
+        # entraria na soma do parado). Quem ainda vende, a data ausente, o item sem custo (fora com saldo ou
+        # sem) e o item a confirmar não contam como parados.
+        sem_data = linha("SD", 2025)
+        sem_data["fim_ultimo_relatorio_com_venda"] = None
+        resultado = self._calcular([
+            linha("S60", 2025, ultima=date(2025, 9, 1)),   # 60 dias cobertos: conta
+            linha("S59", 2025, ultima=date(2025, 9, 2)),   # 59 dias: ainda não
+            linha("SV", 2025, ultima=date(2025, 10, 31)),  # vendeu no último dia
+            linha("SC", 2025, ultima=date(2025, 1, 31), com_custo="0.00"),  # sem custo
+            linha("X", 2025, ultima=date(2025, 1, 31)),    # a confirmar: fora de tudo
+            linha("C", 2025, ultima=date(2025, 4, 30), estoque_final="20"), sem_data])
+        self.assertEqual((resultado["itens_sem_estoque_informado"], resultado["itens_sem_estoque_com_custo"],
+                          resultado["itens_parados_sem_estoque_informado"]), (5, 4, 1))
+        self.assertEqual(resultado["parado"]["acima_de"]["60"], {"itens": 1, "capital": 120.0})
 
     def test_excedente_acima_da_cobertura_alvo(self):
         excedente = self._calcular()["excedente"]
@@ -316,7 +335,12 @@ class SimuladorTests(unittest.TestCase):
     def test_receita_capital_cenarios_e_equilibrio(self):
         resultado = self._simular()
         self.assertEqual((resultado["escopo"], resultado["itens"]), ("urgencia", 2))
-        self.assertEqual(resultado["itens_fora"], {"a_confirmar": 1, "sem_estoque": 1, "sem_custo": 1, "sem_preco": 1})
+        self.assertEqual(resultado["itens_fora"], {"a_confirmar": 1, "sem_estoque_informado": 1, "estoque_zerado": 0,
+                                                   "sem_custo": 1, "sem_preco": 1})
+        # Saldo zerado (ou negativo) não é o mesmo que saldo não informado.
+        zerado = self._simular([linha("Z", 2025, estoque_final="0"), linha("N", 2025, estoque_final="-2")],
+                               blocos={"Z": "urgencia", "N": "urgencia"})
+        self.assertEqual((zerado["itens_fora"]["estoque_zerado"], zerado["itens_fora"]["sem_estoque_informado"]), (2, 0))
         # U1: 5 x 20 e 5 x 12; U2: 2 x 25 e 2 x 15.
         self.assertEqual((resultado["receita_a_preco_medio"], resultado["capital_ao_custo"]), (150.0, 90.0))
         self.assertEqual(resultado["desconto_de_equilibrio"], 0.4)
@@ -335,10 +359,18 @@ class SimuladorTests(unittest.TestCase):
         self.assertEqual((cenario["caixa"], cenario["resultado_contra_o_custo"]), (37.5, -7.5))
 
     def test_item_vendido_abaixo_do_custo_e_simulador_vazio(self):
+        import math
         abaixo = [linha("W", 2025, venda="50.00", custo="100.00", estoque_final="1")]
         resultado = self._simular(abaixo, blocos={"W": "urgencia"})
         # Equilíbrio negativo: nem sem desconto o estoque paga o custo.
-        self.assertEqual(resultado["desconto_de_equilibrio"], -1.0)
+        self.assertEqual((resultado["desconto_de_equilibrio"], resultado["abaixo_do_custo_sem_desconto"]), (-1.0, True))
+        # Custo um centésimo de milésimo acima do preço: o arredondado é zero (nunca -0.0), e a marca diz o sentido.
+        quase = self._simular([linha("Q", 2025, venda="100000.00", custo="100001.00", estoque_final="1")],
+                              blocos={"Q": "urgencia"})
+        self.assertEqual(quase["desconto_de_equilibrio"], 0.0)
+        self.assertEqual(math.copysign(1, quase["desconto_de_equilibrio"]), 1.0)
+        self.assertTrue(quase["abaixo_do_custo_sem_desconto"])
+        self.assertFalse(self._simular()["abaixo_do_custo_sem_desconto"])
         vazio = self._simular([], blocos={})
         self.assertEqual((vazio["itens"], vazio["receita_a_preco_medio"], vazio["desconto_de_equilibrio"]), (0, 0.0, None))
 
@@ -438,13 +470,40 @@ class ResumoEPayloadTests(unittest.TestCase):
         self.assertEqual(set(resumo), {
             "versao", "com_estoque", "capital_em_estoque", "capital_parado", "itens_parados",
             "capital_excedente_liberavel", "urgencia_receita_a_preco_medio", "urgencia_capital_ao_custo",
-            "urgencia_itens_com_estoque", "diferenca_de_preco_adicional", "itens_abaixo_do_preco_de_referencia"})
+            "urgencia_itens_com_estoque", "diferenca_de_preco_adicional", "itens_abaixo_do_preco_de_referencia",
+            "itens_sem_estoque_informado", "itens_sem_estoque_com_custo", "itens_parados_sem_estoque_informado"})
+        self.assertEqual(resumo["itens_sem_estoque_informado"], inteligencia["estoque"]["itens_sem_estoque_informado"])
+        # Sem saldo, todos com custo: o F (sem venda desde janeiro, falta na soma do parado) e os quatro da
+        # auditoria, que vendem até o fim e não entrariam nela.
+        self.assertEqual((resumo["itens_sem_estoque_informado"], resumo["itens_sem_estoque_com_custo"],
+                          resumo["itens_parados_sem_estoque_informado"]), (5, 5, 1))
         self.assertEqual(resumo["capital_parado"], {"60": 210.0, "90": 150.0, "180": 120.0})
         self.assertEqual(resumo["com_estoque"], True)
         texto = json.dumps(resumo, ensure_ascii=False)
         # Nada de nome de produto nem de categoria: o resumo fica depois do expurgo das linhas.
         for proibido in ("Produto", "BEBIDAS", "Bebidas"):
             self.assertNotIn(proibido, texto)
+
+    def test_coluna_de_estoque_vazia_em_todas_as_linhas_vale_como_sem_estoque(self):
+        # A coluna existe nos relatórios (com_estoque > 0), mas nenhuma linha traz o saldo: nulo, não zero.
+        base = cobertura_de({2025: 304}, com_estoque={2025: 12})
+        linhas = [linha("A", 2025, ultima=date(2025, 8, 31)), linha("E", 2025)]
+        inteligencia = inteligencia_estoque.calcular(linhas, base, triagem(), META_2025)
+        self.assertIsNone(inteligencia["estoque"])
+        self.assertIsNone(inteligencia["simulador"])
+        resumo = inteligencia_estoque.resumo(inteligencia)
+        self.assertEqual((resumo["com_estoque"], resumo["capital_parado"], resumo["itens_sem_estoque_informado"],
+                          resumo["itens_sem_estoque_com_custo"], resumo["itens_parados_sem_estoque_informado"]),
+                         (False, None, None, None, None))
+        # Um critério só (estoque_informado), também para a matriz: saldo zero informado é estoque; a coluna
+        # ausente em todos os relatórios não é, mesmo com saldo na linha; meta sem a contagem decide pelas linhas.
+        self.assertFalse(inteligencia_estoque.estoque_informado(linhas, base))
+        self.assertTrue(inteligencia_estoque.estoque_informado([*linhas, linha("Z", 2025, estoque_final="0")], base))
+        self.assertFalse(inteligencia_estoque.estoque_informado(
+            [linha("Z", 2025, estoque_final="5")], cobertura_de({2025: 304}, com_estoque={2025: 0})))
+        self.assertTrue(inteligencia_estoque.estoque_informado([linha("Z", 2025, estoque_final="5")],
+                                                               cobertura_de({2025: 304})))
+        self.assertFalse(inteligencia_estoque.estoque_informado(linhas, cobertura_de({2025: 304})))
 
     def test_sem_a_coluna_de_estoque_os_campos_de_estoque_ficam_nulos(self):
         base = cobertura_de({2025: 304}, com_estoque={2025: 0})
@@ -461,11 +520,27 @@ class ResumoEPayloadTests(unittest.TestCase):
         return diagnostico_cenario.montar_payload(_lead({2025: (12, 365, True)}, **meta_trocas), _registros(linhas),
                                                   agora=AGORA, retencao_dias=30, parametros_inteligencia=parametros)
 
+    def test_matriz_com_a_coluna_de_estoque_vazia_tem_estoque_parado_nulo(self):
+        # A coluna nos relatórios e nenhuma linha com saldo: a matriz e o gráfico das categorias dizem "não
+        # informado" (nulo), como a inteligência, e nunca R$ 0,00 ao lado do aviso.
+        linhas = [linha("A", 2025, ultima=date(2025, 8, 31), categoria="BEBIDAS"), linha("E", 2025, categoria="BEBIDAS")]
+        payload = self._payload(linhas)
+        self.assertIsNone(payload["inteligencia"]["estoque"])
+        self.assertIsNone(payload["totais"]["estoque_parado"])
+        self.assertEqual([c["estoque_parado"] for c in payload["categorias"]], [None])
+        series = {s["nome"]: s["valores"] for s in payload["visualizacoes"]["categorias_por_impacto"]["series"]}
+        self.assertEqual(series["Estoque parado"], [None])
+        # Com saldo em uma das linhas, o estoque parado da matriz volta a ser número.
+        com_saldo = self._payload([linha("A", 2025, ultima=date(2025, 8, 31), estoque_final="10", categoria="BEBIDAS"),
+                                   linha("E", 2025, categoria="BEBIDAS")])
+        self.assertIsInstance(com_saldo["totais"]["estoque_parado"], float)
+        self.assertEqual([c["estoque_parado"] for c in com_saldo["categorias"]], [com_saldo["totais"]["estoque_parado"]])
+
     def test_payload_traz_a_inteligencia_com_os_parametros(self):
         linhas = [linha("A", 2025, ultima=date(2025, 8, 31), estoque_final="10"),
                   linha("E", 2025, estoque_final="100")]
         payload = self._payload(linhas)
-        self.assertEqual(payload["versao"], "diagnostico-lead-2026-11.2")
+        self.assertEqual(payload["versao"], "diagnostico-lead-2026-11.3")
         inteligencia = payload["inteligencia"]
         self.assertEqual(set(inteligencia), {"versao", "parametros", "estoque", "simulador", "auditoria_de_preco",
                                              "definicoes"})
@@ -498,7 +573,7 @@ class ResumoEPayloadTests(unittest.TestCase):
         linhas = [linha("A", 2025, estoque_final="10")]
         sem_estoque = self._payload(linhas, relatorios_com_estoque_por_ano={"2025": 0})
         self.assertIsNone(sem_estoque["inteligencia"]["estoque"])
-        self.assertTrue(any("não trazem a coluna de estoque" in a for a in sem_estoque["avisos"]))
+        self.assertTrue(any("não trazem estoque informado" in a for a in sem_estoque["avisos"]))
         lojas = self._payload(linhas, relatorios_varias_unidades=2)
         self.assertTrue(any(a.startswith("2 relatório(s) com várias lojas") for a in lojas["avisos"]))
         self.assertFalse(any("várias lojas" in a for a in self._payload(linhas)["avisos"]))
@@ -800,8 +875,9 @@ class GravacaoTests(_BancoCase):
             lead, _resultado = self._registrar()
         self.assertIsNone(lead.resumo_inteligencia_json)
         self.assertEqual(lead.status, "concluido")
-        # Meta sem os períodos cobertos (envio de antes da Etapa 3): sem resumo, sem erro.
-        self.assertIsNone(avaliacao_cenario.resumo_da_inteligencia([], cobertura_de({2025: 365}), triagem(), {}))
+        # Meta sem os períodos cobertos (envio de antes da Etapa 3), com estoque a calcular: sem resumo, sem erro.
+        self.assertIsNone(avaliacao_cenario.resumo_da_inteligencia([linha("A", 2025, estoque_final="1")],
+                                                                   cobertura_de({2025: 365}), triagem(), {}))
 
 
 class RotaTests(_BancoCase):
