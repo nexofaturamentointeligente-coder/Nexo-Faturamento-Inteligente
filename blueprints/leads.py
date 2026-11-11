@@ -68,10 +68,12 @@ limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_f
 
 MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
                     "nenhum arquivo foi lido.")
-MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13, 7c4e2a9b5d31 e "
-                        "9b3e5d7f1a28, ainda não aplicadas neste banco: nenhum arquivo foi lido.")
-# Coluna da revisão mais nova de que a tela depende (9b3e5d7f1a28, Etapa 3).
+MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13, 7c4e2a9b5d31, "
+                        "9b3e5d7f1a28 e c5f8a1d3e7b9, ainda não aplicadas neste banco: nenhum arquivo foi lido.")
+# Colunas das revisões mais novas de que a tela depende: a da staging (9b3e5d7f1a28, Etapa 3) e a dos
+# indicadores executivos do lead (c5f8a1d3e7b9), que o modelo LeadAvaliacao já lê em toda consulta.
 _COLUNA_DO_ESQUEMA = "fim_ultimo_relatorio_com_venda"
+_COLUNA_DOS_INDICADORES = "indicadores_executivos_json"
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada.
 CODIGO_OCUPADO = "busy"
@@ -82,7 +84,8 @@ _esquema_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
 
 
 def esquema_disponivel() -> bool:
-    """True quando a staging da Etapa 3 (revisão 9b3e5d7f1a28, sobre a 7c4e2a9b5d31) existe neste banco.
+    """True quando a staging da Etapa 3 (revisão 9b3e5d7f1a28, sobre a 7c4e2a9b5d31) e a coluna dos
+    indicadores executivos do lead (c5f8a1d3e7b9) existem neste banco.
 
     O mesmo critério de validacao_pdv: a presença fica fixa para o engine, e a ausência é
     reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo. Vem antes de
@@ -97,7 +100,9 @@ def esquema_disponivel() -> bool:
         return False
     inspetor = inspect(db.session.connection())
     disponivel = (inspetor.has_table(BrainstormingDadosPdv.__tablename__) and _COLUNA_DO_ESQUEMA in
-                  {coluna["name"] for coluna in inspetor.get_columns(BrainstormingDadosPdv.__tablename__)})
+                  {coluna["name"] for coluna in inspetor.get_columns(BrainstormingDadosPdv.__tablename__)}
+                  and inspetor.has_table(LeadAvaliacao.__tablename__) and _COLUNA_DOS_INDICADORES in
+                  {coluna["name"] for coluna in inspetor.get_columns(LeadAvaliacao.__tablename__)})
     _esquema_por_engine[engine] = True if disponivel else time.monotonic()
     return disponivel
 
@@ -454,6 +459,9 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
         "linhas_atuais": diagnostico.linhas_atuais, "situacao": payload["situacao"], "avisos": payload["avisos"],
         "versao_triagem_atual": triagem_cenario.VERSAO_TRIAGEM, "triagem_da_versao_atual":
             lead.versao_triagem == triagem_cenario.VERSAO_TRIAGEM,
+        # Os rótulos dos KPIs pela semântica da versão gravada (a troca de versão não volta aos de antes da Etapa 2).
+        "triagem_com_marcas_da_etapa_2": lead.versao_triagem in triagem_cenario.VERSOES_COM_MARCAS_DA_ETAPA_2,
+        "custo_a_confirmar_por_ano": lead.versao_triagem in triagem_cenario.VERSOES_COM_CUSTO_A_CONFIRMAR_POR_ANO,
         "resumos": resumos,
         "rotulo_do_motivo": lambda codigo: triagem_cenario.rotulo_do_motivo(codigo, limiares),
         "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS,

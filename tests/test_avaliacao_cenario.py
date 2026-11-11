@@ -24,7 +24,6 @@ Os dados são fictícios.
 from calendar import monthrange
 from datetime import date, timedelta
 from decimal import Decimal
-import importlib.util
 import io
 import json
 from pathlib import Path
@@ -451,9 +450,10 @@ class ContratoTests(_Arquivos):
             with self.subTest(caso=caso):
                 self._invalido(mudar)
 
-    def test_meta_aceita_ate_sessenta_relatorios_e_recusa_sessenta_e_um(self):
-        """O teto de relatórios da meta é o das fatias mensais (raio_x.MAX_FATIAS): 60 passam, 61 não (pedido
-        pelo teste de mutação da revisão final: nenhum teste fixava a fronteira)."""
+    def test_meta_aceita_ate_cento_e_vinte_relatorios_e_recusa_cento_e_vinte_e_um(self):
+        """O teto de relatórios da meta é o das fatias mensais (raio_x.MAX_FATIAS): 120 passam, 121 não (pedido
+        pelo teste de mutação da revisão final: nenhum teste fixava a fronteira). Era 60 até a refatoração 2
+        dos indicadores executivos (10 anos por envio)."""
         def meta(no_primeiro_ano, no_segundo):
             copia = json.loads(json.dumps(self.valido["meta"]))
             primeiro, segundo = sorted(copia["arquivos_por_ano"])
@@ -461,9 +461,9 @@ class ContratoTests(_Arquivos):
             copia["arquivos"] = no_primeiro_ano + no_segundo
             return copia
 
-        self.assertEqual(raio_x.MAX_FATIAS, 60)
-        self.assertTrue(etl_runtime._meta_valida(meta(30, 30), avaliacao_motor.VERSAO_REGRAS_LEAD))
-        self.assertFalse(etl_runtime._meta_valida(meta(31, 30), avaliacao_motor.VERSAO_REGRAS_LEAD))
+        self.assertEqual(raio_x.MAX_FATIAS, 120)
+        self.assertTrue(etl_runtime._meta_valida(meta(60, 60), avaliacao_motor.VERSAO_REGRAS_LEAD))
+        self.assertFalse(etl_runtime._meta_valida(meta(61, 60), avaliacao_motor.VERSAO_REGRAS_LEAD))
 
     def test_colunas_da_etapa_2_fora_do_formato_sao_recusadas(self):
         from tests.test_cadastro_regression import montar_conjuntos
@@ -573,8 +573,8 @@ class ContratoTests(_Arquivos):
         self.assertIn("validate_input(path", trecho)
         self.assertIn("avaliar_cenario(request[\"paths\"])", trecho)
 
-    @unittest.skipUnless(importlib.util.find_spec("resource"), "o worker real exige Linux (módulo resource)")
     def test_worker_real_devolve_o_contrato(self):
+        # No Windows o worker real roda sem os limites do sistema operacional (etl_worker._limitar_recursos).
         resultado = etl_runtime.run_avaliacao_cenario(self.caminhos(*LOTE), ETLLimits())
         self.assertEqual(len(resultado["linhas"]["valores"]), 6)
         self.assertEqual(resultado["raio_x"]["saude"]["faturamento_total"], 995.8)

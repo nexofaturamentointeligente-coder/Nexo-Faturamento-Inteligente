@@ -68,7 +68,7 @@
         <div class="kpi-tile">
             <div class="kpi-top"><span class="kpi-label">Potencial recuperável</span><span class="kpi-icon is-amber"><i class="bi bi-cash-coin" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</div>
-            <div class="kpi-foot">Retroativo: vendas abaixo do preço de referência ou do custo, somadas por produto e ano.</div>
+            <div class="kpi-foot">Retroativo: vendas abaixo do preço de referência ou do custo, somadas por produto e ano{% if custo_a_confirmar_por_ano %}; no ano de custo a confirmar, só a venda abaixo do preço de referência{% endif %}.</div>
         </div>
     </div>
     <div class="col-12 col-sm-6 col-xl-4">
@@ -78,7 +78,7 @@
             <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}<span title="O arquivo que traz a data de cada venda conta um relatório por mês.">{{ lead.arquivos or 0 }} relatório(s)</span></div>
         </div>
     </div>
-    {% if triagem_da_versao_atual %}
+    {% if triagem_com_marcas_da_etapa_2 %}
     <div class="col-12 col-sm-6 col-xl-4">
         <div class="kpi-tile">
             <div class="kpi-top"><span class="kpi-label">Itens sem custo em nenhuma venda</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
@@ -90,7 +90,7 @@
         <div class="kpi-tile">
             <div class="kpi-top"><span class="kpi-label">Itens com alguma venda abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{{ m.num(lead.itens_venda_abaixo_custo or 0) }}</div>
-            <div class="kpi-foot">Produtos com ao menos uma venda por valor menor que o custo da própria venda.</div>
+            <div class="kpi-foot">Produtos com ao menos uma venda por valor menor que o custo da própria venda{% if custo_a_confirmar_por_ano %}, fora o ano de custo a confirmar (custo implausível){% endif %}.</div>
         </div>
     </div>
     <div class="col-12 col-sm-6 col-xl-4">

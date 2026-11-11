@@ -88,10 +88,12 @@ DEFINICOES = {
     "margem_com_bonificacoes_e_devolucoes": ("(Venda com custo - receita devolvida) - CMV líquido, sobre a "
                                              "venda com custo menos a receita devolvida (percentual nulo quando "
                                              "essa receita não é positiva)."),
-    "vendas_abaixo_do_custo": "Soma, linha a linha, do custo menos o valor vendido quando a venda ficou abaixo do custo.",
+    "vendas_abaixo_do_custo": ("Soma, linha a linha, do custo menos o valor vendido quando a venda ficou abaixo do custo, "
+                               "fora o ano de custo a confirmar (custo implausível)."),
     "vazamento_de_preco": "Venda abaixo do preço de referência do próprio relatório (tabela ou o mais praticado).",
     "potencial_recuperavel": ("Retroativo: o maior, por linha, entre a venda abaixo do preço de referência e a "
-                              "venda abaixo do custo. Inclui promoção intencional."),
+                              "venda abaixo do custo; no ano de custo a confirmar (custo implausível), só a venda "
+                              "abaixo do preço de referência. Inclui promoção intencional."),
     "estoque_parado": ("Estoque informado x custo médio dos itens com venda parada, em queda forte ou com giro "
                        "crítico e estoque positivo, em qualquer bloco."),
     "faturamento_venda_continua": ("Venda do último ano dos itens que venderam em ao menos 75% dos relatórios "
@@ -102,10 +104,44 @@ DEFINICOES = {
                 "margem e o estoque parado (este, no último ano)."),
     "impacto_acumulado": "Soma do impacto de todos os anos do envio.",
     "itens_por_bloco": "Produtos da categoria em cada bloco da triagem.",
-    "marcas": "Produtos com venda sem custo, com alguma venda abaixo do custo e com omissão no ERP.",
+    "marcas": ("Produtos com venda sem custo, com alguma venda abaixo do custo (fora o ano de custo a confirmar) e "
+               "com omissão no ERP."),
     "cauda": "Produtos fora dos 95% do faturamento do último ano e a participação deles.",
     "a_confirmar": "Produtos com custo implausível (unidade ou embalagem trocada), fora do impacto.",
 }
+# Os três textos de antes da triagem-2026-11.4, em que o ano de custo a confirmar ainda contava na venda abaixo do
+# custo, no recuperável e na marca: o lead triado por outra versão mostra a regra com que foi triado, como a tela.
+_DEFINICOES_ANTES_DO_CUSTO_A_CONFIRMAR_POR_ANO = {
+    "vendas_abaixo_do_custo": "Soma, linha a linha, do custo menos o valor vendido quando a venda ficou abaixo do custo.",
+    "potencial_recuperavel": ("Retroativo: o maior, por linha, entre a venda abaixo do preço de referência e a "
+                              "venda abaixo do custo. Inclui promoção intencional."),
+    "marcas": "Produtos com venda sem custo, com alguma venda abaixo do custo e com omissão no ERP.",
+}
+
+
+# Antes da Etapa 2 (triagem-2026-11.2 ou lead sem versão), a marca era o preço médio abaixo do custo médio, e a
+# omissão no ERP não existia: a tela mostra essa regra, e o JSON também.
+_DEFINICOES_ANTES_DA_ETAPA_2 = {
+    "marcas": ("Produtos com venda sem custo em algum ano e com preço médio abaixo do custo médio registrado (a versão "
+               "não marcava a omissão no ERP)."),
+}
+_ROTULOS_DAS_MARCAS = {
+    True: (("Venda sem custo", "itens_venda_sem_custo"), ("Venda abaixo do custo", "itens_venda_abaixo_custo"),
+           ("Omissão no ERP", "itens_omissao_erp")),
+    False: (("Venda sem custo", "itens_venda_sem_custo"), ("Preço médio abaixo do custo", "itens_venda_abaixo_custo")),
+}
+
+
+def definicoes_da_versao(versao_triagem) -> dict:
+    """As definições do diagnóstico para a versão da triagem gravada no lead (uma cópia; DEFINICOES não muda): a
+    definição das marcas segue VERSOES_COM_MARCAS_DA_ETAPA_2, e a ressalva do custo a confirmar segue
+    VERSOES_COM_CUSTO_A_CONFIRMAR_POR_ANO, como a tela."""
+    if versao_triagem in triagem_cenario.VERSOES_COM_CUSTO_A_CONFIRMAR_POR_ANO:
+        return dict(DEFINICOES)
+    definicoes = {**DEFINICOES, **_DEFINICOES_ANTES_DO_CUSTO_A_CONFIRMAR_POR_ANO}
+    if versao_triagem not in triagem_cenario.VERSOES_COM_MARCAS_DA_ETAPA_2:
+        definicoes.update(_DEFINICOES_ANTES_DA_ETAPA_2)
+    return definicoes
 
 
 def _dinheiro(valor) -> float:
@@ -298,9 +334,12 @@ def matriz_por_categoria(linhas: list, cobertura, triagem, meta: dict) -> dict:
     for chave, por_ano in produtos.items():
         categoria = triagem_cenario._categoria(por_ano)
         impacto_ultimo, impacto_total, _origem = impacto_do_produto(por_ano, chave, triagem, ultimo)
+        # O ano de custo a confirmar é inconsistência de custo (a_confirmar_itens), não venda abaixo do custo; o
+        # outro ano do mesmo produto conta normalmente (a regra da triagem).
+        implausivel = {ano: triagem_cenario.custo_implausivel(l, triagem.limiares) for ano, l in por_ano.items()}
         marcas = {
             "sem_custo": any(triagem_cenario.marcas(l, triagem.limiares)["flag_venda_sem_custo"] for l in por_ano.values()),
-            "abaixo_do_custo": any(l["perda"] > 0 for l in por_ano.values()),
+            "abaixo_do_custo": any(l["perda"] > 0 and not implausivel[ano] for ano, l in por_ano.items()),
             "omissao_erp": bool((triagem.omissoes or {}).get(chave)),
         }
         parado = estoque_parado(por_ano, chave, triagem) or _ZERO
@@ -315,10 +354,15 @@ def matriz_por_categoria(linhas: list, cobertura, triagem, meta: dict) -> dict:
             soma["faturamento"] += sum((l["valor_venda_bruto"] for l in por_ano.values()), _ZERO)
             soma["faturamento_ultimo_ano"] += venda_ultimo
             soma["venda_continua"] += continua
+            # No ano de custo a confirmar, a perda contra o custo implausível fica fora da venda abaixo do custo e do
+            # recuperável (que fica só com a variação de preço), como na triagem.
             for nome, coluna in (("venda_com_custo", "faturamento_com_custo"), ("custo_das_vendas", "custo_total"),
-                                 ("vendas_abaixo_do_custo", "perda"), ("vazamento_de_preco", "vazamento_preco"),
-                                 ("potencial_recuperavel", "recuperavel")):
+                                 ("vazamento_de_preco", "vazamento_preco")):
                 soma[nome] += sum((l[coluna] for l in por_ano.values()), _ZERO)
+            soma["vendas_abaixo_do_custo"] += sum((triagem_cenario.perda_real_do_ano(l, triagem.limiares)
+                                                   for l in por_ano.values()), _ZERO)
+            soma["potencial_recuperavel"] += sum((triagem_cenario.recuperavel_do_ano(l, triagem.limiares)
+                                                  for l in por_ano.values()), _ZERO)
             for nome, coluna in (("custo_bonificacoes", "custo_bonificacoes"), ("custo_devolucoes", "custo_devolucoes"),
                                  ("receita_devolvida_com_custo", "devolucoes_com_custo")):
                 soma[nome] += sum((triagem_cenario._valor(l, coluna, _ZERO) for l in por_ano.values()), _ZERO)
@@ -405,8 +449,12 @@ def itens_dos_blocos(linhas: list, cobertura, triagem, limite: int = ITENS_POR_B
                 "anos": anos,
                 "faturamento": _dinheiro(sum((l["valor_venda_bruto"] for l in por_ano.values()), _ZERO)),
                 "faturamento_ultimo_ano": _dinheiro(por_ano[ultimo]["valor_venda_bruto"]) if ultimo in por_ano else 0.0,
-                "potencial_recuperavel": _dinheiro(sum((l["recuperavel"] for l in por_ano.values()), _ZERO)),
-                "vendas_abaixo_do_custo": _dinheiro(sum((l["perda"] for l in por_ano.values()), _ZERO)),
+                # A regra por ano da triagem: no ano de custo a confirmar, a perda contra o custo implausível não
+                # é recuperável nem venda abaixo do custo (a soma dos itens fecha com o resumo do bloco).
+                "potencial_recuperavel": _dinheiro(sum((triagem_cenario.recuperavel_do_ano(l, triagem.limiares)
+                                                        for l in por_ano.values()), _ZERO)),
+                "vendas_abaixo_do_custo": _dinheiro(sum((triagem_cenario.perda_real_do_ano(l, triagem.limiares)
+                                                         for l in por_ano.values()), _ZERO)),
                 "impacto": _dinheiro(impacto_ultimo),
                 "impacto_acumulado": _dinheiro(impacto_total),
                 "origem_do_impacto": origem,
@@ -571,7 +619,7 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         "categorias_publicadas": False, "cobertura_categoria": None, "blocos": None, "inteligencia": None,
         # O resumo numérico gravado no lead (fica depois do expurgo), só se for da versão atual e válido.
         "resumo_inteligencia": resumo_inteligencia_valido(ler_objeto(lead.get("resumo_inteligencia_json"))),
-        "definicoes": DEFINICOES, "avisos": [], "visualizacoes": None,
+        "definicoes": definicoes_da_versao(lead.get("versao_triagem")), "avisos": [], "visualizacoes": None,
     }
     expira_em = min((r["criado_em"] for r in registros), default=None)
     expira_em = expira_em + timedelta(days=retencao_dias) if expira_em is not None else None
@@ -704,11 +752,13 @@ def visualizacoes(payload: dict) -> dict:
                    _serie("Potencial recuperável", "BRL", (do_bloco(b, "recuperavel") for b in blocos))],
     }
     contagens = payload.get("contagens") or {}
+    # Os rótulos das marcas pela versão gravada, como a tela: antes da Etapa 2, sem a omissão no ERP.
+    versao = (payload.get("lead") or {}).get("versao_triagem")
+    marcas = _ROTULOS_DAS_MARCAS[versao in triagem_cenario.VERSOES_COM_MARCAS_DA_ETAPA_2]
     saida["marcas"] = {
         "titulo": "Marcas do cadastro", "tipo": "barras",
-        "rotulos": ["Venda sem custo", "Venda abaixo do custo", "Omissão no ERP"],
-        "series": [_serie("Produtos", "itens", (contagens.get(nome) for nome in (
-            "itens_venda_sem_custo", "itens_venda_abaixo_custo", "itens_omissao_erp")))],
+        "rotulos": [rotulo for rotulo, _nome in marcas],
+        "series": [_serie("Produtos", "itens", (contagens.get(nome) for _rotulo, nome in marcas))],
     }
     # Caixa resgatável: do cálculo atual ou, sem ele (linhas expiradas, de outra versão ou ilegíveis), do
     # resumo gravado no lead. Com o cálculo atual, só ele vale: sem estoque informado, as parcelas de

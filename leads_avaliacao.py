@@ -8,8 +8,9 @@
     flask leads agendar-expurgo           # agenda (ou reagenda) o expurgo diário no pg_cron
 
 Regra: as linhas de brainstorming_dados_pdv com mais de `dias` dias, de leads que não
-converteram, saem; o lead que fica sem nenhuma linha passa a 'expirado'. O resumo em
-lead_avaliacao (score, vazamento total, plano recomendado e prioridades) fica.
+converteram, saem; o lead que fica sem nenhuma linha passa a 'expirado' e perde também os
+indicadores executivos do envio (indicadores_executivos_json, que trazem nome de produto). O resumo
+em lead_avaliacao (score, vazamento total, plano recomendado e prioridades) fica.
 
 No PostgreSQL quem expurga é a função expurgar_brainstorming_pdv da revisão f4c2a8e1d9b6; nos
 demais bancos (o SQLite de testes e de desenvolvimento), a mesma regra em SQLAlchemy.
@@ -76,6 +77,14 @@ def _expurgar_em_sqlalchemy(sessao, dias: int, agora) -> ResultadoExpurgo:
     expirados = removidas = 0
     for inicio in range(0, len(alvos), _LOTE):
         lote = alvos[inicio:inicio + _LOTE]
+        # Os indicadores executivos do envio trazem nome de produto: saem com as linhas (revisão c5f8a1d3e7b9).
+        sessao.execute(
+            update(LeadAvaliacao)
+            .where(LeadAvaliacao.id.in_(lote), LeadAvaliacao.status != "convertido",
+                   LeadAvaliacao.indicadores_executivos_json.is_not(None), antigas, ~recentes)
+            .values(indicadores_executivos_json=None)
+            .execution_options(synchronize_session=False)
+        )
         expirados += sessao.execute(
             update(LeadAvaliacao)
             .where(LeadAvaliacao.id.in_(lote), LeadAvaliacao.status != "expirado", antigas, ~recentes)

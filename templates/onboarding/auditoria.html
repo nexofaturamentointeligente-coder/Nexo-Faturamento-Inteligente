@@ -30,7 +30,7 @@
 {% else %}
 {% set prot = raio_x.protegido %}
 {% set aud = raio_x.auditoria %}
-<p class="raio-x-meta"><i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} · {{ raio_x.arquivos | length }} relatório(s) de vendas</p>
+<p class="raio-x-meta"><i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} · {{ (raio_x.nomes_arquivos or raio_x.arquivos) | length }} arquivo(s) de vendas</p>
 
 <div class="row g-3 mb-4">
     <div class="col-12 col-sm-6 col-xl-3">

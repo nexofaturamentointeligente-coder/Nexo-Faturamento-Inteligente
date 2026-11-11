@@ -5,11 +5,14 @@ existente, credencial real ou carga volumosa é utilizada.
 """
 
 from dataclasses import FrozenInstanceError, asdict, fields, replace
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 import urllib.error
 import urllib.request
@@ -215,6 +218,24 @@ output.write_text(json.dumps({'ok': True, 'result': result}))"""
         self.assertEqual(kwargs["start_new_session"], os.name == "posix")
         self._assert_reaped_and_temporary_resources_removed()
 
+    def test_no_windows_a_pasta_do_job_nao_e_o_diretorio_atual_do_filho(self):
+        """No Windows o python.exe do venv é um lançador que abre o interpretador num neto: com a pasta do job
+        como diretório atual, o neto, que termina depois do lançador no estouro do prazo, travava a remoção da
+        pasta, e o "timeout" virava um erro genérico. No POSIX o filho continua dentro da pasta do job."""
+        script = self._script("output.write_text(json.dumps({'ok': True, 'result': {'pronto': True}}))")
+        with patch.object(self.runtime, "_WORKER_PATH", script):
+            with patch.object(self.runtime.subprocess, "Popen", side_effect=self._start):
+                self.assertEqual(self.runtime._run_job("validate", [self.input], extension=".csv"),
+                                 {"pronto": True})
+        command, kwargs = self.started[0][1][0], self.started[0][2]
+        pasta_do_job, diretorio = Path(command[-2]).parent, Path(kwargs["cwd"])
+        if os.name == "posix":
+            self.assertEqual(diretorio, pasta_do_job)
+        else:
+            self.assertNotEqual(diretorio, pasta_do_job)
+            self.assertNotIn(pasta_do_job, diretorio.parents)
+        self._assert_reaped_and_temporary_resources_removed()
+
     def test_busy_admission_refuses_another_job_without_spawning_or_allocating_files(self):
         self.assertTrue(self.runtime._ADMISSION.acquire(blocking=False))
         try:
@@ -279,10 +300,137 @@ output.write_text(json.dumps({'ok': True, 'result': result}))"""
         envelope = json.loads(output.read_bytes())
         self.assertTrue(envelope["ok"])
         diagnostic = envelope["runtime"]
-        self.assertEqual(diagnostic["address_space_bytes"], policy.memory_mb * 1024 * 1024)
-        self.assertEqual(diagnostic["cpu_seconds"], policy.timeout_seconds)
-        self.assertGreater(diagnostic["peak_rss_kib_linux"], 0)
         self.assertFalse(diagnostic["database_modules_loaded"])
+        if os.name == "posix":
+            self.assertEqual(diagnostic["address_space_bytes"], policy.memory_mb * 1024 * 1024)
+            self.assertEqual(diagnostic["cpu_seconds"], policy.timeout_seconds)
+            self.assertGreater(diagnostic["peak_rss_kib_linux"], 0)
+        else:
+            # Windows (desenvolvimento): sem o módulo resource, o worker processa sem os limites do sistema
+            # operacional e diz isso no diagnóstico (etl_worker._limitar_recursos).
+            self.assertEqual((diagnostic["address_space_bytes"], diagnostic["cpu_seconds"],
+                              diagnostic["peak_rss_kib_linux"]), (None, None, None))
+
+
+class ETLWorkerPlatformTests(unittest.TestCase):
+    """Os limites do sistema operacional no processo isolado (etl_worker._limitar_recursos): exigidos num
+    sistema POSIX, que é o da produção; no Windows, que não tem o módulo resource, o processamento de
+    desenvolvimento segue sem eles. Nada aqui chama o setrlimit de verdade: o módulo resource é falso."""
+
+    DESENVOLVIMENTO = {"FLASK_ENV": "development", "FLASK_DEBUG": "1", "DEBUG": "True"}
+
+    def setUp(self):
+        import etl_worker
+        self.worker = etl_worker
+        self.limits = ETLLimits()
+
+    @staticmethod
+    def _resource_falso(falha=None):
+        chamadas = []
+
+        def setrlimit(recurso, valores):
+            if falha is not None:
+                raise falha
+            chamadas.append((recurso, valores))
+        return SimpleNamespace(RLIMIT_AS="AS", RLIMIT_CPU="CPU", RLIMIT_FSIZE="FSIZE", RLIMIT_CORE="CORE",
+                               setrlimit=setrlimit), chamadas
+
+    def test_so_a_plataforma_decide_e_nunca_o_ambiente(self):
+        for ambiente in ({}, self.DESENVOLVIMENTO, {"FLASK_ENV": "production"}):
+            with self.subTest(ambiente=sorted(ambiente)), patch.dict(os.environ, ambiente):
+                self.assertEqual(self.worker._exige_limites(), os.name == "posix")
+
+    def test_posix_sem_o_modulo_resource_recusa_mesmo_em_desenvolvimento(self):
+        with patch.dict(sys.modules, {"resource": None}), patch.dict(os.environ, self.DESENVOLVIMENTO), \
+                patch.object(self.worker, "_exige_limites", return_value=True):
+            with self.assertRaises(OSError):
+                self.worker._limitar_recursos(self.limits, 4096)
+
+    def test_windows_sem_o_modulo_resource_segue_sem_os_limites_do_sistema(self):
+        with patch.dict(sys.modules, {"resource": None}), \
+                patch.object(self.worker, "_exige_limites", return_value=False):
+            self.assertIsNone(self.worker._limitar_recursos(self.limits, 4096))
+
+    def test_com_o_modulo_resource_os_quatro_limites_sao_sempre_aplicados(self):
+        for exige in (True, False):
+            with self.subTest(exige_limites=exige):
+                modulo, chamadas = self._resource_falso()
+                with patch.dict(sys.modules, {"resource": modulo}), \
+                        patch.object(self.worker, "_exige_limites", return_value=exige):
+                    self.assertIs(self.worker._limitar_recursos(self.limits, 4096), modulo)
+                self.assertEqual(chamadas, [("AS", (384 * 1024 * 1024,) * 2), ("CPU", (60, 61)),
+                                            ("FSIZE", (4096, 4096)), ("CORE", (0, 0))])
+
+    def test_limite_que_o_sistema_recusa_nao_e_ignorado(self):
+        for falha in (OSError("synthetic"), ValueError("synthetic")):
+            with self.subTest(falha=type(falha).__name__):
+                modulo, _chamadas = self._resource_falso(falha)
+                with patch.dict(sys.modules, {"resource": modulo}):
+                    with self.assertRaises(type(falha)):
+                        self.worker._limitar_recursos(self.limits, 4096)
+
+    def test_main_recusa_sem_ler_o_arquivo_quando_os_limites_faltam_num_sistema_posix(self):
+        """O ramo de recusa do etl_worker.main, num processo à parte (o audit hook do worker nunca entra no
+        processo dos testes): num sistema POSIX sem o módulo resource, ou com um limite que o sistema recusa,
+        mesmo depois de outros aplicados, nada é lido e a resposta é "platform"."""
+        import etl_runtime
+        raiz = Path(self.worker.__file__).resolve().parent
+        casos = {"sem o módulo resource": "None",
+                 "primeiro limite recusado": "falso(1, OSError)",
+                 "segundo limite recusado": "falso(2, ValueError)",
+                 "último limite recusado": "falso(4, PermissionError)"}
+        with tempfile.TemporaryDirectory(prefix="nexo-sec005-platform-") as diretorio:
+            pasta = Path(diretorio)
+            entrada = pasta / "vendas.csv"
+            entrada.write_text("produto;quantidade;faturamento\nSintetico;1;10,00\n")
+            request = pasta / "request.json"
+            request.write_text(json.dumps({"operation": "validate", "paths": [str(entrada)], "extension": ".csv",
+                                           "limits": asdict(ETLLimits())}))
+            for rotulo, modulo in casos.items():
+                with self.subTest(caso=rotulo):
+                    output = pasta / "result.json"
+                    output.unlink(missing_ok=True)
+                    envoltorio = (
+                        "import json, sys, types\n"
+                        f"sys.path.insert(0, {str(raiz)!r})\n"
+                        "def falso(chamada, erro):\n"
+                        "    feitas = []\n"
+                        "    def setrlimit(recurso, valores):\n"
+                        "        feitas.append(recurso)\n"
+                        "        if len(feitas) == chamada:\n"
+                        "            raise erro('synthetic')\n"
+                        "    return types.SimpleNamespace(RLIMIT_AS=1, RLIMIT_CPU=2, RLIMIT_FSIZE=3, RLIMIT_CORE=4,\n"
+                        "                                 setrlimit=setrlimit)\n"
+                        f"sys.modules['resource'] = {modulo}\n"
+                        "import etl_worker\n"
+                        "etl_worker._exige_limites = lambda: True\n"
+                        f"sys.argv = ['etl_worker.py', {str(request)!r}, {str(output)!r}]\n"
+                        "codigo = etl_worker.main()\n"
+                        "lidos = [m for m in ('etl_inputs', 'pandas', 'security_gatekeeper') if m in sys.modules]\n"
+                        "print(json.dumps({'codigo': codigo, 'lidos': lidos}))\n")
+                    feito = subprocess.run([sys.executable, "-I", "-B", "-c", envoltorio], capture_output=True,
+                                           text=True, timeout=60, cwd=pasta, env=etl_runtime._worker_environment(),
+                                           stdin=subprocess.DEVNULL, check=False)
+                    self.assertEqual(feito.returncode, 0)
+                    self.assertEqual(json.loads(feito.stdout.strip().splitlines()[-1]), {"codigo": 2, "lidos": []})
+                    envelope = json.loads(output.read_text())
+                    self.assertEqual((envelope["ok"], envelope["code"]), (False, "platform"))
+
+    def test_o_servidor_avisa_uma_vez_quando_roda_sem_os_limites_do_sistema(self):
+        import etl_runtime
+        # Na suíte inteira, o fileConfig do Alembic (nas migrações de outros testes) desliga os loggers já criados.
+        ligado = patch.object(etl_runtime.logger, "disabled", False)
+        with ligado, patch.object(etl_runtime, "_LIMITES_DO_SISTEMA", False), \
+                patch.object(etl_runtime, "_SEM_LIMITES_AVISADO", False):
+            with self.assertLogs("etl_runtime", "WARNING") as registro:
+                etl_runtime._avisar_sem_limites()
+                etl_runtime._avisar_sem_limites()
+            self.assertEqual(len(registro.records), 1)
+        with patch.object(etl_runtime.logger, "disabled", False), \
+                patch.object(etl_runtime, "_LIMITES_DO_SISTEMA", True), \
+                patch.object(etl_runtime, "_SEM_LIMITES_AVISADO", False), \
+                self.assertNoLogs("etl_runtime", "WARNING"):
+            etl_runtime._avisar_sem_limites()
 
 
 @unittest.skipUnless(os.name == "posix", "Gunicorn exige POSIX")

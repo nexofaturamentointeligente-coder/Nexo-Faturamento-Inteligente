@@ -218,13 +218,17 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
         periodo_fim = date.fromisoformat(periodo["fim"]) if periodo["fim"] else None
         score = _decimal(raio["saude"]["indice"], _CENTAVO)
         meta_json = _json({**meta, "motivos_recomendacao": recomendacao["motivos"]})
+        # Os indicadores executivos do envio (já conferidos pelo contrato): trazem nome de produto e saem no
+        # expurgo de 30 dias, com as linhas (leads_avaliacao).
+        indicadores_json = _json(raio["indicadores_executivos"])
     except (KeyError, IndexError, TypeError, ValueError, ArithmeticError):
         raise ETLInputError("worker", "Resultado inválido do processamento isolado.") from None
     _conferir_tetos(registros, vazamento_total)
     agora = agora_utc()
     try:
         lead = _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, agora, score, recomendacao,
-                       periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia)
+                       periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia,
+                       indicadores_json)
     except LeadIndisponivel:
         raise
     except (ValueError, UnicodeError):
@@ -235,7 +239,8 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
 
 
 def _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, agora, score, recomendacao,
-            periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia) -> LeadAvaliacao:
+            periodo_inicio, periodo_fim, meta, meta_json, vazamento_total, resumo_inteligencia,
+            indicadores_json=None) -> LeadAvaliacao:
     with db.session.begin_nested():
         if lead_id is None:
             lead = LeadAvaliacao(**contato, registrado_por=registrado_por, consentimento_em=agora)
@@ -261,6 +266,7 @@ def _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, ago
         lead.arquivos = meta["arquivos"]
         lead.meta_json = meta_json
         lead.resumo_inteligencia_json = resumo_inteligencia
+        lead.indicadores_executivos_json = indicadores_json
         _aplicar_triagem(lead, triagem, vazamento_total)
         lead.status = "concluido"
         db.session.flush()

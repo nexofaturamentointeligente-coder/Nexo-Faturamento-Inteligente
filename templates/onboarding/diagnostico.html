@@ -22,7 +22,7 @@
 {% set scanner = raio_x.scanner %}
 <p class="raio-x-meta">
     <i class="bi bi-clock" aria-hidden="true"></i> Último Raio-X em {{ m.horario(linha_raio_x.gerado_em) }} ·
-    {{ raio_x.arquivos | length }} relatório(s) de vendas
+    {{ (raio_x.nomes_arquivos or raio_x.arquivos) | length }} arquivo(s) de vendas
     {%- if raio_x.periodo.inicio %} · de {{ raio_x.periodo.inicio[8:10] }}/{{ raio_x.periodo.inicio[5:7] }}/{{ raio_x.periodo.inicio[0:4] }} a {{ raio_x.periodo.fim[8:10] }}/{{ raio_x.periodo.fim[5:7] }}/{{ raio_x.periodo.fim[0:4] }} ({{ raio_x.periodo.meses }} {{ 'mês' if raio_x.periodo.meses == 1 else 'meses' }}){% endif %}
 </p>
 
@@ -146,7 +146,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="fatiasTitulo"><i class="bi bi-calendar3 text-purple" aria-hidden="true"></i> Mês a mês</h2>
-            <p class="sub">Uma linha por relatório enviado{% if plano_atual and plano_atual.limite_historico_meses %}, dentro do histórico do seu plano ({{ plano_atual.historico | lower }}){% endif %}.</p>
+            <p class="sub">Uma linha por período: cada mês do arquivo que traz a data de cada venda, ou o período de cada relatório enviado{% if plano_atual and plano_atual.limite_historico_meses %}, dentro do histórico do seu plano ({{ plano_atual.historico | lower }}){% endif %}.</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -156,7 +156,7 @@
             <div>
                 {% set ocultas = raio_x.historico.ocultas %}
                 {% set de, ate = raio_x.historico.primeira_oculta, raio_x.historico.ultima_oculta %}
-                <p class="mb-0">{{ ocultas }} {{ 'relatório anterior' if ocultas == 1 else 'relatórios anteriores' }} ({{ de if de == ate else de ~ ' a ' ~ ate }}) {{ 'fica' if ocultas == 1 else 'ficam' }} fora do histórico do seu plano ({{ plano_atual.historico | lower if plano_atual else 'limitado' }}), mas {{ 'entra' if ocultas == 1 else 'entram' }} nos totais acima.
+                <p class="mb-0">{{ ocultas }} {{ 'período anterior' if ocultas == 1 else 'períodos anteriores' }} ({{ de if de == ate else de ~ ' a ' ~ ate }}) {{ 'fica' if ocultas == 1 else 'ficam' }} fora do histórico do seu plano ({{ plano_atual.historico | lower if plano_atual else 'limitado' }}), mas {{ 'entra' if ocultas == 1 else 'entram' }} nos totais acima.
                 {% if plano_historico %}<a href="{{ url_upgrade(plano_historico) }}">O plano {{ plano_historico.nome }} mostra {{ 'o histórico completo' if plano_historico.limite_historico_meses is none else 'até ' ~ plano_historico.limite_historico_meses ~ ' meses' }}.</a>{% endif %}</p>
             </div>
         </div>
@@ -164,7 +164,7 @@
         <div class="table-wrap">
             <div class="table-responsive-x">
                 <table class="nexo-table" id="tabelaFatias">
-                    <caption class="visually-hidden">Resultado de cada relatório de vendas enviado</caption>
+                    <caption class="visually-hidden">Resultado de cada período dos relatórios de vendas enviados</caption>
                     <thead><tr><th>Período</th><th class="text-end">Faturamento</th><th class="text-end">Sem custo</th><th class="text-end">Abaixo do custo</th><th class="text-end">Abaixo da referência</th><th class="text-end">Recuperável</th><th class="text-end">Margem %</th></tr></thead>
                     <tbody>
                         {% for fatia in raio_x.fatias %}

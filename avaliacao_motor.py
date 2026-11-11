@@ -46,6 +46,12 @@ Saída (JSON; o worker tem teto rígido de 4 MiB, conferido aqui antes de devolv
     produto e ano; a coluna "categoria" é o índice em "categorias" (cada nome vai uma vez só);
     números inteiros saem sem ".0";
   - "meta": contagens do envio (CHAVES_META), sem nome de produto nem texto livre.
+
+Indicadores executivos (raio-x-2026-11.6): o "raio_x" traz o nó indicadores_executivos (21 indicadores,
+indicadores_executivos.py), montado por raio_x._combinar com as mesmas somas por produto e relatório daqui.
+Nele está a matriz da venda com margem negativa por produto e mês (AAAA-MM), com impacto_q4 nos meses 10, 11
+e 12 e sem os itens de custo a confirmar (refatoração 5). O processo pai grava o nó em
+lead_avaliacao.indicadores_executivos_json, que sai no expurgo de 30 dias com as linhas.
 """
 
 from __future__ import annotations

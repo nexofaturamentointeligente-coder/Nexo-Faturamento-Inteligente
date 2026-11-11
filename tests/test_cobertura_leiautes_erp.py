@@ -646,12 +646,17 @@ class FatiasMensaisTests(_LeiautesCase):
         self.assertEqual(resultado["meta"]["periodos_cobertos"], [["2023-11-09", "2026-11-09"]])
         self.assertEqual(resultado["meta"]["dias_por_ano"], {"2023": 53, "2024": 366, "2025": 365, "2026": 313})
 
-    def test_raio_x_do_cliente_continua_com_uma_fatia_por_arquivo(self):
-        caminho, _verdade = self.xlsx("detalhado")
+    def test_raio_x_do_cliente_fatia_por_mes_como_a_avaliacao_de_cenario(self):
+        """Refatoração 4 dos indicadores (raio-x-2026-11.6): o Raio-X do cliente também agrupa a venda item a
+        item por mês (AAAA-MM), com os mesmos relatórios mensais da Avaliação de Cenário."""
+        caminho, verdade = self.xlsx("detalhado")
         resultado = executar_como_o_worker([caminho])
-        self.assertEqual(len(resultado["fatias"]), 1)
-        self.assertEqual(len(resultado["arquivos"]), 1)
+        do_lead = avaliar_como_o_worker([caminho], hoje=HOJE)["raio_x"]
+        self.assertEqual(len(resultado["fatias"]), 37)
+        self.assertEqual(len(resultado["arquivos"]), 37)
+        self.assertEqual(resultado["fatias"], do_lead["fatias"])
         self.assertEqual(resultado["periodo"], {"inicio": "2023-11-09", "fim": "2026-11-09", "meses": 37})
+        self.assertEqual(resultado["saude"]["faturamento_total"], round(verdade["venda"], 2))
 
     def test_mensagens_usam_o_numero_do_arquivo_enviado_e_nao_o_da_fatia(self):
         # Dois arquivos de janeiro a março: são seis relatórios mensais, e a mensagem fala dos arquivos 1 e 2.
@@ -661,10 +666,10 @@ class FatiasMensaisTests(_LeiautesCase):
         self.assertIn("Os arquivos 1 e 2 cobrem", mensagem)
 
     def test_dois_arquivos_de_varios_anos_passam_do_teto_de_relatorios(self):
-        primeiro, _verdade = self.xlsx("detalhado")
-        segundo, _verdade = self.xlsx("detalhado")
-        mensagem = self.recusa("raio_x_arquivos", avaliar_como_o_worker, [primeiro, segundo], hoje=HOJE)
-        self.assertIn("mais de 60 meses", mensagem)
+        # Quatro arquivos de 37 meses: 148 relatórios mensais, acima do teto de 120 (10 anos).
+        caminho, _verdade = self.xlsx("detalhado")
+        mensagem = self.recusa("raio_x_arquivos", avaliar_como_o_worker, [caminho] * 4, hoje=HOJE)
+        self.assertIn("mais de 120 meses", mensagem)
 
     def test_data_fora_do_periodo_do_cabecalho_e_recusada(self):
         def adiantar(linha):
@@ -719,10 +724,17 @@ class FatiasMensaisTests(_LeiautesCase):
         colunas = resultado["linhas"]["colunas"]
         desde, meses = colunas.index("relatorios_desde_primeira_venda"), colunas.index("meses")
         self.assertEqual({(linha[meses], linha[desde]) for linha in resultado["linhas"]["valores"]}, {(1, 2)})
+        # Outro arquivo de janeiro com a data de cada venda continua sendo sobreposição.
+        outro = self.csv(self.SO_FEVEREIRO.replace("CAFE 500G", "CAFE 250G"), "outro.csv")
+        self.assertIn("Os arquivos 1 e 2 cobrem",
+                      self.recusa("avaliacao_sobreposicao", avaliar_como_o_worker, [caminho, outro], hoje=HOJE))
+        # O resumo de janeiro, sem a data de cada venda, vira tabela auxiliar da venda item a item (ingestão em lote):
+        # não soma no faturamento, e não há sobreposição.
         janeiro = self.csv("Relatorio de vendas por produto\nPeriodo: 01/01/2026 a 31/01/2026\n"
                            "Codigo;Produto;Qtde;Valor Total\n1;CAFE 500G;2;36,00\n", "janeiro.csv")
-        self.assertIn("Os arquivos 1 e 2 cobrem",
-                      self.recusa("avaliacao_sobreposicao", avaliar_como_o_worker, [caminho, janeiro], hoje=HOJE))
+        lote = avaliar_como_o_worker([caminho, janeiro], hoje=HOJE)
+        self.assertEqual(lote["raio_x"]["saude"]["faturamento_total"], 69.0)
+        self.assertIn("O arquivo 2 entrou como tabela auxiliar", " ".join(lote["raio_x"]["avisos"]))
 
     def test_mes_sem_venda_que_ainda_nao_comecou_nao_vira_relatorio(self):
         resultado = avaliar_como_o_worker([self.csv(self.SO_FEVEREIRO)], hoje=date(2026, 2, 10))
@@ -760,7 +772,7 @@ class FatiasMensaisTests(_LeiautesCase):
         self.addCleanup(setattr, raio_x, "MAX_FATIAS", original)
         raio_x.MAX_FATIAS = 5
         mensagem = self.recusa("raio_x_arquivos", avaliar_como_o_worker, [caminho], hoje=HOJE)
-        self.assertIn("Envie no máximo 5 anos por vez", mensagem)
+        self.assertIn("Envie no máximo 10 anos por vez", mensagem)
 
     def test_data_da_linha_aceita_a_data_da_planilha_e_o_texto_do_pdv(self):
         casos = {"2023-11-09 00:00:00": date(2023, 11, 9), "2026-11-09 16:37:38.447000": date(2026, 11, 9),
@@ -822,9 +834,14 @@ class FatiasMensaisTests(_LeiautesCase):
         """O primeiro arquivo vira três relatórios mensais; a recusa do segundo, sem o período no cabeçalho,
         fala do arquivo 2, e não do 4."""
         segundo = self.csv("Codigo;Produto;Qtde;Valor Total\n1;CAFE 500G;2;36,00\n", "segundo.csv")
-        mensagem = self.recusa("avaliacao_sem_periodo", avaliar_como_o_worker,
-                               [self.csv(self.SO_FEVEREIRO, "primeiro.csv"), segundo], hoje=HOJE)
-        self.assertTrue(mensagem.startswith("Arquivo 2: o período não está no cabeçalho"), mensagem)
+        # Sozinho (sem a venda item a item com data no envio), o arquivo sem período continua recusado no lead.
+        mensagem = self.recusa("avaliacao_sem_periodo", avaliar_como_o_worker, [segundo], hoje=HOJE)
+        self.assertTrue(mensagem.startswith("Arquivo 1: o período não está no cabeçalho"), mensagem)
+        # Com a venda item a item com data, ele vira tabela auxiliar (ingestão em lote), e o aviso fala do arquivo 2,
+        # e não da fatia 4.
+        lote = avaliar_como_o_worker([self.csv(self.SO_FEVEREIRO, "primeiro.csv"), segundo], hoje=HOJE)
+        self.assertEqual(lote["raio_x"]["saude"]["faturamento_total"], 69.0)
+        self.assertIn("O arquivo 2 entrou como tabela auxiliar", " ".join(lote["raio_x"]["avisos"]))
 
     def test_cabecalho_de_loja_no_segundo_arquivo_fala_do_arquivo_2(self):
         """O primeiro arquivo vira três relatórios mensais; a recusa do segundo fala do arquivo 2, e não do 4."""
@@ -854,18 +871,30 @@ class FatiasMensaisTests(_LeiautesCase):
                          ["O arquivo 1 não traz a coluna de custo: as vendas dele contam como sem custo informado."])
 
     def test_sessenta_meses_exatos_cabem_no_teto(self):
-        """O teto é de 60 relatórios mensais (5 anos): o arquivo de 01/2021 a 12/2025 é aceito inteiro."""
+        """5 anos de relatórios mensais (60) cabem com folga no teto de 120: o arquivo de 01/2021 a 12/2025 é
+        aceito inteiro."""
         resultado = avaliar_como_o_worker([self.csv(self.CINCO_ANOS)], hoje=HOJE)
         self.assertEqual(resultado["meta"]["arquivos"], 60)
         self.assertEqual(resultado["meta"]["arquivos_por_ano"], {str(ano): 12 for ano in range(2021, 2026)})
         self.assertEqual(resultado["raio_x"]["saude"]["faturamento_total"], 30.0)
 
-    def test_um_arquivo_a_mais_depois_de_sessenta_meses_passa_do_teto(self):
-        """60 meses fatiados e mais um relatório mensal: 61. A recusa é a do teto, com a mensagem dele, e não
-        a do contrato do resultado (erro genérico do processamento)."""
+    DEZ_ANOS = ("Relatorio de vendas item a item\nPeriodo: 01/01/2016 a 31/12/2025\nData;Produto;Qtde;Valor Total\n"
+                "15/01/2016;PRODUTO A;1;10,00\n20/12/2025;PRODUTO A;2;20,00\n")
+
+    def test_cento_e_vinte_meses_exatos_cabem_no_teto(self):
+        """Refatoração 2 dos indicadores: o teto passou de 60 para 120 relatórios mensais (10 anos)."""
+        resultado = avaliar_como_o_worker([self.csv(self.DEZ_ANOS)], hoje=HOJE)
+        self.assertEqual(resultado["meta"]["arquivos"], 120)
+        self.assertEqual(resultado["meta"]["arquivos_por_ano"], {str(ano): 12 for ano in range(2016, 2026)})
+        self.assertEqual(resultado["raio_x"]["saude"]["faturamento_total"], 30.0)
+
+    def test_um_arquivo_a_mais_depois_de_cento_e_vinte_meses_passa_do_teto(self):
+        """120 meses fatiados e mais um relatório mensal: 121. A recusa é a do teto, com a mensagem dele, e
+        não a do contrato do resultado (erro genérico do processamento)."""
         janeiro = self.csv(PERIODO_DE_JANEIRO + "Produto;Qtde;Valor Total\nPRODUTO A;1;10,00\n", "janeiro.csv")
-        mensagem = self.recusa("raio_x_arquivos", avaliar_como_o_worker, [self.csv(self.CINCO_ANOS), janeiro], hoje=HOJE)
-        self.assertIn("mais de 60 meses", mensagem)
+        mensagem = self.recusa("raio_x_arquivos", avaliar_como_o_worker, [self.csv(self.DEZ_ANOS), janeiro], hoje=HOJE)
+        self.assertIn("mais de 120 meses", mensagem)
+        self.assertIn("Envie no máximo 10 anos por vez", mensagem)
 
     def test_periodo_absurdo_e_recusado_antes_de_montar_as_fatias(self):
         """O teto vale DENTRO de _fatias_mensais, antes de montar uma fatia por mês: o cabeçalho com mais de
@@ -877,7 +906,9 @@ class FatiasMensaisTests(_LeiautesCase):
         with self.assertRaises(ETLInputError) as contexto:
             raio_x._fatias_mensais(df, periodo, rotulo, HOJE)
         self.assertEqual(contexto.exception.code, "raio_x_arquivos")
-        self.assertIn("mais de 60 meses", self.recusa("raio_x_arquivos", avaliar_como_o_worker, [caminho], hoje=HOJE))
+        self.assertIn("mais de 120 meses", self.recusa("raio_x_arquivos", avaliar_como_o_worker, [caminho], hoje=HOJE))
+        # No Raio-X do cliente, que sempre aceitou o arquivo, ele continua um relatório só.
+        self.assertIsNone(raio_x._fatias_mensais(df, periodo, rotulo, HOJE, recusar=False))
 
     def test_coluna_de_outra_data_nao_e_a_data_da_venda(self):
         """Só o título inteiro de data da venda vale ("Data", "Dt. Emissão"): a validade, o cadastro e a

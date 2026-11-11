@@ -94,6 +94,20 @@ class ETLLeiauteAmbiguo(ETLValidationError):
         self.orientacao = orientacao
 
 
+# Texto fixo do relatório de compras ou de entradas enviado como vendas (_recusar_relatorio_de_compras): o
+# Raio-X e a Avaliação de Cenário mostram "Arquivo N: " antes dele.
+ORIENTACAO_RELATORIO_DE_COMPRAS = ("o relatório enviado é de compras/entradas. Por favor, envie o relatório de "
+                                   "vendas por produto.")
+
+
+class ETLRelatorioDeCompras(ETLLeiauteAmbiguo):
+    """Relatório de compras ou de entradas de mercadoria enviado no lugar do relatório de vendas."""
+
+    def __init__(self, nome):
+        super().__init__(f"O arquivo de VENDAS '{nome}' é um relatório de COMPRAS ou de entradas de mercadoria. "
+                         "Envie o relatório de vendas por produto.", ORIENTACAO_RELATORIO_DE_COMPRAS)
+
+
 # Encodings e separadores tentados em sequência para arquivos texto/CSV
 ENCODINGS = ("utf-8-sig", "cp1252", "utf-8", "latin1")
 SEPARADORES = (";", ",", "\t", "|")
@@ -236,7 +250,7 @@ def _parse_valor(bruto):
     # o ignora (_limpar_monetario). Sai também o de dentro da célula ("1,'-5"), que o
     # núcleo abaixo sempre descartou: original e neutralizado têm de dar o mesmo número.
     s = s.replace("'", "").strip()
-    if s.lower() in ("", "nan", "none", "-", "--"):
+    if s.lower() in ("", "nan", "none", "-", "--") or s in _TRACOS_SOZINHOS:
         return None
     # Percentual não é quantidade nem estoque: "-99,97 %" é a margem que o ERP imprime ao lado do custo.
     if "%" in s:
@@ -313,7 +327,11 @@ _RE_PONTO_DECIMAL = re.compile(r"[0-9,]*\.[0-9]+")
 _RE_VIRGULA_DECIMAL = re.compile(r"[0-9.]*,[0-9]+")
 _RE_MOEDA = re.compile(r"r\$|us\$|brl|usd|\$", re.IGNORECASE)
 _SINAIS_DE_MENOS = str.maketrans({"−": "-", "–": "-", "﹣": "-", "－": "-"})
-_VALORES_EM_BRANCO = {"", "-", "--", "nan", "none", "null", "na", "n/a", "nd", "n/d"}
+# O travessão ("—"), o traço de algarismo ("‒") e a barra horizontal ("―") sozinhos são a célula vazia
+# (o zero do relatório formatado), como o "-": sem o alerta de valor inválido. Antes do número, não são sinal: o
+# número fica como sempre foi lido.
+_TRACOS_SOZINHOS = ("—", "‒", "―")
+_VALORES_EM_BRANCO = {"", "-", "--", "nan", "none", "null", "na", "n/a", "nd", "n/d", *_TRACOS_SOZINHOS}
 
 
 def _limpar_monetario(valor) -> str:
@@ -1125,11 +1143,68 @@ _RE_TITULO_MEDIDA = re.compile(
 # Título de produto: "Produto Loja" ou "Descrição do Produto (Filial)" ainda é o produto.
 _RE_TITULO_DE_PRODUTO = re.compile(r"\b(?:produto|produtos|mercadoria|mercadorias|item|itens|sku)\b")
 _RE_NUMERO_INTEIRO_DO_XLSX = re.compile(r"\d+\.0+")
-# Data de cada venda num relatório item a item ("Data", "Data venda", "Dt. Emissão"): com ela, um arquivo de
-# vários meses vira fatias mensais na Avaliação de Cenário (raio_x._fatias_mensais).
+# Data de cada venda num relatório item a item ("Data", "Data venda", "Dt. Emissão", "Data/Hora"): com ela, um
+# arquivo de vários meses vira fatias mensais no Raio-X e na Avaliação de Cenário (raio_x._fatias_mensais).
 _RE_TITULO_DATA_DA_VENDA = re.compile(
     r"(?:data|dt)(?: (?:da |de |do )?(?:venda|vendas|emissao|movimento|pedido|documento|doc|nf|nota|cupom|"
-    r"lancamento|faturamento))?|emissao")
+    r"lancamento|faturamento))?(?:(?: e)? hora)?|emissao")
+# Dados de cada venda para os indicadores executivos (indicadores_executivos.resumo_das_linhas), todos pelo
+# título inteiro, como a data:
+#   - o número da venda (pedido, cupom, nota ou documento): "Nr. Doc.", "Pedido", "Cupom", "Nº NF-e", "Nota
+#     Fiscal", "Documento", "COO". "Venda" e "Transação" só com o marcador de número ("Nº Venda", "ID
+#     Transação"): "Venda" sozinho costuma ser o valor;
+#   - o CPF ou CNPJ do cliente, por lista de permissão: o título é só o documento ("CPF", "CNPJ", "CPF/CNPJ",
+#     "Nº do CPF", "CPF na Nota Fiscal", "CPF ou CNPJ", "Doc. CPF/CNPJ", "Identificação (CPF/CNPJ)", "CPF/CNPJ/ID
+#     Estrangeiro": tiradas as palavras que só marcam ou completam o documento, sobra só "CPF" ou "CNPJ"; "Fiscal"
+#     só completa "Nota", "Cupom" e "Documento") ou diz de quem é (cliente, consumidor, comprador, destinatário,
+#     tomador, "Cli.", "Dest."). O CPF do fiscal de caixa ("CPF Fiscal", "CPF do Fiscal"), o
+#     do operador, do caixa, do vendedor ou do representante e o CNPJ da loja, da matriz ou da unidade de
+#     negócio não são o cliente (o da unidade de negócio continua sendo a loja). Com o título do cliente e o do
+#     documento sozinho no mesmo relatório, vale o do cliente. Só é contado dentro do processo isolado
+#     (recompra), nunca guardado;
+#   - o desconto da linha, em reais ("Desconto", "Vlr. Desconto", "Desconto R$"); o de percentual ("Desc. %")
+#     fica de fora, e "Desc." sozinho não conta (é também a abreviatura de descrição);
+#   - a hora da venda, quando vem em coluna própria ("Hora", "Hora da Venda").
+_MARCADOR_DE_NUMERO = r"(?:nr|n|no|num|nro|numero|id)(?: (?:do|da|de))?"
+_RE_TITULO_DOCUMENTO_DA_VENDA = re.compile(
+    rf"(?:{_MARCADOR_DE_NUMERO} )?(?:doc|docto|documento|cupom|cupom fiscal|nota|nota fiscal|nf|nfe|nf e|nfce|"
+    rf"nfc e|nfc|pedido|coo)|{_MARCADOR_DE_NUMERO} (?:venda|transacao)")
+_RE_TITULO_CPF_CNPJ = re.compile(r"\b(?:cpf|cnpj)\b")
+# As palavras que só marcam ou completam o documento do cliente no título: tiradas elas, o título que sobra só
+# com "cpf" ou "cnpj" é o do cliente. "Operador", "caixa", "vendedor", "loja", "matriz", "unidade" e semelhantes não
+# estão aqui: o título com elas não é o do cliente.
+_PALAVRAS_DO_DOCUMENTO_DO_CLIENTE = frozenset({
+    "nr", "n", "no", "num", "nro", "numero", "do", "da", "de", "na", "ou", "e", "doc", "documento", "identificacao",
+    "informado", "nota", "nf", "nfe", "nfc", "nfce", "cupom", "venda", "id", "estrangeiro"})
+# "Fiscal" só completa a nota, o cupom ou o documento ("CPF na Nota Fiscal"); sozinho, é o fiscal de caixa.
+_RE_DOCUMENTO_FISCAL = re.compile(r"\b(nota|cupom|documento|doc) fiscal\b")
+_RE_TITULO_DE_QUEM_COMPROU = re.compile(
+    r"\b(?:cliente|clientes|cli|consumidor|consumidores|comprador|destinatario|dest|tomador)\b")
+_RE_TITULO_DESCONTO = re.compile(
+    r"(?:(?:vlr|vl|vr|valor|total|tot)(?: (?:do|de|da))? )?(?:desconto|descontos|desc)(?: (?:r|rs|concedido))?")
+_RE_TITULO_HORA_DA_VENDA = re.compile(
+    r"(?:hora|hr|horario)(?: (?:da |de |do )?(?:venda|emissao|movimento|pedido|cupom|nf|nota|documento|lancamento))?")
+
+
+def _dado_da_venda(texto: str, celulas: list):
+    """"documento", "cliente", "desconto", "hora" ou None: o dado de cada venda que o título (inteiro,
+    normalizado) indica. `celulas`: o título como veio do arquivo, para recusar a coluna de percentual."""
+    if _RE_TITULO_HORA_DA_VENDA.fullmatch(texto):
+        return "hora"
+    if _RE_TITULO_DOCUMENTO_DA_VENDA.fullmatch(texto):
+        return "documento"
+    if _RE_TITULO_CPF_CNPJ.search(texto):
+        if _RE_TITULO_DE_QUEM_COMPROU.search(texto):
+            return "cliente"
+        resto = [palavra for palavra in _RE_DOCUMENTO_FISCAL.sub(r"\1", texto).split()
+                 if palavra not in _PALAVRAS_DO_DOCUMENTO_DO_CLIENTE]
+        if all(palavra in ("cpf", "cnpj") for palavra in resto):
+            return "cliente_sem_titulo"
+        return None
+    if (_RE_TITULO_DESCONTO.fullmatch(texto) and texto != "desc"
+            and not any(_titulo_de_percentual(celula) for celula in celulas)):
+        return "desconto"
+    return None
 
 
 def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int) -> dict:
@@ -1138,6 +1213,7 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
                for i in range(idx_cab, idx_cab + linhas_cab)]
     usadas = set(mapa.values())
     ncm, niveis, unidade, data = None, {}, None, None
+    da_venda: dict = {}
     for indice, partes in enumerate(zip(*titulos)):
         chave = " ".join(partes).strip()
         if not chave or indice in usadas:
@@ -1145,11 +1221,16 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
         # A célula vazia da outra linha do cabeçalho chega como "nan" (XLSX): não faz parte do título. A data
         # vem antes da situação: "Data Movimento" é a data da venda, embora "movimento" também seja título de
         # coluna de situação.
-        if _RE_TITULO_DATA_DA_VENDA.fullmatch(" ".join(parte for parte in partes if parte and parte != "nan")):
+        texto = " ".join(parte for parte in partes if parte and parte != "nan")
+        if _RE_TITULO_DATA_DA_VENDA.fullmatch(texto):
             if data is None:
                 data = indice
             continue
         if _RE_COLUNA_SITUACAO.search(chave):
+            continue
+        dado = _dado_da_venda(texto, [df_bruto.iat[i, indice] for i in range(idx_cab, idx_cab + linhas_cab)])
+        if dado is not None:
+            da_venda.setdefault(dado, indice)
             continue
         if (_RE_TITULO_UNIDADE.search(chave) and not _RE_TITULO_NCM.search(chave)
                 and not _RE_TITULO_MEDIDA.search(chave)
@@ -1177,6 +1258,11 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
         if nivel in niveis:
             colunas["categoria"] = niveis[nivel]
             break
+    # O CPF/CNPJ só com o título do documento vale quando não há o do cliente com o nome.
+    sem_titulo = da_venda.pop("cliente_sem_titulo", None)
+    if "cliente" not in da_venda and sem_titulo is not None:
+        da_venda["cliente"] = sem_titulo
+    colunas.update(da_venda)
     return colunas
 
 
@@ -1211,6 +1297,27 @@ def normalizar_categoria(valor):
     if not chave or chave in _CATEGORIAS_GENERICAS:
         return None
     return texto[:LIMITE_CATEGORIA].strip() or None
+
+
+def _loja_do_cupom(df: pd.DataFrame) -> pd.Series:
+    """A loja de cada linha para o número da venda (indicadores_executivos.resumo_das_linhas), no quadro inteiro e
+    antes de a linha cancelada sair: a célula da loja em branco logo abaixo do mesmo número (a loja só no primeiro
+    item do cupom) é a do cupom, também quando esse primeiro item é cancelado, devolvido, bonificado ou tem
+    quantidade 0. O trecho de cada cupom são as linhas de venda com o mesmo número em sequência; a linha fora da
+    venda entra nele só com o mesmo número da próxima venda (é item daquele cupom), e uma linha de outro número no
+    meio (a devolução de outro cupom) não parte o cupom. O estoque continua com a coluna da loja."""
+    from indicadores_executivos import _loja, numero_da_venda  # o módulo importa este: aqui, na hora da chamada
+    numeros = df["_documento"].map(numero_da_venda)
+    lojas = df["_unidade"].map(_loja)
+    fora = pd.Series(False, index=df.index)
+    if "_situacao" in df.columns:
+        fora = df["_situacao"].map(lambda s: bool(_RE_LINHA_CANCELADA.search(s) or _RE_LINHA_DEVOLUCAO.search(s)))
+    venda = ~fora.astype(bool) & (df["quantidade"] > 0) & (df["valor_venda"] > 0)
+    proxima_venda = numeros.where(venda).bfill()
+    entra = numeros.notna() & (venda | numeros.eq(proxima_venda))
+    trecho = (~numeros[entra].eq(numeros[entra].shift())).cumsum()
+    herdada = lojas[entra].mask(lojas[entra] == "").groupby(trecho).ffill().fillna("")
+    return herdada.reindex(df.index).fillna(lojas).astype(str)
 
 
 def _aplicar_situacao_das_vendas(df: pd.DataFrame, nome: str) -> pd.DataFrame:
@@ -1333,6 +1440,278 @@ _RE_TITULO_DE_COMPRAS = re.compile(r"\b(?:compras?|comprad\w*|entradas?)\b")
 _RE_COLUNA_SO_DE_VENDAS = re.compile(
     r"\b(?:qtde?|qtd|quantidade) vend\w*|\btotal vendas?\b|\bvalor total venda\b")
 _RE_COLUNA_DE_COMPRAS = re.compile(r"\b(?:compras?|comprad\w*|entradas?|fornecedor(?:es)?|nfe?|notas?)\b")
+
+
+# O espelho, na rota de VENDAS (análise mensal, Raio-X e Avaliação de Cenário): relatório de compras ou de
+# entradas de mercadoria enviado como vendas. Sem a recusa, o "Valor Total" da nota de entrada virava
+# faturamento, sem aviso. A recusa vale também na análise mensal: só com sinal inequívoco, e nunca quando o
+# topo traz título de relatório de vendas ("Relatório de Vendas por Cliente", "Giro de Vendas", "Vendas x
+# Compras", "Produtos Mais Vendidos", "Vendas de Produtos", "Vendas Diárias", "Faturamento por Produto",
+# "Pedidos de Venda", "Relação de Vendas") ou da compra do cliente ("Compras por Cliente"; "Histórico de
+# Compras" com o rótulo "Cliente:" no topo), que é a venda da loja. Fora isso, qualquer um:
+#   1. o TÍTULO do relatório, no topo (as linhas acima do cabeçalho), é de compras ou de entradas: a célula
+#      começa por "Relatório de Compras", "Entradas de Mercadorias", "Compras por Fornecedor", "Nota Fiscal de
+#      Entrada", "Curva ABC de Compras", "Recebimento de Mercadorias", "Compras do Mês", "Entradas no Período",
+#      "Pedidos de Compra", "Ordens de Compra", "Mercadorias Recebidas", "Compras Realizadas", "Compras/
+#      Entradas", "Entrada de NF-e", "Consulta de Notas de Entrada", "Demonstrativo de Compras".
+#      Não é título:
+#        - a célula que fala do cliente ou do consumidor ("Compras por Cliente", "Histórico de Compras do
+#          Cliente"): a compra do cliente é a venda da loja;
+#        - o valor de um filtro: a célula logo depois de um rótulo com dois-pontos que não é o do título
+#          ("Grupo:" | "ENTRADAS", "Usuário:" | "COMPRAS", "Setor:" | "Compras por Fornecedor"), ou o filtro
+#          numa célula só ("Comprador: TODOS"). Depois do rótulo do título ("Relatório:", "Rel.:", "Título:",
+#          "Tipo de Relatório:", "Nome do Relatório:"), a célula É o título ("Relatório:" | "Compras por
+#          Fornecedor"), como na célula só ("Relatório: Compras por Fornecedor");
+#        - a palavra "Compras" ou "Entradas" sozinha fora da primeira célula do arquivo e do lugar do título (um
+#          grupo de produtos, uma seção);
+#        - palavra solta no nome da loja ("Supermercado Boa Compra", "Compra Por Menos Ltda", "Compra Na Hora")
+#          ou no endereço ("Av. Entrada da Cidade"): "Compras por" e "Compras no/na" só com o complemento de
+#          compras ("por Fornecedor", "por Produto", "no Período"); "Ranking", "Curva ABC" e "Giro" só de
+#          "Compras" (no restaurante, "Entradas" é grupo de pratos). "(Produtos|Itens) Comprados" fica de fora:
+#          no comércio eletrônico, costuma ser o do cliente.
+#      A célula do título que fala também de venda ou saída ("Movimento de Entradas e Saídas") não recusa;
+#      "Venda Nova" no endereço, em outra célula, não salva o "Relatório de Compras";
+#   2. o único total do relatório é o da compra, dito com todas as letras ("Valor Total da Compra", "Total
+#      Compra", "Compra Total"), e nenhuma coluna ficou com o total da venda. "Vlr. Compra" e "Valor de Compra"
+#      ao lado do preço de venda podem ser o custo da unidade: a venda com custo não é recusada;
+#   3. a exportação de compras sem título: a coluna lida como quantidade da venda é a quantidade comprada
+#      ("Qtde Comprada", "Qtd. Compra"), há uma coluna própria da compra (fornecedor, custo, data ou nota de
+#      entrada) e nenhuma coluna que só existe em vendas ("Qtde Vendida", "Quant. Vendida", "Total Venda",
+#      "Valor Total de Venda"). Com outra coluna de quantidade lida ("Qtde" ao lado de "Qtde Compra"), é a venda
+#      com a compra informada. Sem a coluna da compra, "Quantidade Comprada" é a do cliente (exportação de
+#      pedidos); o custo do envio, do frete ou da entrega e a "Entrada" do crediário não são coluna da compra;
+#   4. a exportação de compras sem título, pelo fornecedor e pela entrada: o cabeçalho tem o fornecedor e a
+#      data ou a nota de entrada ("Data Entrada", "Dt. de Entrada", "NF Entrada", "Nota Fiscal de Entrada"), e
+#      nenhuma coluna que só existe em vendas.
+# Rótulo do topo não é título de vendas: "Vendas por:" | "Todas", "Venda por: Todas", "Vendas x Compras:",
+# "Vendas no Período: R$ 1.234,00" e "Histórico de vendas considerado: 90 dias" são parâmetros (o relatório de
+# compras continua recusado). Conta o rótulo do título ("Relatório: Vendas por produto") e o título com
+# dois-pontos que começa pelo nome do relatório ("Relatório de Vendas: Outubro"), ou por "Vendas por" e
+# "Faturamento por" com o que vem depois ("Vendas por Produto: Outubro"). A palavra "Venda" solta ("Venda Nova
+# Supermercado", "Venda do Zé") não é título de vendas.
+# Quando nem o cabeçalho de vendas é achado, o título (1), ou o total da compra sem nada de venda nas
+# primeiras linhas (2), troca a mensagem genérica ("colunas essenciais") pela de compras.
+_RE_TOPO_DE_VENDAS = re.compile(r"\b(?:vendas?|vendid[oa]s?|faturamento|faturad[oa]s?|saidas?)\b")
+# O qualificador entre o nome do relatório e o assunto ("Relatório Analítico de Vendas", "Relatório Sintético de
+# Compras", "Resumo Diário de Vendas").
+_QUALIFICADOR_DO_RELATORIO = (r"(?: (?:geral|analitic[oa]|sintetic[oa]|detalhad[oa]|resumid[oa]|consolidad[oa]|"
+                              r"gerencial|mensal|diari[oa]))?")
+_RE_TITULO_DE_VENDAS_NO_TOPO = re.compile(
+    r"(?:(?:relatorio|rel|giro|resumo|analise|listagem|ranking|mapa|curva abc|curva|movimento|historico|relacao|"
+    r"demonstrativo|consulta|extrato|estatisticas?|total)" + _QUALIFICADOR_DO_RELATORIO + r" (?:d[eao]s? )?vendas?\b"
+    r"|vendas? (?:por|x|e)\b"
+    r"|vendas? (?:de|dos|das) (?:produtos?|itens|mercadorias?)\b"
+    r"|vendas? (?:d[oe]|no) (?:periodo|mes|dia)\b"
+    r"|vendas? (?:diarias?|mensal|mensais)\b"
+    r"|(?:produtos?|itens|mercadorias?|pecas) (?:mais )?vendid[oa]s?\b"
+    r"|acertos? (?:de |da |do )?consignac\w*\b"
+    r"|curva abc (?:d[eao]s? )?(?:produtos?|itens|mercadorias?) vendid[oa]s?\b"
+    r"|pedidos? de vendas?\b"
+    r"|faturamento (?:por|diario|mensal)\b"
+    r"|(?:relatorio|rel|relacao|listagem|resumo|consulta|demonstrativo|ranking|curva abc|mapa)"
+    + _QUALIFICADOR_DO_RELATORIO + r" (?:d[eao]s? )?"
+    r"(?:pedidos? de vendas?|(?:produtos?|itens|mercadorias?|pecas) (?:mais )?vendid[oa]s?|faturamento|"
+    r"acertos? (?:de |da |do )?consignac\w*)\b)")
+# A compra do cliente é a venda da loja: "Compras por Cliente", "Ranking de Compras por Cliente", "Histórico de
+# Compras do Cliente"; e "Histórico" ou "Extrato de Compras" com o rótulo do cliente no topo ("Cliente:" | "JOAO").
+_RE_COMPRA_DO_CLIENTE = re.compile(r"\bcompras? (?:por|d[oa]s?|de) (?:clientes?|consumidor(?:es)?)\b")
+_RE_HISTORICO_DE_COMPRAS = re.compile(r"(?:historico|extrato)(?: d[eao]s?)? compras?\b")
+_RE_ROTULO_DO_CLIENTE = re.compile(r"(?:(?:nome|cod|codigo)(?: d[oa])? )?(?:clientes?|consumidor(?:es)?)")
+# O rótulo do título: a célula de depois dele (ou o resto da célula) é o título do relatório.
+_RE_ROTULO_DE_TITULO = re.compile(r"(?:(?:tipo|nome|modelo) d[eo] )?(?:relatorio|rel|titulo)")
+# O título com dois-pontos ("Relatório de Vendas:" | "Outubro") começa pelo nome do relatório, ou por "Vendas por"
+# e "Faturamento por" com o que vem depois ("Vendas por Produto:" | "Outubro"), e não termina pendurado.
+# "Histórico" fica de fora ("Histórico de vendas considerado:" é parâmetro), e "Vendas x Compras:" também.
+_NOMES_DE_RELATORIO = frozenset({"relatorio", "rel", "resumo", "analise", "listagem", "ranking", "mapa", "curva",
+                                 "giro", "relacao", "demonstrativo", "consulta", "extrato", "estatistica",
+                                 "estatisticas", "movimento"})
+_FIM_DE_PARAMETRO = frozenset({"por", "x", "e", "de", "do", "da", "dos", "das", "em", "no", "na", "com",
+                               "considerado", "considerada", "considerados", "consideradas"})
+_RE_TITULO_DE_RELATORIO_DE_COMPRAS = re.compile(
+    r"(?:(?:relatorio|rel|resumo|analise|listagem|relacao|mapa|movimento|movimentacao|historico|consulta|"
+    r"demonstrativo|extrato)" + _QUALIFICADOR_DO_RELATORIO + r"(?: d[eao]s?)? (?:compras?|entradas?)\b"
+    r"|(?:curva abc|curva|ranking|giro)" + _QUALIFICADOR_DO_RELATORIO + r"(?: d[eao]s?)? compras?\b"
+    r"|(?:compras?|entradas?)(?: d[eao]s?)? (?:mercadorias?|produtos?|notas?|fornecedor(?:es)?|estoque|mes|periodo)\b"
+    r"|(?:compras?|entradas?) por (?:fornecedor(?:es)?|produtos?|itens|grupos?|subgrupos?|secao|secoes|"
+    r"departamentos?|categorias?|marcas?|familias?|periodo|data|datas|notas?|nf|nfe|comprador(?:es)?|lojas?|"
+    r"filial|filiais|mes|meses)\b"
+    r"|(?:compras?|entradas?) n[oa] (?:periodo|mes|data)\b"
+    r"|(?:compras?|entradas?) (?:realizadas|efetuadas)\b"
+    r"|compras? entradas?\b"
+    r"|(?:(?:relatorio|rel|relacao|listagem|consulta|demonstrativo|extrato|resumo|mapa|analise)"
+    + _QUALIFICADOR_DO_RELATORIO + r" (?:d[eao]s? )?)?"
+    r"(?:(?:pedidos?|ordens?|ordem) de compras?|mercadorias? recebidas|recebimento (?:de |das )?mercadorias?)\b"
+    r"|entradas? de (?:nf|nfe|nf e|notas?)\b"
+    r"|(?:(?:relatorio|rel|relacao|listagem|resumo|consulta|demonstrativo|extrato)" + _QUALIFICADOR_DO_RELATORIO
+    + r" (?:de |das |dos )?)?"
+    r"(?:notas?|nf|nfe|nf e) (?:fisca(?:l|is) )?(?:eletronicas? )?de (?:compras?|entradas?)\b"
+    r"|(?:compras?|entradas?)$)")
+_RE_TITULO_DO_CLIENTE = re.compile(r"\b(?:clientes?|consumidor(?:es)?)\b")
+_PALAVRA_DE_COMPRAS = frozenset({"compra", "compras", "entrada", "entradas"})
+_RE_TITULO_DE_TOTAL_DA_COMPRA = re.compile(
+    r"\b(?:total|tot)\b(?: \w+){0,2} (?:da |de |do |das |dos )?compras?\b|\bcompras? total\b")
+# O total da venda pelo nome, mesmo fora do dicionário ("Total da Venda", "Valor de Venda", "Venda Total", "Total
+# Vendido"): com ele, o total da compra ao lado não é o único total. "Preço Venda" é o unitário e não conta.
+_RE_TITULO_DE_TOTAL_DA_VENDA = re.compile(r"\b(?:total|tot|valor|vlr|vl|vr)\b(?: d[aeo]s?)? vend\w*|\bvendas? total\b")
+_RE_COLUNA_QUANTIDADE_COMPRADA = re.compile(r"\b(?:qtde?|qtd|quantidade|quant) (?:comprad\w*|compras?)\b")
+# A data ou a nota da entrada da mercadoria ("Data Entrada", "Dt. de Entrada", "NF Entrada", "Nota Fiscal de
+# Entrada"). "Entrada" sozinha é também o sinal do crediário.
+_RE_COLUNA_DE_ENTRADA = re.compile(
+    r"\b(?:data|dt)(?: d[ae])? entrada\b|\b(?:nota|nf|nfe|nf e)(?: fiscal)?(?: d[ae])? entrada\b"
+    r"|\bentradas? de mercadorias?\b")
+_RE_COLUNA_FORNECEDOR = re.compile(r"\bfornecedor(?:es)?\b")
+# Coluna própria da compra: o fornecedor, o custo (fora o do envio, do frete ou da entrega) e a entrada.
+_RE_COLUNA_DA_COMPRA = re.compile(
+    r"\bfornecedor(?:es)?\b|\bcustos?\b(?! (?:d[aeo] )?(?:envio|frete|entrega)\b)|" + _RE_COLUNA_DE_ENTRADA.pattern)
+# Coluna que só existe em vendas, para a recusa de compras (a de _recusar_relatorio_de_vendas_nas_compras, a
+# do campo de compras da análise mensal, continua como estava).
+_RE_COLUNA_SO_DA_VENDA = re.compile(
+    r"\b(?:qtde?|qtd|quantidade|quant) vend\w*|\btotal (?:d[aeo]s? )?vendas?\b|\bvalor total (?:d[aeo] )?venda\b"
+    r"|\b(?:data|dt)(?: d[ae])? vendas?\b")
+_LINHAS_DO_TOPO = 30
+
+# Uma célula preenchida do topo: o texto normalizado; se é a primeira preenchida do arquivo; se vem logo depois de
+# um rótulo com dois-pontos que não é o do título (o valor de um filtro) ou que é (o lugar do título); e, quando a
+# própria célula é um rótulo ("Vendas por:") ou começa por um ("Comprador: TODOS"), o rótulo e o valor, normalizados
+# (o rótulo é None na célula sem dois-pontos), e os trechos do rótulo antes do separador (" - ", " | ").
+_CelulaDoTopo = namedtuple("_CelulaDoTopo", "texto primeira valor_de_filtro depois_do_titulo rotulo valor trechos",
+                           defaults=((),))
+# O dois-pontos do rótulo: o da hora ("10:35") não é.
+_RE_DOIS_PONTOS_DO_ROTULO = re.compile(r"(?<!\d):|:(?!\d)")
+# O separador entre o título e o resto da célula ("Vendas x Compras - Período: ...").
+_RE_SEPARADOR_DO_TITULO = re.compile(r"\s+[-–—|]+\s+")
+
+
+def _celulas_do_topo(bruto: pd.DataFrame, ate: int) -> list:
+    """[_CelulaDoTopo] das primeiras `ate` linhas."""
+    celulas, primeira = [], True
+    for linha in range(min(ate, len(bruto))):
+        rotulo_anterior = None  # o rótulo da célula anterior da linha, quando ela termina em dois-pontos
+        preenchidas = [celula for celula in bruto.iloc[linha].tolist() if not _celula_vazia(celula)]
+        for posicao, celula in enumerate(preenchidas):
+            texto = str(celula).strip()
+            rotulo, valor, trechos, com_valor_ao_lado = None, "", (), False
+            dois_pontos = _RE_DOIS_PONTOS_DO_ROTULO.search(texto)
+            if dois_pontos is not None:
+                antes, depois = texto[:dois_pontos.start()], texto[dois_pontos.end():]
+                rotulo, valor = _norm_chave(antes), _norm_chave(depois)
+                trechos = tuple(_norm_chave(trecho) for trecho in _RE_SEPARADOR_DO_TITULO.split(antes))[:-1]
+            elif posicao + 1 < len(preenchidas) and _valor_de_parametro(preenchidas[posicao + 1]):
+                # O rótulo sem dois-pontos, com o valor na célula ao lado ("Vendas no Período" | "R$ 1.234,00").
+                rotulo, valor, com_valor_ao_lado = _norm_chave(texto), _norm_chave(preenchidas[posicao + 1]), True
+            do_titulo = rotulo_anterior is not None and _RE_ROTULO_DE_TITULO.fullmatch(rotulo_anterior) is not None
+            celulas.append(_CelulaDoTopo(_norm_chave(celula), primeira, rotulo_anterior is not None and not do_titulo,
+                                         do_titulo, rotulo, valor, trechos))
+            primeira = False
+            rotulo_anterior = rotulo if (texto.endswith(":") or com_valor_ao_lado) else None
+    return celulas
+
+
+def _valor_de_parametro(celula) -> bool:
+    """A célula é um valor em reais ou com casas decimais ("1.234,00", "R$ 1.234,00", 1234.5): o valor de um
+    parâmetro. O número inteiro ("2025", "12") fica de fora: pode ser o ano ou a página ao lado do título."""
+    texto = str(celula).strip()
+    if re.fullmatch(r"(?i)r\$\s*-?[\d.,]*\d", texto):
+        return True
+    return _so_numero(celula) and re.search(r"[.,]\d", texto) is not None and not re.fullmatch(r"\d+\.0", texto)
+
+
+def _rotulo_e_titulo_de_vendas(rotulo: str) -> bool:
+    """O rótulo é ele mesmo o título de vendas ("Relatório de Vendas:" | "Outubro", "Vendas por Produto:" |
+    "Outubro"): começa pelo nome do relatório, ou por "Vendas por" e "Faturamento por" com o que vem depois, e não
+    termina pendurado. "Vendas por:", "Vendas no Período:", "Vendas x Compras:" e "Histórico de vendas
+    considerado:" não são."""
+    palavras = rotulo.split()
+    if len(palavras) < 2 or _RE_TITULO_DE_VENDAS_NO_TOPO.match(rotulo) is None:
+        return False
+    if palavras[0] in _NOMES_DE_RELATORIO:
+        return True  # também "Relatório de Vendas De:" e "Relatório de Vendas por:" | "Produto"
+    return (palavras[-1] not in _FIM_DE_PARAMETRO and palavras[0] in ("venda", "vendas", "faturamento")
+            and palavras[1] == "por")
+
+
+def _titulo_de_vendas(celulas: list) -> bool:
+    """Alguma célula é título de relatório de vendas, ou da compra do cliente (a venda da loja). O rótulo de
+    filtro e o valor dele não contam (ver o texto acima)."""
+    com_rotulo_do_cliente = any(celula.rotulo is not None and _RE_ROTULO_DO_CLIENTE.fullmatch(celula.rotulo)
+                                for celula in celulas)
+    for celula in celulas:
+        if celula.valor_de_filtro:
+            continue
+        if celula.rotulo is None:
+            texto = celula.texto
+        elif _RE_ROTULO_DE_TITULO.fullmatch(celula.rotulo):
+            texto = celula.valor
+        elif _rotulo_e_titulo_de_vendas(celula.rotulo):
+            texto = celula.rotulo
+        elif any(_RE_TITULO_DE_VENDAS_NO_TOPO.match(trecho) or _RE_COMPRA_DO_CLIENTE.search(trecho)
+                 for trecho in celula.trechos):
+            return True  # "Vendas x Compras - Período: ...", "Produtos Vendidos - Emitido em: ..."
+        else:
+            continue
+        if (_RE_TITULO_DE_VENDAS_NO_TOPO.match(texto) or _RE_COMPRA_DO_CLIENTE.search(texto)
+                or (com_rotulo_do_cliente and _RE_HISTORICO_DE_COMPRAS.match(texto))):
+            return True
+    return False
+
+
+def _titulo_de_compras(celulas: list) -> bool:
+    """Alguma célula é título de relatório de compras ou de entradas (pelo começo; ver o texto acima)."""
+    for celula in celulas:
+        if celula.valor_de_filtro:
+            continue
+        if celula.rotulo is not None and _RE_ROTULO_DE_TITULO.fullmatch(celula.rotulo):
+            texto, lugar_do_titulo = celula.valor, True
+        else:
+            texto, lugar_do_titulo = celula.texto, celula.primeira or celula.depois_do_titulo
+        if not texto or _RE_TITULO_DO_CLIENTE.search(texto) or _RE_TOPO_DE_VENDAS.search(texto):
+            continue
+        if texto in _PALAVRA_DE_COMPRAS and not lugar_do_titulo:
+            continue
+        if _RE_TITULO_DE_RELATORIO_DE_COMPRAS.match(texto):
+            return True
+    return False
+
+
+def _recusar_relatorio_de_compras(bruto: pd.DataFrame, idx: int, linhas_cab: int, mapa: dict, nome: str) -> None:
+    """Recusa (ETLRelatorioDeCompras) o relatório de compras ou de entradas lido como vendas."""
+    # No cabeçalho de duas linhas, a de cima pode ser o título do relatório ("Relatório de Compras por Produto"
+    # sobre "Item;Qtde;Valor Total"): ela também é topo.
+    topo = _celulas_do_topo(bruto, min(idx + (1 if linhas_cab == 2 else 0), _LINHAS_DO_TOPO))
+    if _titulo_de_vendas(topo):
+        return
+    if _titulo_de_compras(topo):
+        raise ETLRelatorioDeCompras(nome)
+    todos = _titulos_do_cabecalho(bruto, idx, linhas_cab)
+    titulos = [titulo for titulo in todos if titulo]
+    # A coluna que só existe em vendas vem antes da regra do total da compra: com ela, a quantidade lida é a
+    # vendida, e o faturamento sai da venda, nunca do total da compra.
+    if any(_RE_COLUNA_SO_DA_VENDA.search(titulo) for titulo in titulos):
+        return
+    if ("valor_venda" not in mapa and any(_RE_TITULO_DE_TOTAL_DA_COMPRA.search(titulo) for titulo in titulos)
+            and not any(_RE_TITULO_DE_TOTAL_DA_VENDA.search(titulo) for titulo in titulos)):
+        raise ETLRelatorioDeCompras(nome)
+    quantidade = todos[mapa["quantidade"]] if "quantidade" in mapa else ""
+    if (_RE_COLUNA_QUANTIDADE_COMPRADA.search(quantidade)
+            and any(_RE_COLUNA_DA_COMPRA.search(titulo) for titulo in titulos)):
+        raise ETLRelatorioDeCompras(nome)
+    if (any(_RE_COLUNA_FORNECEDOR.search(titulo) for titulo in titulos)
+            and any(_RE_COLUNA_DE_ENTRADA.search(titulo) for titulo in titulos)):
+        raise ETLRelatorioDeCompras(nome)
+
+
+def _recusar_compras_sem_cabecalho_de_vendas(bruto: pd.DataFrame, nome: str) -> None:
+    """O cabeçalho de vendas não foi achado: recusa como compras quando as primeiras linhas trazem o título de
+    compras ou de entradas, ou o total da compra sem nada de venda."""
+    celulas = _celulas_do_topo(bruto, _LINHAS_DO_TOPO)
+    if _titulo_de_vendas(celulas):
+        return
+    if _titulo_de_compras(celulas):
+        raise ETLRelatorioDeCompras(nome)
+    textos = [celula.texto for celula in celulas]
+    if (any(_RE_TITULO_DE_TOTAL_DA_COMPRA.search(texto) for texto in textos)
+            and not any(_RE_TOPO_DE_VENDAS.search(texto) for texto in textos)):
+        raise ETLRelatorioDeCompras(nome)
 
 
 def _recusar_relatorio_de_vendas_nas_compras(bruto: pd.DataFrame, idx: int, linhas_cab: int, nome: str) -> None:
@@ -1458,9 +1837,14 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) 
     if bruto.empty:
         raise ETLValidationError(f"O arquivo de vendas '{nome}' está totalmente vazio.")
 
-    idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_VENDAS, _validar_vendas)
+    try:
+        idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_VENDAS, _validar_vendas)
+    except ETLValidationError:
+        _recusar_compras_sem_cabecalho_de_vendas(bruto, nome)
+        raise
     _recusar_separador_duvidoso(bruto, idx, linhas_cab, nome)
     _recusar_titulos_repetidos(bruto, idx, linhas_cab, mapa, nome)
+    _recusar_relatorio_de_compras(bruto, idx, linhas_cab, mapa, nome)
     bruto = _alinhar_relatorio_paginado(bruto, idx, linhas_cab, mapa)
     # Título normalizado de cada coluna reconhecida. Os KPIs não o usam; o Raio-X precisa
     # saber se o custo é unitário e se o total da linha veio do preço unitário.
@@ -1525,6 +1909,8 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) 
         raise ETLValidationError(
             f"Relatório de VENDAS '{nome}' sem nomes de produto válidos após a limpeza."
         )
+    if cadastro and "_unidade" in df.columns and "_documento" in df.columns:
+        df["_loja_do_cupom"] = _loja_do_cupom(df)
     if "_situacao" in df.columns:
         df = _aplicar_situacao_das_vendas(df, nome)
     df.attrs["qualidade"] = _fechar_qualidade(qualidade)
@@ -1621,6 +2007,182 @@ def _consolidar_compras(df: pd.DataFrame, coluna_valor: str):
         df.loc[bonificacao, "qtde_comprada"] = qtde[bonificacao].abs()
     df = df[compra | devolucao | bonificacao].drop(columns="_situacao", errors="ignore").reset_index(drop=True)
     return df, resumo
+
+
+# =====================================================================
+# 6b) Tabelas auxiliares do lote (ingestão de vários arquivos)
+# =====================================================================
+# Num envio com a venda item a item com a data de cada venda (a "âncora temporal", como a Opção 27 do ERP, "Vendas
+# por Cliente Detalhada por Produto"), os outros arquivos deixam de ser vendas e completam a âncora
+# (raio_x._ler_envio_uma_vez). Os leitores abaixo reconhecem o arquivo que não é relatório de vendas:
+#   - posição de estoque: produto e saldo, com o custo unitário ou o valor em estoque;
+#   - lista de preços: produto e preço (o cadastro dos produtos), com o custo quando houver;
+#   - resumo por pedido ou documento: o número da venda e o valor, com o desconto, o CPF/CNPJ do cliente e a hora
+#     pelos mesmos títulos da venda item a item (_dado_da_venda).
+# O relatório de compras é reconhecido pela recusa de sempre (ETLRelatorioDeCompras) e entra no lote fora das contas: o
+# resumo por nota não traz o produto. Os títulos de coluna são os comuns de ERP: até 11/2026 nenhum desses leiautes
+# reais foi recebido, e o primeiro arquivo real de cada tipo deve ser conferido.
+ALIAS_ESTOQUE = {
+    "codigo": ["id produto", "id do produto", "codigo produto", "codigo", "cod produto", "cod barras", "ean", "sku",
+               "ref", "cod "],
+    "produto": ["nome do produto", "descricao do produto", "descricao produto", "nome produto", "produto",
+                "mercadoria", "descricao do item", "descricao"],
+    # O valor em estoque antes do saldo: "Valor em Estoque" também tem a palavra "estoque".
+    "valor_estoque": ["valor em estoque", "valor do estoque", "valor estoque", "total em estoque", "custo total",
+                      "total custo", "valor total"],
+    "custo_unitario": ["custo unitario", "custo unit", "custo medio", "custo de reposicao", "custo reposicao",
+                       "preco de custo", "preco custo", "vlr custo", "vr custo", "valor custo", "custo"],
+    "estoque": ["estoque atual", "saldo estoque", "saldo atual", "qtde estoque", "qtd estoque", "qtde em estoque",
+                "quantidade em estoque", "quantidade estoque", "estoque fisico", "estoque", "saldo"],
+}
+ALIAS_PRECOS = {
+    "codigo": ALIAS_ESTOQUE["codigo"],
+    "produto": ALIAS_ESTOQUE["produto"],
+    # O custo antes do preço: "Preço de Custo" também tem a palavra "preço".
+    "custo_unitario": ["custo unitario", "custo unit", "custo medio", "preco de custo", "preco custo", "custo"],
+    "preco": ["preco de venda", "preco venda", "preco unitario", "preco unit", "valor unitario", "vlr unitario",
+              "valor de venda", "preco"],
+}
+ALIAS_DOCUMENTOS = {
+    "documento": ["nr pedido", "nro pedido", "numero do pedido", "numero pedido", "n pedido", "no pedido", "pedido",
+                  "nr doc", "nr documento", "numero do documento", "documento", "nr cupom", "cupom", "nr nota",
+                  "nota fiscal", "nr nf", "coo"],
+    "valor": ["valor total", "vlr total", "vl total", "total liquido", "valor liquido", "total do pedido",
+              "total pedido", "valor do pedido", "total"],
+}
+_RE_TITULO_DE_ESTOQUE = re.compile(r"\b(?:posicao|saldos?|inventario|balanco)(?: \w+){0,2} (?:de |do |dos )?estoques?\b"
+                                   r"|\bestoques? (?:atual|atuais|fisico|a custo)\b|\binventario\b")
+_RE_TITULO_DE_PRECOS = re.compile(r"\b(?:lista|tabela|relacao|cadastro)s? (?:de |dos )?(?:precos?|produtos?)\b")
+# A chave de ligação pelo código do produto: só letras e algarismos, sem os zeros à esquerda ("0700019" e
+# "000007000.19", a máscara do outro relatório do mesmo ERP, são o mesmo código).
+_RE_FORA_DO_CODIGO = re.compile(r"[^0-9A-Z]")
+
+
+def normalizar_codigo_do_produto(valor):
+    """O código do produto como chave de ligação entre relatórios, ou None."""
+    if valor is None or (isinstance(valor, float) and not math.isfinite(valor)):
+        return None
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    texto = _RE_FORA_DO_CODIGO.sub("", _strip_acentos(str(valor)).upper())
+    if texto in ("", "NAN", "NONE", "NULL"):
+        return None
+    return texto.lstrip("0") or "0"
+
+
+def normalizar_numero_do_documento(numero):
+    """O número da venda (indicadores_executivos.numero_da_venda) como chave de ligação, sem os zeros à esquerda de
+    cada grupo de algarismos ("P9-00001" e "P9-1" são o mesmo pedido), ou None."""
+    if numero is None:
+        return None
+    return re.sub(r"\d+", lambda grupo: str(int(grupo.group())), str(numero).upper())
+
+
+def _tabela_de_produtos(bruto: pd.DataFrame, aliases: dict, obrigatorios: tuple, nome: str):
+    """(quadro canônico das linhas de produto, mapa) do leiaute, ou None quando ele não casa."""
+    try:
+        idx, mapa, linhas_cab = _detectar_cabecalho(bruto, aliases, lambda m: all(c in m for c in obrigatorios))
+        df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
+        numericas = tuple(c for c in ("estoque", "custo_unitario", "valor_estoque", "preco") if c in df.columns)
+        df = _filtrar_linhas_validas(df, "produto", numericas)
+    except ETLValidationError:
+        return None
+    df["chave_nome"] = df["produto"].map(_normalizar_produto)
+    df = df[(df["chave_nome"] != "") & (~df["chave_nome"].isin(_NAO_PRODUTOS))].reset_index(drop=True)
+    if df.empty:
+        return None
+    df["codigo"] = df["codigo"].map(normalizar_codigo_do_produto) if "codigo" in df.columns else None
+    df["nome"] = df["produto"].map(_nome_exibivel)
+    return df
+
+
+def _ler_posicao_de_estoque(bruto: pd.DataFrame, nome: str):
+    df = _tabela_de_produtos(bruto, ALIAS_ESTOQUE, ("produto", "estoque"), nome)
+    if df is None:
+        return None
+    qualidade, csv = Counter(), bruto.attrs.get("format") == "csv"
+    estoque = _converter_serie(df["estoque"])
+    custo = (_converter_serie_monetaria(df["custo_unitario"], qualidade, csv) if "custo_unitario" in df.columns
+             else pd.Series(np.nan, index=df.index))
+    if "valor_estoque" in df.columns:
+        valor = _converter_serie_monetaria(df["valor_estoque"], qualidade, csv)
+        derivado = (valor / estoque).where(estoque > 0)
+        custo = custo.where(custo > 0, derivado)
+    produtos = pd.DataFrame({"chave_nome": df["chave_nome"], "codigo": df["codigo"], "nome": df["nome"],
+                             "estoque": estoque, "custo_unitario": custo.where(custo > 0)})
+    return {"papel": "estoque", "produtos": produtos[produtos["estoque"].notna()].reset_index(drop=True),
+            "documentos": None}
+
+
+def _ler_lista_de_precos(bruto: pd.DataFrame, nome: str):
+    df = _tabela_de_produtos(bruto, ALIAS_PRECOS, ("produto", "preco"), nome)
+    if df is None:
+        return None
+    qualidade, csv = Counter(), bruto.attrs.get("format") == "csv"
+    custo = (_converter_serie_monetaria(df["custo_unitario"], qualidade, csv) if "custo_unitario" in df.columns
+             else pd.Series(np.nan, index=df.index))
+    produtos = pd.DataFrame({"chave_nome": df["chave_nome"], "codigo": df["codigo"], "nome": df["nome"],
+                             "estoque": np.nan, "custo_unitario": custo.where(custo > 0),
+                             "preco": _converter_serie_monetaria(df["preco"], qualidade, csv)})
+    return {"papel": "precos", "produtos": produtos, "documentos": None}
+
+
+def _ler_resumo_por_documento(bruto: pd.DataFrame, nome: str):
+    from indicadores_executivos import numero_da_venda  # o módulo importa este: aqui, na hora da chamada
+    try:
+        idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_DOCUMENTOS,
+                                                    lambda m: "documento" in m and "valor" in m)
+        df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
+        # O desconto, o cliente e a hora pelos mesmos títulos da venda item a item.
+        usadas, titulos = set(mapa.values()), _titulos_do_cabecalho(bruto, idx, linhas_cab)
+        bloco = bruto.iloc[idx + linhas_cab:].reset_index(drop=True)
+        extras = {}
+        for coluna, titulo in enumerate(titulos):
+            if coluna in usadas or not titulo:
+                continue
+            celulas = [bruto.iat[idx + k, coluna] for k in range(linhas_cab)]
+            dado = _dado_da_venda(titulo, celulas)
+            if dado in ("desconto", "hora", "cliente", "cliente_sem_titulo"):
+                extras.setdefault("cliente" if dado.startswith("cliente") else dado, coluna)
+        for chave, coluna in extras.items():
+            df["_" + chave] = bloco.iloc[:, coluna].tolist()
+        df = _filtrar_linhas_validas(df, "documento", ("valor",))
+    except ETLValidationError:
+        return None
+    numeros = df["documento"].map(numero_da_venda).map(normalizar_numero_do_documento)
+    documentos = pd.DataFrame({"numero": numeros})
+    if "_desconto" in df.columns:
+        qualidade = Counter()
+        desconto = _converter_serie_monetaria(df["_desconto"], qualidade, bruto.attrs.get("format") == "csv")
+        documentos["desconto"] = desconto.abs() if not qualidade.get("invalidos") else np.nan
+    for chave in ("cliente", "hora"):
+        if "_" + chave in df.columns:
+            documentos[chave] = df["_" + chave].tolist()
+    documentos = documentos.dropna(subset=["numero"])
+    if documentos.empty:
+        return None
+    # Um pedido em mais de uma linha: soma o desconto e fica com o primeiro cliente e a primeira hora.
+    agregados = {coluna: ("sum" if coluna == "desconto" else "first") for coluna in documentos.columns if coluna != "numero"}
+    documentos = documentos.groupby("numero", sort=False).agg(agregados) if agregados else (
+        documentos.drop_duplicates("numero").set_index("numero"))
+    return {"papel": "documentos", "produtos": None, "documentos": documentos}
+
+
+def ler_tabela_auxiliar(bruto: pd.DataFrame, nome: str):
+    """A tabela auxiliar do lote que o arquivo traz ({"papel", "produtos", "documentos"}), ou None quando ele não é
+    nenhuma delas. A ordem segue o título do relatório (posição de estoque, lista de preços) e, sem título, tenta o
+    estoque, os preços e o resumo por documento."""
+    if bruto.empty:
+        return None
+    topo = " | ".join(celula.texto for celula in _celulas_do_topo(bruto, _LINHAS_DO_TOPO))
+    leitores = [_ler_posicao_de_estoque, _ler_lista_de_precos, _ler_resumo_por_documento]
+    if _RE_TITULO_DE_PRECOS.search(topo) and not _RE_TITULO_DE_ESTOQUE.search(topo):
+        leitores = [_ler_lista_de_precos, _ler_posicao_de_estoque, _ler_resumo_por_documento]
+    for leitor in leitores:
+        tabela = leitor(bruto, nome)
+        if tabela is not None:
+            return tabela
+    return None
 
 
 def carregar_compras(caminho: str):

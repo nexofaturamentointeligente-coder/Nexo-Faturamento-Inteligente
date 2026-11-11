@@ -1358,6 +1358,9 @@ class LeadAvaliacao(db.Model):
     # parado por faixa, excedente, Urgência a preço médio e ao custo, diferença de preço), sem nome de
     # produto nem de categoria; fica depois do expurgo, como os resumos dos blocos.
     resumo_inteligencia_json: Mapped[Optional[str]] = mapped_column(Text)
+    # Revisão c5f8a1d3e7b9: os indicadores executivos do envio (o nó indicadores_executivos do Raio-X,
+    # indicadores_executivos.py). Trazem nome de produto: saem com as linhas de PDV no expurgo de 30 dias.
+    indicadores_executivos_json: Mapped[Optional[str]] = mapped_column(Text)
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)

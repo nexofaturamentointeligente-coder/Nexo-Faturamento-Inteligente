@@ -42,9 +42,12 @@ from tests.test_contratos_postgresql import ROOT, TOOLS, _PrivateCluster, _safe_
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
 # Head das tabelas de lead: a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging,
 # 6a8f2d4c0e13 agenda o expurgo no pg_cron, 7c4e2a9b5d31 (Etapa 2) acrescenta as colunas de cadastro,
-# ajustes e limiares e 9b3e5d7f1a28 (Etapa 3), a data da última venda e o resumo da inteligência.
-REVISAO_LEADS = "9b3e5d7f1a28"
+# ajustes e limiares, 9b3e5d7f1a28 (Etapa 3), a data da última venda e o resumo da inteligência, e
+# c5f8a1d3e7b9, os indicadores executivos do lead (apagados pela função de expurgo).
+REVISAO_LEADS = "c5f8a1d3e7b9"
+REVISAO_ETAPA_3 = "9b3e5d7f1a28"
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
+INDICADORES_DE_ENSAIO = '{"versao": "ensaio"}'
 REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
 COLUNAS_DA_ETAPA_2 = {
     "brainstorming_dados_pdv": {
@@ -101,6 +104,9 @@ CHECKS = (
     # 6. Etapa 3
     "etapa3_service_writes_dates_and_summary", "etapa3_constraints_enforced", "etapa3_downgrade_refused_with_new_data",
     "etapa3_downgrade_and_upgrade_again",
+    # 6b. Indicadores executivos
+    "indicadores_service_writes_and_purge_clears", "indicadores_downgrade_refused_with_data",
+    "indicadores_downgrade_and_upgrade_again",
     # 7. Portal (Etapa 4)
     "portal_lines_isolated_by_lead", "portal_payload_and_cache_on_postgresql",
 )
@@ -162,6 +168,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_servico()
         self._etapa_avaliacao_etapa_2()
         self._etapa_avaliacao_etapa_3()
+        self._etapa_indicadores()
         self._etapa_portal()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
@@ -394,7 +401,7 @@ class _ClusterDosLeads(_PrivateCluster):
         # das regras lead-2026-11.3 e o lead com itens_omissao_erp).
         self._executar("UPDATE brainstorming_dados_pdv SET versao_regras = 'lead-2026-11.3', "
                        "fim_ultimo_relatorio_com_venda = NULL")
-        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL")
+        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL, indicadores_executivos_json = NULL")
         antes = self._contagens()
         try:
             self._migrar(downgrade, REVISAO_ANTES_DA_ETAPA_2)
@@ -486,6 +493,8 @@ class _ClusterDosLeads(_PrivateCluster):
                    f"recusas={recusas} aceitos={aceitos}")
 
         self.stage = "downgrade da Etapa 3 com dados das regras novas"
+        # Sem indicadores no lead, a c5f8a1d3e7b9 desce na mesma transação: a recusa é a da 9b3e5d7f1a28.
+        self._executar("UPDATE lead_avaliacao SET indicadores_executivos_json = NULL")
         antes = self._contagens()
         try:
             self._migrar(downgrade, REVISAO_ETAPA_2)
@@ -501,7 +510,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self.stage = "downgrade da Etapa 3 sem os dados novos e novo upgrade"
         self._executar("UPDATE brainstorming_dados_pdv SET versao_regras = 'lead-2026-11.3', "
                        "fim_ultimo_relatorio_com_venda = NULL")
-        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL")
+        self._executar("UPDATE lead_avaliacao SET resumo_inteligencia_json = NULL, indicadores_executivos_json = NULL")
         estado = self._estado()
         self._migrar(downgrade, REVISAO_ETAPA_2)
         revisao_depois = self._revisao()
@@ -516,6 +525,71 @@ class _ClusterDosLeads(_PrivateCluster):
                    and self._estado() == estado and self._diferencas_metadata() == []
                    and self._jobs() == [JOB_DO_EXPURGO],
                    f"revisão={revisao_depois} colunas={colunas_depois} checks={checks_depois} ficou={ficou}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+    # ------------------------------------------------- 6b. Indicadores executivos (c5f8a1d3e7b9)
+    def _coluna_dos_indicadores(self):
+        return bool(self._sql(
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'lead_avaliacao' AND column_name = 'indicadores_executivos_json'")[0][0])
+
+    def _etapa_indicadores(self):
+        from flask_migrate import downgrade, upgrade
+        import leads_avaliacao
+
+        self.stage = "indicadores executivos gravados pelo serviço e apagados pela função de expurgo"
+        id_lead = self._registrar_pelo_servico()
+        bruto = self._sql("SELECT indicadores_executivos_json FROM lead_avaliacao WHERE id = :i", i=str(id_lead))[0][0]
+        try:
+            indicadores = json.loads(bruto)
+        except (TypeError, ValueError):
+            indicadores = None
+        gravado = (isinstance(indicadores, dict) and indicadores.get("versao") == "indicadores-2026-11.1"
+                   and len(indicadores.get("indicadores") or {}) == 21)
+        # O envio passa dos 30 dias: a função do banco apaga as linhas e, com elas, os indicadores (nome de produto).
+        self._executar("UPDATE brainstorming_dados_pdv SET criado_em = criado_em - INTERVAL '31 days' "
+                       "WHERE lead_id = :i", i=str(id_lead))
+        with self._sessao() as sessao:
+            resultado = leads_avaliacao.expurgar_dados_pdv(sessao)
+            sessao.commit()
+        depois = [tuple(l) for l in self._sql(
+            "SELECT status, indicadores_executivos_json IS NULL FROM lead_avaliacao WHERE id = :i", i=str(id_lead))]
+        self.check("indicadores_service_writes_and_purge_clears",
+                   gravado and resultado.leads_expirados == 1 and depois == [("expirado", True)],
+                   f"gravado={gravado} resultado={resultado} depois={depois}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+        self.stage = "downgrade dos indicadores com dados"
+        with self._sessao() as sessao:
+            self._lead(sessao, "concluido", indicadores_executivos_json=INDICADORES_DE_ENSAIO)
+            sessao.commit()
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ETAPA_3)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        self.check("indicadores_downgrade_refused_with_data",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and self._coluna_dos_indicadores(), f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade dos indicadores sem dados e novo upgrade"
+        self._executar("UPDATE lead_avaliacao SET indicadores_executivos_json = NULL")
+        estado = self._estado()
+        self._migrar(downgrade, REVISAO_ETAPA_3)
+        revisao_depois, coluna_depois = self._revisao(), self._coluna_dos_indicadores()
+        # A função de expurgo volta à da f4c2a8e1d9b6, sem a coluna nova, e continua rodando.
+        with self._sessao() as sessao:
+            sem_a_coluna = leads_avaliacao.expurgar_dados_pdv(sessao)
+            sessao.rollback()
+        ficou = self._estado()
+        self._migrar(upgrade, "head")
+        self.check("indicadores_downgrade_and_upgrade_again",
+                   revisao_depois == REVISAO_ETAPA_3 and not coluna_depois
+                   and sem_a_coluna == leads_avaliacao.ResultadoExpurgo(0, 0) and ficou == estado
+                   and self._revisao() == self.head and self._coluna_dos_indicadores() and self._estado() == estado
+                   and self._diferencas_metadata() == [] and self._jobs() == [JOB_DO_EXPURGO],
+                   f"revisão={revisao_depois} coluna={coluna_depois} expurgo={sem_a_coluna} ficou={ficou}")
         self._executar("DELETE FROM lead_avaliacao")
 
     # ------------------------------------------------- 7. Portal (Etapa 4)
@@ -648,20 +722,22 @@ class _ClusterDosLeads(_PrivateCluster):
     # ------------------------------------------------- 2. função de expurgo
     def _cenario(self):
         dia = timedelta(days=1)
+        # Todo lead com indicadores: só o que expira (sem linha recente) e não converteu os perde.
+        indicadores = {"indicadores_executivos_json": INDICADORES_DE_ENSAIO}
         with self._sessao() as sessao:
-            antigo = self._lead(sessao, "concluido", vazamento_total_reais=Decimal("50.00"))
+            antigo = self._lead(sessao, "concluido", vazamento_total_reais=Decimal("50.00"), **indicadores)
             for _ in range(3):
                 self._linha(sessao, antigo, 31 * dia)
-            convertido = self._lead(sessao, "convertido")
+            convertido = self._lead(sessao, "convertido", **indicadores)
             self._linha(sessao, convertido, 90 * dia)
-            misto = self._lead(sessao, "processamento_manual")
+            misto = self._lead(sessao, "processamento_manual", **indicadores)
             self._linha(sessao, misto, 45 * dia)
             self._linha(sessao, misto, 5 * dia)
-            recente = self._lead(sessao, "pendente")
+            recente = self._lead(sessao, "pendente", **indicadores)
             self._linha(sessao, recente, 30 * dia - timedelta(hours=1))
-            expirado = self._lead(sessao, "expirado")
+            expirado = self._lead(sessao, "expirado", **indicadores)
             self._linha(sessao, expirado, 40 * dia)
-            self._lead(sessao, "pendente")
+            self._lead(sessao, "pendente", **indicadores)
             sessao.commit()
             return str(antigo.id)
 
@@ -693,7 +769,9 @@ class _ClusterDosLeads(_PrivateCluster):
             estado_sqlalchemy = (sorted((str(i), s) for i, s in sessao.execute(text(
                 "SELECT id, status FROM lead_avaliacao"))),
                 sorted((str(i), n) for i, n in sessao.execute(text(
-                    "SELECT lead_id, count(*) FROM brainstorming_dados_pdv GROUP BY lead_id"))))
+                    "SELECT lead_id, count(*) FROM brainstorming_dados_pdv GROUP BY lead_id"))),
+                sorted((str(i), nulo) for i, nulo in sessao.execute(text(
+                    "SELECT id, indicadores_executivos_json IS NULL FROM lead_avaliacao"))))
             sessao.rollback()
         with self._sessao() as sessao:
             pela_funcao = leads_avaliacao.expurgar_dados_pdv(sessao)
@@ -701,16 +779,25 @@ class _ClusterDosLeads(_PrivateCluster):
             estado_funcao = (sorted((str(i), s) for i, s in sessao.execute(text(
                 "SELECT id, status FROM lead_avaliacao"))),
                 sorted((str(i), n) for i, n in sessao.execute(text(
-                    "SELECT lead_id, count(*) FROM brainstorming_dados_pdv GROUP BY lead_id"))))
+                    "SELECT lead_id, count(*) FROM brainstorming_dados_pdv GROUP BY lead_id"))),
+                sorted((str(i), nulo) for i, nulo in sessao.execute(text(
+                    "SELECT id, indicadores_executivos_json IS NULL FROM lead_avaliacao"))))
             resumo = sessao.execute(text('SELECT "vazamento_total_r$" FROM lead_avaliacao WHERE id = :i'),
                                     {"i": self.antigo}).scalar()
             sessao.rollback()
         esperado = leads_avaliacao.ResultadoExpurgo(leads_expirados=1, linhas_removidas=5)
+        # Os indicadores (com nome de produto) saem dos leads que ficaram sem linha (o que expirou agora e o já
+        # marcado expirado que ainda tinha linha vencida); o misto, o recente, o convertido e o sem linha ficam.
+        sem_indicadores = sorted(lead for lead, nulo in estado_funcao[2] if nulo)
+        sem_linha_expirados = sorted(lead for lead, status in estado_funcao[0]
+                                     if status == "expirado" and lead not in dict(estado_funcao[1]))
         self.check("purge_matches_sqlalchemy_rule",
                    pelo_sqlalchemy == pela_funcao == esperado and estado_sqlalchemy == estado_funcao
                    and self._estado() == inicial and dict(estado_funcao[0])[self.antigo] == "expirado"
-                   and self.antigo not in dict(estado_funcao[1]) and resumo == Decimal("50.00"),
-                   f"{pelo_sqlalchemy} {pela_funcao} resumo={resumo}")
+                   and self.antigo not in dict(estado_funcao[1]) and resumo == Decimal("50.00")
+                   and self.antigo in sem_indicadores and sem_indicadores == sem_linha_expirados
+                   and len(sem_indicadores) == 2,
+                   f"{pelo_sqlalchemy} {pela_funcao} resumo={resumo} sem_indicadores={len(sem_indicadores)}")
         self._corrida_com_quem_grava()
 
     def _corrida_com_quem_grava(self):

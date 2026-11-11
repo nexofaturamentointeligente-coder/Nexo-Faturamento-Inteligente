@@ -174,6 +174,16 @@ nem teto RSS global da aplicação/container. A operação `avaliacao_cenario`
 no máximo 384 MiB, mesmo que `ETL_MEMORY_MB` suba o limite das outras operações. Há um filho ativo por processo
 chamador e uma entrada de upload/processamento por processo servidor.
 
+No Windows, que não tem o módulo `resource`, o filho roda sem os limites do sistema
+operacional (memória, CPU, gravação e core): é o ambiente de desenvolvimento, e o
+processamento de arquivos não fica bloqueado. Continuam valendo o processo à parte, o
+prazo do processo pai (o filho é encerrado no fim dele), o ambiente filtrado, a recusa de
+rede e de criação de processos e os limites do próprio ETL (tamanho, linhas, colunas,
+células). O servidor registra um aviso no log na primeira vez. A decisão é só da
+plataforma (`etl_worker._exige_limites`): num sistema POSIX, que é o da produção, o
+processamento nunca roda sem os limites, e nenhuma variável de ambiente (`FLASK_ENV`,
+`DEBUG`) muda isso.
+
 JSON de requisição ≤16 KiB e resultado ≤4 MiB; sem pickle. BLAS/OMP/MKL/NumExpr
 usam uma thread. Ambiente filtrado exclui segredos do aplicativo e configurações
 Python herdadas, mantendo controles de sistema/TLS/proxy. Não há shell ou
@@ -380,7 +390,8 @@ medidas operacionais e decisão explícita. Não apagar arquivos/dados reais.
 - Upload multipart pode ser preparado antes do gate; não foi criado controle
   global de tráfego/disco, proxy ou novas filas/serviços externos.
 - Os máximos não foram testados sob carga de produção nem com todo arquivo
-  comercial real. Windows/plataforma sem rlimits exigidos recusa ETL.
+  comercial real. No Windows (desenvolvimento) o ETL roda sem rlimits (seção G);
+  num sistema POSIX sem os rlimits exigidos, ele é recusado.
 - Processamento continua sob a trava da análise, por um prazo finito; novos
   desenhos para soltar locks exigiriam testes próprios. CPU restrita pode
   levar arquivos legítimos grandes ao timeout: revisar política em homologação.

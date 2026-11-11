@@ -48,7 +48,7 @@ Definições, as mesmas que a tela explica:
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, namedtuple
 from calendar import monthrange
 from datetime import date
 import math
@@ -58,9 +58,12 @@ import numpy as np
 import pandas as pd
 
 from etl_inputs import ETLInputError
+import indicadores_executivos
 from etl_processor import (
-    ETLLeiauteAmbiguo, ETLValidationError, _converter_serie_monetaria, _extrair_periodo_base, _ler_bruto,
-    _nome_exibivel, _reais as _brl, _vendas_do_bruto, data_da_linha, normalizar_categoria, normalizar_ncm,
+    ETLLeiauteAmbiguo, ETLRelatorioDeCompras, ETLValidationError, _converter_serie_monetaria,
+    _extrair_periodo_base, _ler_bruto, _nome_exibivel, _normalizar_produto, _reais as _brl, _vendas_do_bruto,
+    data_da_linha, ler_tabela_auxiliar, normalizar_categoria, normalizar_codigo_do_produto, normalizar_ncm,
+    normalizar_numero_do_documento,
 )
 
 # 11.4: saneamento de 11/2026 (rodapés, quantidades, títulos de reserva, codificação e os campos de
@@ -68,12 +71,15 @@ from etl_processor import (
 # 11.5: unificação de 11/2026. O item de custo implausível sai da perda e do recuperável (a regra que a
 # triagem do lead já tinha), a leitura passa a aceitar os formatos e o leiaute paginado do ERP, e o total
 # informado com fração de centavo fecha com a soma do relatório (_fechar_centavos).
-VERSAO_REGRAS = "raio-x-2026-11.5"
+# 11.6: indicadores executivos de 11/2026. O resultado ganha o nó indicadores_executivos (21 indicadores,
+# indicadores_executivos.py), e o Raio-X do cliente também fatia por mês a venda item a item com a data de cada
+# venda (sem recusar a data inconsistente: o arquivo continua um relatório só).
+VERSAO_REGRAS = "raio-x-2026-11.6"
 MAX_ARQUIVOS = 36
-# Relatórios do envio depois de fatiar por mês o arquivo que traz a data de cada venda (só a Avaliação de
-# Cenário fatia): 5 anos de meses. O teto de arquivos enviados continua sendo MAX_ARQUIVOS.
-MAX_FATIAS = 60
-_MAIS_QUE_O_TETO_DE_FATIAS = (f"Os relatórios enviados somam mais de {MAX_FATIAS} meses. Envie no máximo 5 anos "
+# Relatórios do envio depois de fatiar por mês o arquivo que traz a data de cada venda: 10 anos de meses. O
+# teto de arquivos enviados continua sendo MAX_ARQUIVOS.
+MAX_FATIAS = 120
+_MAIS_QUE_O_TETO_DE_FATIAS = (f"Os relatórios enviados somam mais de {MAX_FATIAS} meses. Envie no máximo 10 anos "
                               "por vez.")
 _SEM_VENDAS = ("Nenhuma venda com quantidade e valor maiores que zero nos relatórios enviados. Confira se são "
                "relatórios de vendas por produto.")
@@ -91,7 +97,10 @@ LIMIAR_ALTA_CUSTO = 0.05
 FOLGA_REPASSE = 0.02
 CHAVES_RESULTADO = frozenset({
     "versao", "arquivos", "fatias", "saude", "scanner", "auditoria", "recuperavel", "periodo", "avisos",
+    "indicadores_executivos",
 })
+# O Raio-X gravado antes da 11.6 não tem os indicadores: a leitura do banco (raio_x_servico.ultimo) exige só estas.
+CHAVES_OBRIGATORIAS = CHAVES_RESULTADO - {"indicadores_executivos"}
 # Título (normalizado pelo ETL) de coluna de custo por unidade, e não do custo total da linha.
 # Sinal forte: unit, unid, und, un, "custo por". Sinal fraco (médio, preço de custo) só vale sem
 # "total" no título. Multiplicação explícita (x, qtde, quantidade) é sempre o custo da linha.
@@ -177,20 +186,48 @@ def _ler_arquivo(caminho: str, indice: int, *, cadastro: bool = False):
 
 def _ler_vendas(caminho: str, numero: int, cadastro: bool):
     """(vendas do relatório, formato do arquivo, período do cabeçalho, rótulo "Arquivo N")."""
+    lido = _ler_arquivo_do_envio(caminho, numero, cadastro)
+    return lido.df, lido.formato, lido.periodo, lido.rotulo
+
+
+# Um arquivo do envio: o relatório de vendas (df) ou, na leitura de cadastro, a tabela auxiliar que ele traz
+# (etl_processor.ler_tabela_auxiliar, ou o relatório de compras), com a recusa de sempre (que só vale sem a âncora).
+_LidoDoEnvio = namedtuple("_LidoDoEnvio", "df formato periodo rotulo tabela recusa")
+
+
+def _ler_arquivo_do_envio(caminho: str, numero: int, cadastro: bool, *, auxiliar: bool = False) -> _LidoDoEnvio:
+    """O arquivo lido. Com `auxiliar`, o arquivo que não é relatório de vendas e é uma tabela auxiliar reconhecida
+    volta com ela e com a recusa, em vez de recusar já: num envio com a âncora temporal ele completa a âncora
+    (_ler_envio_uma_vez); sem a âncora, a recusa vale como sempre. O arquivo que não é nenhuma das duas coisas é
+    recusado na hora, como antes."""
     rotulo = f"Arquivo {numero + 1}"
+    bruto, periodo = None, None
     try:
         bruto = _ler_bruto(caminho)
         periodo = _extrair_periodo_base(bruto) if not bruto.empty else None
         df = _vendas_do_bruto(bruto, rotulo.lower(), cadastro=cadastro)
     except ETLLeiauteAmbiguo as erro:
-        raise ETLInputError("raio_x_dados", f"{rotulo}: {erro.orientacao}") from None
+        recusa = ETLInputError("raio_x_dados", f"{rotulo}: {erro.orientacao}")
+        if auxiliar and isinstance(erro, ETLRelatorioDeCompras):
+            return _LidoDoEnvio(None, None, periodo, rotulo,
+                                {"papel": "compras", "produtos": None, "documentos": None}, recusa)
+        raise recusa from None
     except ETLValidationError as erro:
         if erro.code != "data":
             raise  # limite de tamanho, linhas ou células: a mensagem do ETL já é segura
-        raise ETLInputError("raio_x_dados", f"{rotulo}: não foi possível identificar produto, quantidade e "
-                            "valor de venda. Envie o relatório de vendas por produto (CSV, XLSX ou XLS).") from None
+        recusa = ETLInputError("raio_x_dados", f"{rotulo}: não foi possível identificar produto, quantidade e "
+                               "valor de venda. Envie o relatório de vendas por produto (CSV, XLSX ou XLS).")
+        tabela = None
+        if auxiliar and bruto is not None:
+            try:
+                tabela = ler_tabela_auxiliar(bruto, rotulo.lower())
+            except ETLValidationError:
+                tabela = None
+        if tabela is None:
+            raise recusa from None
+        return _LidoDoEnvio(None, None, periodo, rotulo, tabela, recusa)
     _fechar_centavos(df)
-    return df, bruto.attrs.get("format"), periodo, rotulo
+    return _LidoDoEnvio(df, bruto.attrs.get("format"), periodo, rotulo, None, None)
 
 
 def _vendas_analisadas(df: pd.DataFrame) -> pd.Series:
@@ -279,7 +316,7 @@ def _e_venda_item_a_item(df: pd.DataFrame) -> bool:
     return 5 * int(chave.duplicated(keep=False).sum()) >= len(vendas)
 
 
-def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
+def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None, *, recusar: bool = True, item_a_item=None):
     """[(vendas do mês, (início, fim))] quando o relatório traz a data de cada venda e o período do
     cabeçalho passa de um mês; senão None (o arquivo é um relatório só, como sempre).
 
@@ -290,7 +327,10 @@ def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
 
     Data ilegível em parte das linhas, fora do período do cabeçalho ou em mês que ainda não começou: o
     arquivo de um ano só continua um relatório, como era lido antes de existirem as fatias; o que cruza o
-    ano, que a Avaliação de Cenário recusaria de qualquer jeito, é recusado aqui, com o motivo."""
+    ano, que a Avaliação de Cenário recusaria de qualquer jeito, é recusado aqui, com o motivo. Com
+    `recusar=False` (o Raio-X do cliente, que sempre aceitou esses arquivos), ele continua um relatório só, e
+    o mesmo vale para o arquivo de mais de MAX_FATIAS meses. `item_a_item`: o resultado já calculado de
+    _e_venda_item_a_item para o arquivo."""
     if "_data" not in df.columns or periodo is None:
         return None
     inicio, fim = periodo
@@ -298,7 +338,7 @@ def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
         return None
     # Só a venda item a item é fatiada: num resumo por produto, a coluna "Data" é outra coisa, e o arquivo
     # continua uma fatia só.
-    if not _e_venda_item_a_item(df):
+    if not (_e_venda_item_a_item(df) if item_a_item is None else item_a_item):
         return None
     datas = df["_data"].map({texto: data_da_linha(texto) for texto in df["_data"].unique()})
     if datas.isna().all():
@@ -314,7 +354,7 @@ def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
         motivo = (f"{rotulo}: há vendas com data em um mês que ainda não começou (hoje é {ate:%d/%m/%Y}). "
                   "Confira a data das vendas no relatório exportado.")
     if motivo is not None:
-        if inicio.year == fim.year:
+        if inicio.year == fim.year or not recusar:
             return None
         raise ETLInputError("raio_x_datas", motivo)
     meses = datas.map(lambda dia: dia.year * 100 + dia.month)
@@ -325,6 +365,8 @@ def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
             do_periodo.append((ano, mes))
         ano, mes = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
     if len(do_periodo) > MAX_FATIAS:
+        if not recusar:
+            return None
         raise ETLInputError("raio_x_arquivos", _MAIS_QUE_O_TETO_DE_FATIAS)
     fatias = []
     for ano, mes in do_periodo:
@@ -337,8 +379,25 @@ def _fatias_mensais(df: pd.DataFrame, periodo, rotulo: str, ate=None):
     return fatias
 
 
-def _resumir(df: pd.DataFrame, formato, periodo, rotulo: str, indice: int, cadastro: bool):
-    """(produtos, resumo, produtos em conflito) de um relatório já lido, ou de uma fatia mensal dele."""
+def _datas_validas(df: pd.DataFrame, periodo, ate=None) -> bool:
+    """A coluna de data é a data de cada venda, para os indicadores (última venda, mapa por dia da semana,
+    recompra por dia): toda linha com data legível, dentro do período do cabeçalho e em mês que já começou. Quem
+    chama confere também que o relatório é venda item a item: num resumo, "Data" é outra coisa."""
+    if "_data" not in df.columns or periodo is None:
+        return False
+    datas = df["_data"].map({texto: data_da_linha(texto) for texto in df["_data"].unique()})
+    if datas.isna().any():
+        return False
+    inicio, fim = periodo
+    if (datas < inicio).any() or (datas > fim).any():
+        return False
+    return ate is None or not (datas.map(lambda dia: dia.replace(day=1)) > ate).any()
+
+
+def _resumir(df: pd.DataFrame, formato, periodo, rotulo: str, indice: int, cadastro: bool, *,
+             datas_validas: bool = False):
+    """(produtos, resumo, produtos em conflito) de um relatório já lido, ou de uma fatia mensal dele.
+    `datas_validas`: a data de cada linha é a da venda (_datas_validas), para os indicadores."""
     cabecalhos = df.attrs.get("cabecalhos", {})
     validas = ~df["_devolucao"] if "_devolucao" in df.columns else pd.Series(True, index=df.index)
     quantidade, valor = df["quantidade"], df["valor_venda"]
@@ -431,7 +490,8 @@ def _resumir(df: pd.DataFrame, formato, periodo, rotulo: str, indice: int, cadas
         "indice": indice,
         "inicio": periodo[0] if periodo else None,
         "fim": periodo[1] if periodo else None,
-        "linhas": int(len(df)),
+        # As linhas do relatório: as que a ingestão em lote acrescentou (saldo e cadastro) não contam.
+        "linhas": int(len(df) - (df["_auxiliar"].astype(bool).sum() if "_auxiliar" in df.columns else 0)),
         "tem_custo": tem_custo,
         "tem_preco_unitario": tem_preco_unitario,
         "faturamento": faturamento,
@@ -459,6 +519,12 @@ def _resumir(df: pd.DataFrame, formato, periodo, rotulo: str, indice: int, cadas
         "_nomes_conflito": nomes_ruins,
         "_estoque_negativo": estoque_negativo,
     }
+    # Indicadores executivos: o que só existe linha a linha (número da venda, cliente, desconto, data e hora).
+    resumo["_linhas_venda"] = int(venda.sum())
+    # O custo unitário que a ingestão em lote trouxe para os produtos sem venda (raio_x._completar_ancora).
+    resumo["_custo_unitario_auxiliar"] = df.attrs.get("custo_unitario_auxiliar")
+    resumo.update(indicadores_executivos.resumo_das_linhas(df, venda, v["faturamento"], csv=formato == "csv",
+                                                           datas_validas=datas_validas))
     if cadastro:
         _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, devolvidas_com_custo, valor)
     return produtos, resumo, envolvidos
@@ -481,6 +547,34 @@ def _texto_da_unidade(valor) -> str:
     if texto.endswith(".0") and texto[:-2].isdigit():
         texto = texto[:-2]
     return texto
+
+
+def _varias_lojas(df: pd.DataFrame, linhas=None) -> bool:
+    """O relatório (nas `linhas`, uma máscara, quando dadas) traz duas lojas ou mais com nome. A célula da loja
+    em branco não é loja: com uma loja só, ela é dessa loja."""
+    if "_unidade" not in df.columns:
+        return False
+    unidades = df["_unidade"] if linhas is None else df.loc[linhas, "_unidade"]
+    lojas = unidades.map(_texto_da_unidade)
+    return lojas[lojas != ""].nunique() >= 2
+
+
+def _varias_lojas_do_cupom(df: pd.DataFrame) -> bool:
+    """A loja do cupom (etl_processor._loja_do_cupom) traz duas lojas ou mais com nome: a loja que só aparecia no
+    item cancelado do cupom também conta para a numeração das vendas."""
+    if "_loja_do_cupom" not in df.columns:
+        return False
+    lojas = df["_loja_do_cupom"].astype(str)
+    return lojas[lojas != ""].nunique() >= 2
+
+
+def _marcar_as_lojas(df: pd.DataFrame) -> None:
+    """Decide no arquivo inteiro, antes das fatias mensais (que copiam os attrs), se ele tem duas lojas ou mais
+    com nome: em todas as linhas (a numeração das vendas, nos indicadores) e nas linhas com saldo (o estoque).
+    Decidida na fatia, valeria só o mês: no mês em que uma loja só vendeu, o saldo da outra se perderia."""
+    df.attrs["varias_lojas"] = _varias_lojas(df) or _varias_lojas_do_cupom(df)
+    df.attrs["varias_lojas_com_saldo"] = ("_estoque_informado" in df.columns
+                                          and _varias_lojas(df, df["_estoque_informado"].to_numpy(bool)))
 
 
 def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, devolvidas_com_custo, valor) -> None:
@@ -508,20 +602,33 @@ def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, 
         # produto: o relatório "vendas x estoque" lista o item com quantidade 0 e o saldo atual. A marca
         # de estoque negativo já olha todas as linhas (_estoque_negativo).
         informado = estoque_informado
-        if varias_unidades:
-            # Relatório com várias lojas: o estoque da rede é a soma do último estoque de cada loja (o da
-            # última linha seria o de uma loja só). Linha sem loja conta como uma loja "sem nome".
+        # Por produto e loja, quando as linhas com saldo do ARQUIVO trazem duas lojas ou mais com nome (decidido
+        # no arquivo inteiro, antes das fatias mensais: _marcar_as_lojas): o estoque da rede é a soma do último
+        # estoque de cada loja (o da última linha seria o de uma loja só). A loja vem das linhas com saldo, e não
+        # só das de venda: o depósito que só traz o saldo, com quantidade 0, também soma; nessa soma, a linha sem
+        # loja conta como uma loja "sem nome". Sem a coluna de loja, ou com uma loja só, é o último saldo do
+        # produto, como sempre: a linha com a célula da loja em branco (mesclada, ou preenchida só na primeira
+        # linha do grupo ou do cupom) é dessa loja, e não uma segunda.
+        varias_lojas = df.attrs.get("varias_lojas_com_saldo")
+        if varias_lojas is None:
+            varias_lojas = _varias_lojas(df, informado.to_numpy(bool))
+        if varias_lojas:
             unidade = df.loc[informado, "_unidade"].map(_texto_da_unidade)
-            por_loja = df.loc[informado, "estoque"].groupby([df.loc[informado, "_prod_norm"], unidade]).last()
-            estoques = por_loja.groupby(level=0).sum()
         else:
-            estoques = df.loc[informado, "estoque"].groupby(df.loc[informado, "_prod_norm"]).last()
+            unidade = pd.Series("", index=df.index[informado.to_numpy(bool)], dtype=object)
+        por_loja = df.loc[informado, "estoque"].groupby([df.loc[informado, "_prod_norm"], unidade]).last()
+        estoques = por_loja.groupby(level=0).sum()
+        # O saldo de cada produto e loja, para _ler_envio acumular nas fatias mensais do arquivo.
+        resumo["_estoques_por_loja"] = por_loja
         # Só os produtos com venda: com a tabela vazia (arquivo ou mês sem venda válida), a atribuição direta
         # adotaria o índice da série e criaria linhas de produto sem venda, com as somas vazias.
         produtos["estoque"] = estoques.reindex(produtos.index)
         # Todos os produtos com saldo informado no arquivo, inclusive os que não venderam nele: o motor do
         # lead usa o saldo mais recente do ano (o relatório "vendas x estoque" lista o item parado).
         resumo["_estoques"] = estoques
+        # O nome de cada um, para os indicadores de estoque (o item parado não está entre os vendidos).
+        resumo["_nomes_estoque"] = (df.loc[informado, "produto"].groupby(df.loc[informado, "_prod_norm"]).last()
+                                    .map(_nome_exibivel).to_dict())
     # Bonificação e devolução por produto, inclusive de produto sem venda no arquivo: as mesmas máscaras
     # dos totais do resumo (custo_bonificacoes, custo_devolucoes e devolucoes_com_custo).
     ajustes = pd.DataFrame({
@@ -663,42 +770,386 @@ def _avisos(resumos: list) -> list:
             avisos.append(f"O arquivo {_numero_do_arquivo(r)} misturava codificações de texto: os acentos de "
                           f"{r['celulas_recodificadas']} célula(s) foram corrigidos, para o mesmo produto não "
                           "virar dois entre os meses.")
+    # Os da ingestão em lote (o papel de cada arquivo auxiliar e o que ele completou na âncora).
+    for r in resumos:
+        avisos.extend(r.get("_avisos_do_lote") or ())
     # As fatias mensais de um mesmo arquivo repetem o aviso: fica um por arquivo.
     return list(dict.fromkeys(avisos))
 
 
 def diagnosticar(caminhos: list) -> dict:
-    """Lê os relatórios de vendas (na ordem recebida) e devolve o Raio-X combinado."""
-    return _combinar(*_ler_envio(caminhos))
+    """Lê os relatórios de vendas (na ordem recebida) e devolve o Raio-X combinado. Desde a 11.6, com a
+    leitura de cadastro (a data de cada venda, o estoque informado) e as fatias mensais da venda item a item
+    (refatoração 4 dos indicadores), sem recusar a data inconsistente."""
+    return _combinar(*_ler_envio(caminhos, cadastro=True, ate=date.today(), recusar_datas=False))
 
 
-def _ler_envio(caminhos: list, *, cadastro: bool = False, ate=None):
+class _AcimaDoTetoDeFatias(Exception):
+    """O envio do Raio-X do cliente passou do teto de fatias: _ler_envio lê de novo, sem fatiar arquivo nenhum."""
+
+
+def _ler_envio(caminhos: list, *, cadastro: bool = False, ate=None, recusar_datas: bool = True):
     """(por_arquivo, resumos, envolvidos): cada relatório lido uma vez por _ler_arquivo e os
     agregados por produto e arquivo em ordem cronológica estável (arquivo sem período conta como
-    o mais antigo). A Avaliação de Cenário (avaliacao_motor) parte daqui, como o Raio-X, com
-    `cadastro=True` (ver _ler_arquivo) e `ate` igual a hoje (ver _fatias_mensais)."""
+    o mais antigo). O Raio-X do cliente e a Avaliação de Cenário (avaliacao_motor) partem daqui com
+    `cadastro=True` (ver _ler_arquivo) e `ate` igual a hoje (ver _fatias_mensais); só a avaliação recusa a
+    data inconsistente e o envio acima de MAX_FATIAS meses (`recusar_datas`). No Raio-X do cliente, o envio
+    que passaria do teto é lido de novo sem fatiar nenhum arquivo, como antes das fatias: o resultado não
+    depende da ordem dos arquivos (é o caso raro de mais de 10 anos de venda item a item, e só ele lê duas
+    vezes). No teto, o arquivo que não é fatiado conta como um relatório."""
     if not 1 <= len(caminhos) <= MAX_ARQUIVOS:
         raise ETLInputError("raio_x_arquivos", f"Envie de 1 a {MAX_ARQUIVOS} relatórios de vendas.")
-    partes, resumos, envolvidos = [], [], set()
+    try:
+        return _ler_envio_uma_vez(caminhos, cadastro=cadastro, ate=ate, recusar_datas=recusar_datas, fatiar=True)
+    except _AcimaDoTetoDeFatias:
+        pass  # a segunda leitura fica fora do except: o quadro da primeira (as fatias já lidas) é liberado antes
+    return _ler_envio_uma_vez(caminhos, cadastro=cadastro, ate=ate, recusar_datas=recusar_datas, fatiar=False)
+
+
+# ---------------------------------------------------------------------------
+# Ingestão em lote: a âncora temporal e as tabelas auxiliares
+# ---------------------------------------------------------------------------
+# A âncora é a venda item a item com a data de cada venda (_datas_validas; a Opção 27 do ERP, "Vendas por Cliente
+# Detalhada por Produto", com a "Data Ven."). Com ela no envio, os outros arquivos deixam de ser vendas e a completam:
+#   - o relatório de vendas por produto sem data por linha, dentro do período da âncora (ou sem período), dá o
+#     custo unitário do período (custo das vendas / quantidade com custo), o último saldo e o cadastro, e não soma
+#     no faturamento (o resumido do ERP conta o pedido e a nota em dobro: o custo unitário não muda com isso);
+#   - a posição de estoque dá o saldo e o custo de cada produto; a lista de preços, o cadastro;
+#   - o resumo por pedido ou documento dá o desconto, o CPF/CNPJ do cliente e a hora de cada venda;
+#   - o relatório de compras entra no envio, mas fica fora das contas (o resumo por nota não traz o produto).
+# O cruzamento é um left join: a âncora é a tabela primária. O produto casa pelo código quando a âncora e as tabelas
+# o trazem (só letras e algarismos, sem os zeros à esquerda) e, sem ele, pelo nome normalizado, a chave de produto do
+# motor inteiro (a Opção 27 real não tem a coluna de código). A venda casa pelo número (numero_da_venda, sem os zeros
+# à esquerda de cada grupo). O faturamento depois do cruzamento tem de ser o da âncora, no centavo: senão, o envio é
+# recusado com _FALHA_DE_CONTENCAO. O custo e o estoque só completam a âncora que não os traz, e o desconto, o cliente
+# e a hora, a âncora sem a coluna. Sem a âncora no envio, nada disso vale: cada arquivo é um relatório de vendas, e a
+# tabela auxiliar é recusada como antes.
+_FALHA_DE_CONTENCAO = "Falha de Contenção de Dados: Duplicação de Faturamento Detectada"
+# O resumo por documento só vale quando casa com quase toda a venda da âncora.
+_CASAMENTO_MINIMO_DOS_DOCUMENTOS = 0.9
+_PAPEIS_DO_LOTE = {
+    "vendas": "entrou como tabela auxiliar (custo, estoque e cadastro por produto) da venda item a item e não soma "
+              "no faturamento",
+    "estoque": "entrou como posição de estoque (tabela auxiliar)",
+    "precos": "entrou como lista de preços (o cadastro dos produtos)",
+    "documentos": "entrou como resumo por pedido ou documento (tabela auxiliar)",
+    "compras": "é um relatório de compras: entrou no envio, mas fica fora das contas (o resumo por nota não traz o "
+               "produto)",
+}
+
+
+def _lojas_com_nome(df: pd.DataFrame) -> set:
+    """As lojas com nome do relatório (a célula em branco não conta)."""
+    if "_unidade" not in df.columns:
+        return set()
+    return {loja for loja in df["_unidade"].map(_texto_da_unidade).unique() if loja}
+
+
+def _auxiliar_das_vendas(df: pd.DataFrame) -> dict:
+    """A tabela auxiliar que um relatório de vendas por produto dá à âncora: o custo e a quantidade com custo de cada
+    produto (o custo unitário do período sai da divisão), o último saldo informado, o nome e o código."""
+    cabecalhos = df.attrs.get("cabecalhos", {})
+    validas = ~df["_devolucao"] if "_devolucao" in df.columns else pd.Series(True, index=df.index)
+    quantidade = df["quantidade"]
+    if "valor_custo" in df.columns:
+        custo = df["valor_custo"] * quantidade if custo_e_unitario(cabecalhos.get("valor_custo", "")) else df["valor_custo"]
+    else:
+        custo = pd.Series(0.0, index=df.index)
+    com_custo = validas & (quantidade > 0) & (custo > 0)
+    base = pd.DataFrame({"chave_nome": df["_prod_norm"], "quantidade_com_custo": quantidade.where(com_custo, 0.0),
+                         "custo": custo.where(com_custo, 0.0)})
+    produtos = base.groupby("chave_nome", sort=False)[["quantidade_com_custo", "custo"]].sum()
+    produtos["nome"] = df["produto"].map(_nome_exibivel).groupby(df["_prod_norm"]).last()
+    codigos = _codigos(df)
+    produtos["codigo"] = (codigos.map(normalizar_codigo_do_produto).groupby(df["_prod_norm"]).first()
+                          if codigos is not None else None)
+    produtos["estoque"] = np.nan
+    if "_estoque_informado" in df.columns and df["_estoque_informado"].any():
+        informado = df["_estoque_informado"].to_numpy(bool)
+        produtos["estoque"] = df.loc[informado, "estoque"].groupby(df.loc[informado, "_prod_norm"]).last()
+    return {"papel": "vendas", "produtos": produtos.reset_index(), "documentos": None}
+
+
+def _combinar_auxiliares(tabelas: list, chave: str) -> tuple[pd.DataFrame, int]:
+    """(por produto, pela `chave` "codigo" ou "chave_nome": custo_unitario, estoque, nome e codigo; nomes com mais de
+    um código). O custo é o do relatório por produto (o custo médio do período, somado entre os arquivos), senão o da
+    posição de estoque (ponderado pelo saldo), senão o da lista de preços. O saldo é o da posição de estoque (somado
+    entre os arquivos e as linhas), senão o último do relatório por produto mais recente."""
+    quadros = []
+    for tabela in tabelas:
+        produtos = tabela.get("produtos")
+        if produtos is not None and not produtos.empty:
+            quadros.append(produtos.assign(papel=tabela["papel"], ordem=tabela["ordem"]))
+    if not quadros:
+        return pd.DataFrame(columns=["custo_unitario", "estoque", "nome", "codigo"]), 0
+    todas = pd.concat(quadros, ignore_index=True)
+    for coluna in ("quantidade_com_custo", "custo", "custo_unitario", "estoque"):
+        if coluna not in todas.columns:
+            todas[coluna] = np.nan
+    todas = todas[todas[chave].notna()]
+    vendas, estoque, precos = (todas[todas["papel"] == papel] for papel in ("vendas", "estoque", "precos"))
+    custo_das_vendas = (vendas.groupby(chave)["custo"].sum() / vendas.groupby(chave)["quantidade_com_custo"].sum())
+    custo_das_vendas = custo_das_vendas.where(np.isfinite(custo_das_vendas) & (custo_das_vendas > 0))
+    peso = estoque["estoque"].clip(lower=0).where(estoque["custo_unitario"].notna(), 0.0)
+    custo_ponderado = ((estoque["custo_unitario"].fillna(0.0) * peso).groupby(estoque[chave]).sum()
+                       / peso.groupby(estoque[chave]).sum())
+    custo_do_estoque = custo_ponderado.where(np.isfinite(custo_ponderado) & (custo_ponderado > 0)).combine_first(
+        estoque.groupby(chave)["custo_unitario"].mean())
+    custo_dos_precos = precos.groupby(chave)["custo_unitario"].mean()
+    saldo_da_posicao = estoque.groupby(chave)["estoque"].sum(min_count=1)
+    saldo_das_vendas = (vendas.dropna(subset=["estoque"]).sort_values("ordem", kind="stable")
+                        .groupby(chave)["estoque"].last())
+    combinados = pd.DataFrame({
+        "custo_unitario": custo_das_vendas.combine_first(custo_do_estoque).combine_first(custo_dos_precos),
+        "estoque": saldo_da_posicao.combine_first(saldo_das_vendas),
+        "nome": todas.groupby(chave)["nome"].first(),
+        "codigo": todas.groupby(chave)["codigo"].first(),
+    })
+    ambiguos = int((todas.groupby("chave_nome")["codigo"].nunique() > 1).sum()) if chave == "chave_nome" else 0
+    return combinados, ambiguos
+
+
+def _conferir_contencao(df: pd.DataFrame, linhas: int, faturamento: float) -> None:
+    """A trava contra a duplicação: depois do cruzamento, as linhas da âncora e o faturamento são os de antes."""
+    originais = ~df["_auxiliar"].astype(bool) if "_auxiliar" in df.columns else pd.Series(True, index=df.index)
+    if int(originais.sum()) != linhas or abs(round(float(df["valor_venda"].sum()), 2) - faturamento) > 0.01:
+        raise ETLInputError("raio_x_dados", _FALHA_DE_CONTENCAO)
+
+
+def _completar_ancora(df: pd.DataFrame, tabelas: list, periodo, rotulo: str) -> tuple[pd.DataFrame, list]:
+    """(a âncora completada pelas tabelas auxiliares, avisos). Ver o texto acima."""
+    atributos = dict(df.attrs)
+    linhas, faturamento = len(df), round(float(df["valor_venda"].sum()), 2)
+    avisos = []
+    numero = rotulo.split()[-1]
+    produtos = [tabela for tabela in tabelas if tabela.get("produtos") is not None]
+    if produtos:
+        codigos = _codigos(df)
+        codigos = codigos.map(normalizar_codigo_do_produto) if codigos is not None else None
+        tem_codigo = any(tabela["produtos"]["codigo"].notna().any() for tabela in produtos
+                         if "codigo" in tabela["produtos"].columns)
+        usar_codigo = bool(codigos is not None and tem_codigo and codigos.notna().mean() >= 0.9)
+        chave = "codigo" if usar_codigo else "chave_nome"
+        combinados, ambiguos = _combinar_auxiliares(produtos, chave)
+        chave_da_linha = codigos if usar_codigo else df["_prod_norm"]
+        vendidos = _vendas_analisadas(df)
+        # Custo: a âncora sem custo recebe o custo unitário de cada produto vezes a quantidade da linha.
+        sem_custo = "valor_custo" not in df.columns or not (df["valor_custo"].abs() > 0).any()
+        custos = combinados["custo_unitario"].dropna()
+        if sem_custo and not custos.empty:
+            tabela_de_custos = pd.DataFrame({"_chave": custos.index, "_custo_unitario": custos.to_numpy(float)})
+            try:
+                unido = df.assign(_chave=chave_da_linha.to_numpy()).merge(
+                    tabela_de_custos, on="_chave", how="left", validate="many_to_one")
+            except pd.errors.MergeError:
+                # A chave repetida do lado das tabelas multiplicaria as linhas da venda.
+                raise ETLInputError("raio_x_dados", _FALHA_DE_CONTENCAO) from None
+            _conferir_contencao(unido, linhas, faturamento)
+            unido["valor_custo"] = (unido["_custo_unitario"] * unido["quantidade"].abs()).round(2).fillna(0.0)
+            df = unido.drop(columns=["_chave", "_custo_unitario"])
+            cabecalhos = dict(atributos.get("cabecalhos") or {})
+            cabecalhos["valor_custo"] = "total custo tabela auxiliar"
+            atributos["cabecalhos"] = cabecalhos
+            casados = int(chave_da_linha[vendidos].isin(custos.index).groupby(df.loc[vendidos, "_prod_norm"]).any().sum())
+            total = int(df.loc[vendidos, "_prod_norm"].nunique())
+            avisos.append(f"O custo das vendas do arquivo {numero} veio das tabelas auxiliares, para {casados} de "
+                          f"{total} produto(s) vendido(s): é o custo médio do período do relatório por produto ou o "
+                          "da posição de estoque, aplicado às vendas do período inteiro. As margens são estimadas.")
+        # Estoque e cadastro: linhas sem venda (quantidade 0), na data do fim da âncora, como o relatório "vendas x
+        # estoque" lista o saldo. A âncora que já traz o estoque fica com o dela.
+        tem_estoque = "_estoque_informado" in df.columns and bool(df["_estoque_informado"].any())
+        saldos = combinados["estoque"].dropna() if not tem_estoque else pd.Series(dtype=float)
+        da_ancora = set(chave_da_linha.dropna())
+        catalogo = [c for c in combinados.index if c not in da_ancora and c not in saldos.index]
+        chaves_novas = list(saldos.index) + catalogo
+        if chaves_novas:
+            nome_na_ancora = df["produto"].groupby(chave_da_linha.to_numpy()).last()
+            norma_na_ancora = df["_prod_norm"].groupby(chave_da_linha.to_numpy()).last()
+            codigo_bruto = df["codigo"].groupby(chave_da_linha.to_numpy()).last() if "codigo" in df.columns else None
+            novas = pd.DataFrame(index=range(len(chaves_novas)))
+            novas["produto"] = [nome_na_ancora.get(c, combinados.at[c, "nome"]) for c in chaves_novas]
+            novas["_prod_norm"] = [norma_na_ancora.get(c) or _normalizar_produto(combinados.at[c, "nome"])
+                                   for c in chaves_novas]
+            if "codigo" in df.columns:
+                novas["codigo"] = [(codigo_bruto.get(c) if codigo_bruto is not None else None)
+                                   or combinados.at[c, "codigo"] for c in chaves_novas]
+            novas["quantidade"] = 0.0
+            novas["valor_venda"] = 0.0
+            if "_valor_informado" in df.columns:
+                novas["_valor_informado"] = False
+            if "valor_custo" in df.columns:
+                novas["valor_custo"] = 0.0
+            if "_devolucao" in df.columns:
+                novas["_devolucao"] = False
+            if "_data" in df.columns:
+                novas["_data"] = f"{periodo[1]:%d/%m/%Y}"
+            if "_unidade" in df.columns:
+                novas["_unidade"] = ""
+            if "_loja_do_cupom" in df.columns:
+                novas["_loja_do_cupom"] = ""
+            if len(saldos) or "estoque" in df.columns:
+                novas["estoque"] = [float(saldos.get(c, 0.0)) for c in chaves_novas]
+                novas["_estoque_informado"] = [c in saldos.index for c in chaves_novas]
+            novas["_auxiliar"] = True
+            if len(saldos) and not tem_estoque:
+                df = df.assign(estoque=0.0, _estoque_informado=False)
+            df = pd.concat([df.assign(_auxiliar=False), novas], ignore_index=True)
+            # O custo unitário dos produtos sem venda na âncora, para os indicadores valorizarem o saldo deles
+            # (o estoque parado): o da venda continua vindo das linhas.
+            atributos["custo_unitario_auxiliar"] = {
+                norma: float(combinados.at[c, "custo_unitario"])
+                for c, norma in zip(chaves_novas, novas["_prod_norm"])
+                if pd.notna(combinados.at[c, "custo_unitario"])}
+            if len(saldos):
+                avisos.append(f"O estoque do arquivo {numero} é o das tabelas auxiliares ({len(saldos)} produto(s)), "
+                              f"na data de {periodo[1]:%d/%m/%Y}.")
+            if catalogo:
+                avisos.append(f"{len(catalogo)} produto(s) das tabelas auxiliares sem venda nem saldo entraram no "
+                              "cadastro (o mix).")
+        if ambiguos:
+            avisos.append(f"{ambiguos} nome(s) de produto com mais de um código nas tabelas auxiliares: o custo e o "
+                          "estoque saíram juntos pelo nome.")
+    # O resumo por pedido ou documento: o desconto (na primeira linha de venda de cada pedido), o cliente e a hora.
+    documentos = [tabela["documentos"] for tabela in tabelas if tabela.get("documentos") is not None]
+    if documentos and "_documento" in df.columns:
+        todos = pd.concat(documentos)
+        todos = todos[~todos.index.duplicated(keep="first")]
+        numeros = df["_documento"].map(indicadores_executivos.numero_da_venda).map(normalizar_numero_do_documento)
+        venda = _vendas_analisadas(df)
+        if "_auxiliar" in df.columns:
+            venda &= ~df["_auxiliar"].astype(bool)
+        casou = numeros.isin(todos.index)
+        taxa = float(casou[venda].mean()) if venda.any() else 0.0
+        if taxa >= _CASAMENTO_MINIMO_DOS_DOCUMENTOS:
+            if "_desconto" not in df.columns and "desconto" in todos.columns:
+                primeiras = set(numeros[venda & casou].drop_duplicates().index)
+                valores = numeros.map(todos["desconto"])
+                df["_desconto"] = [f"{valores[i]:.2f}".replace(".", ",") if i in primeiras and pd.notna(valores[i])
+                                   else "" for i in df.index]
+            for coluna in ("cliente", "hora"):
+                if "_" + coluna not in df.columns and coluna in todos.columns:
+                    df["_" + coluna] = numeros.map(todos[coluna])
+            avisos.append(f"O resumo por documento casou com {taxa:.0%} das vendas do arquivo {numero}: o desconto, o "
+                          "cliente e a hora vieram dele.")
+        else:
+            avisos.append(f"O resumo por documento casou com só {taxa:.0%} das vendas do arquivo {numero} (o mínimo é "
+                          f"{_CASAMENTO_MINIMO_DOS_DOCUMENTOS:.0%}): ficou fora.")
+    df.attrs = atributos
+    _conferir_contencao(df, linhas, faturamento)
+    return df, avisos
+
+
+def _resumir_arquivo(df, formato, periodo, rotulo: str, numero: int, item_a_item: bool, datas_validas: bool, *,
+                     cadastro: bool, ate, recusar_datas: bool, fatiar: bool, partes: list, resumos: list) -> set:
+    """Um relatório de vendas do envio em `resumos` e `partes` (fatiado por mês quando é a venda item a item com a
+    data de cada venda); devolve os produtos em conflito de cadastro."""
+    envolvidos = set()
+    # Com a leitura de cadastro (o Raio-X do cliente e a Avaliação de Cenário), a data de cada venda faz de um
+    # arquivo de vários meses um relatório por mês, em memória.
+    fatias = (_fatias_mensais(df, periodo, rotulo, ate, recusar=recusar_datas, item_a_item=item_a_item)
+              if cadastro and fatiar else None)
+    # O arquivo que não é fatiado conta como um relatório: com 120 meses já lidos, o mês a mais passa do teto em
+    # qualquer ordem.
+    if len(resumos) + (len(fatias) if fatias else 1) > MAX_FATIAS:
+        if recusar_datas:
+            raise ETLInputError("raio_x_arquivos", _MAIS_QUE_O_TETO_DE_FATIAS)
+        # O Raio-X do cliente sempre aceitou até MAX_ARQUIVOS arquivos: lê de novo sem fatiar nenhum (sem as
+        # fatias, cada arquivo é um relatório, e MAX_ARQUIVOS fica abaixo do teto).
+        if fatiar:
+            raise _AcimaDoTetoDeFatias()
+    # O estoque de cada produto e loja acumulado nas fatias do arquivo, em ordem: a fatia mensal só traz as lojas e
+    # os produtos que tiveram linha no mês, e o saldo de quem não apareceu nela continua valendo.
+    acumulado: dict = {}
+    for vendas, intervalo in fatias or [(df, periodo)]:
+        produtos, resumo, conflitantes = _resumir(vendas, formato, intervalo, rotulo, len(resumos), cadastro,
+                                                  datas_validas=datas_validas)
+        resumo["arquivo"] = numero
+        resumo["_item_a_item"] = item_a_item
+        por_loja = resumo.pop("_estoques_por_loja", None)
+        if por_loja is not None:
+            acumulado.update(por_loja.to_dict())
+            resumo["_estoques"] = (pd.Series(list(acumulado.values()),
+                                             index=pd.MultiIndex.from_tuples(list(acumulado)), dtype=float)
+                                   .groupby(level=0).sum() if acumulado else pd.Series(dtype=float))
+        # O mês sem venda de um arquivo fatiado é período coberto (entra nos resumos), sem produto a somar.
+        if fatias is None or not produtos.empty:
+            partes.append(produtos.reset_index())
+        resumos.append(resumo)
+        envolvidos |= conflitantes
+    return envolvidos
+
+
+def _renumerar(resumos: list, partes: list) -> None:
+    """Os resumos em ordem de arquivo (a âncora é resumida no fim, e o arquivo absorvido sai), com os índices de novo
+    em sequência. Sem âncora, a ordem já é essa, e nada muda."""
+    ordem = sorted(range(len(resumos)), key=lambda i: (resumos[i]["arquivo"], resumos[i]["indice"]))
+    novos = {resumos[i]["indice"]: posicao for posicao, i in enumerate(ordem)}
+    if all(antigo == novo for antigo, novo in novos.items()):
+        return
+    resumos[:] = [resumos[i] for i in ordem]
+    for resumo in resumos:
+        resumo["indice"] = novos[resumo["indice"]]
+    for posicao, parte in enumerate(partes):
+        partes[posicao] = parte.assign(arquivo=parte["arquivo"].map(novos))
+
+
+def _ler_envio_uma_vez(caminhos: list, *, cadastro: bool, ate, recusar_datas: bool, fatiar: bool):
+    partes, resumos, envolvidos_por_arquivo = [], [], {}
+    ancoras, auxiliares, de_vendas = [], [], {}
+    opcoes = {"cadastro": cadastro, "ate": ate, "recusar_datas": recusar_datas, "fatiar": fatiar, "partes": partes,
+              "resumos": resumos}
     for numero, caminho in enumerate(caminhos):
-        df, formato, periodo, rotulo = _ler_vendas(caminho, numero, cadastro)
-        # Só a Avaliação de Cenário (cadastro=True) lê a data de cada venda: um arquivo de vários meses
-        # vira um relatório por mês, em memória. No Raio-X do cliente o arquivo continua uma fatia só.
-        fatias = _fatias_mensais(df, periodo, rotulo, ate) if cadastro else None
-        if len(resumos) + len(fatias or ()) > MAX_FATIAS:
-            raise ETLInputError("raio_x_arquivos", _MAIS_QUE_O_TETO_DE_FATIAS)
-        for vendas, intervalo in fatias or [(df, periodo)]:
-            produtos, resumo, conflitantes = _resumir(vendas, formato, intervalo, rotulo, len(resumos), cadastro)
-            resumo["arquivo"] = numero
-            # O mês sem venda de um arquivo fatiado é período coberto (entra nos resumos), sem produto a somar.
-            if fatias is None or not produtos.empty:
-                partes.append(produtos.reset_index())
-            resumos.append(resumo)
-            envolvidos |= conflitantes
-        if len(resumos) > MAX_FATIAS:
-            raise ETLInputError("raio_x_arquivos", _MAIS_QUE_O_TETO_DE_FATIAS)
+        lido = _ler_arquivo_do_envio(caminho, numero, cadastro, auxiliar=cadastro)
+        if lido.tabela is not None:
+            auxiliares.append((numero, lido))
+            continue
+        df = lido.df
+        _marcar_as_lojas(df)
+        item_a_item = _e_venda_item_a_item(df)
+        datas_validas = cadastro and item_a_item and _datas_validas(df, lido.periodo, ate)
+        if datas_validas:
+            # A âncora temporal é resumida no fim: os outros arquivos do envio podem completá-la.
+            ancoras.append((numero, lido, item_a_item))
+            continue
+        if cadastro:
+            de_vendas[numero] = (lido.periodo, _auxiliar_das_vendas(df), _lojas_com_nome(df))
+        envolvidos_por_arquivo[numero] = _resumir_arquivo(df, lido.formato, lido.periodo, lido.rotulo, numero,
+                                                          item_a_item, datas_validas, **opcoes)
+    tabelas, avisos_do_lote = [], []
+    if ancoras:
+        inicio = min(lido.periodo[0] for _numero, lido, _item in ancoras)
+        fim = max(lido.periodo[1] for _numero, lido, _item in ancoras)
+        # O relatório de vendas sem data por linha é absorvido quando cobre o período da âncora (ou não tem
+        # período) e não é de outra loja: com loja nomeada que nenhuma âncora traz, continua sendo venda.
+        lojas_das_ancoras = set().union(*(_lojas_com_nome(lido.df) for _numero, lido, _item in ancoras))
+        absorvidos = {numero for numero, (periodo, _tabela, lojas) in de_vendas.items()
+                      if (periodo is None or (inicio <= periodo[0] and periodo[1] <= fim))
+                      and (not lojas or not lojas_das_ancoras or lojas & lojas_das_ancoras)}
+        if absorvidos:
+            removidos = {resumo["indice"] for resumo in resumos if resumo["arquivo"] in absorvidos}
+            resumos[:] = [resumo for resumo in resumos if resumo["arquivo"] not in absorvidos]
+            partes[:] = [parte for parte in partes if not parte["arquivo"].isin(removidos).any()]
+            for numero in absorvidos:
+                envolvidos_por_arquivo.pop(numero, None)
+        papeis = sorted([(numero, de_vendas[numero][1]) for numero in absorvidos]
+                        + [(numero, lido.tabela) for numero, lido in auxiliares], key=lambda par: par[0])
+        for numero, tabela in papeis:
+            tabelas.append({**tabela, "ordem": numero})
+            avisos_do_lote.append(f"O arquivo {numero + 1} {_PAPEIS_DO_LOTE[tabela['papel']]}.")
+    elif auxiliares:
+        raise auxiliares[0][1].recusa
+    for numero, lido, item_a_item in ancoras:
+        df, avisos = _completar_ancora(lido.df, tabelas, lido.periodo, lido.rotulo) if tabelas else (lido.df, [])
+        antes = len(resumos)
+        envolvidos_por_arquivo[numero] = _resumir_arquivo(df, lido.formato, lido.periodo, lido.rotulo, numero,
+                                                          item_a_item, True, **opcoes)
+        if (avisos_do_lote or avisos) and len(resumos) > antes:
+            resumos[antes]["_avisos_do_lote"] = avisos_do_lote + avisos
+            avisos_do_lote = []
+    _renumerar(resumos, partes)
     if not partes:
         raise ETLInputError("raio_x_sem_vendas", _SEM_VENDAS)
+    envolvidos = set().union(*envolvidos_por_arquivo.values()) if envolvidos_por_arquivo else set()
     # Em ordem cronológica: nome, código e preço de referência de cada item ficam os do mês mais recente.
     datas = {r["indice"]: r["inicio"] or date.min for r in resumos}
     por_arquivo = pd.concat(partes, ignore_index=True)
@@ -765,6 +1216,7 @@ def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict
     receita_liquida_com_custo = com_custo - sum(r["devolucoes_com_custo"] for r in resumos)
     margem_liquida = receita_liquida_com_custo - cmv_liquido
     avisos = _avisos(resumos)
+    indicadores = indicadores_executivos.calcular(produtos, a_confirmar, por_arquivo, resumos, inicio, fim)
     if not implausiveis.empty:
         avisos.append(f"{implausiveis.shape[0]} produto(s) com custo a partir de {RAZAO_CUSTO_IMPLAUSIVEL} vezes a "
                       "venda ficaram fora da perda e do potencial recuperável: confira no cadastro a unidade ou "
@@ -845,6 +1297,7 @@ def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict
             "meses": ((fim.year - inicio.year) * 12 + fim.month - inicio.month + 1) if inicio else None,
         },
         "avisos": avisos,
+        "indicadores_executivos": indicadores,
     }
 
 

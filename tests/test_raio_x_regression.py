@@ -9,7 +9,8 @@ relatório nenhum que não os tenha.
 
 Campo NOVO só passa se estiver em ACRESCIMOS_APROVADOS, com o motivo. Nenhum valor antigo pode
 mudar nem sumir; a única troca aprovada é o rótulo da versão das regras do Raio-X
-(VALORES_ALTERADOS_APROVADOS), que subiu com o saneamento (11.4) e com a unificação do motor (11.5).
+(VALORES_ALTERADOS_APROVADOS), que subiu com o saneamento (11.4), com a unificação do motor (11.5) e
+com os indicadores executivos (11.6, que acrescentam o nó indicadores_executivos).
 Nenhum conjunto histórico tem item de custo implausível nem total informado com fração de centavo
 que mude a soma: as duas regras da unificação não alteram valor nenhum daqui (os testes delas estão
 em test_cobertura_leiautes_erp.py e test_planos_raio_x.py).
@@ -58,13 +59,18 @@ ACRESCIMOS_APROVADOS: dict = {
     "raio_x.*.resultado.auditoria.custo_a_confirmar": (
         "Unificação 11/2026: os itens de custo implausível (custo a partir de 3 vezes a venda), que saem da "
         "perda e do recuperável. Campo novo; nos conjuntos históricos vem zerado."),
+    "raio_x.*.resultado.indicadores_executivos": (
+        "Indicadores executivos 11/2026 (raio-x-2026-11.6): o nó com os 21 indicadores (indicadores_executivos.py), "
+        "conferido pelo contrato em test_indicadores_novos_passam_no_contrato; os valores têm testes próprios em "
+        "tests/test_indicadores.py. Campo novo; nenhum valor antigo muda."),
 }
 # Caminho (padrão fnmatch) -> (valor da referência, valor aprovado, motivo). Só o rótulo da versão:
 # nenhum valor de relatório pode mudar.
 VALORES_ALTERADOS_APROVADOS: dict = {
-    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.5",
-                                  "Saneamento 11/2026 (11.4) e unificação do motor 11/2026 (11.5): a versão das "
-                                  "regras do Raio-X sobe para separar o resultado gravado antes do gravado depois."),
+    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.6",
+                                  "Saneamento 11/2026 (11.4), unificação do motor 11/2026 (11.5) e indicadores "
+                                  "executivos 11/2026 (11.6): a versão das regras do Raio-X sobe para separar o "
+                                  "resultado gravado antes do gravado depois."),
 }
 
 
@@ -322,6 +328,18 @@ class RegressaoDoMotorTests(unittest.TestCase):
             if "resultado" in saida:
                 with self.subTest(caso=caso):
                     self.assertEqual(saida["resultado"]["auditoria"]["custo_a_confirmar"], vazio)
+
+    def test_indicadores_novos_passam_no_contrato(self):
+        # O nó novo é aprovado inteiro (ACRESCIMOS_APROVADOS): aqui se confere a forma (a mesma conferência do
+        # processo pai) e que o faturamento dele é o do Raio-X, no centavo.
+        import indicadores_executivos
+        for caso, saida in self.atual["raio_x"].items():
+            if "resultado" in saida:
+                with self.subTest(caso=caso):
+                    no = saida["resultado"]["indicadores_executivos"]
+                    self.assertTrue(indicadores_executivos.valido(no))
+                    self.assertEqual(no["indicadores"]["faturamento"]["valor"],
+                                     saida["resultado"]["saude"]["faturamento_total"])
 
     def test_lote_sintetico_exercita_o_que_promete(self):
         # O golden só protege o que o lote tem: conferido na própria referência.

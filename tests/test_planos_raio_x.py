@@ -782,8 +782,9 @@ class RaioXPortalTests(_PlanosCase):
     def test_raio_x_novo_grava_a_versao_do_saneamento(self):
         self._enviar_raio_x(("jan.csv", JANEIRO))
         self.assertEqual(self._linha().versao_regras, raio_x.VERSAO_REGRAS)
-        # 11.4: saneamento de 11/2026; 11.5: unificação do motor (custo a confirmar, centavos, formatos).
-        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.5")
+        # 11.4: saneamento de 11/2026; 11.5: unificação do motor (custo a confirmar, centavos, formatos); 11.6:
+        # indicadores executivos (o nó indicadores_executivos e as fatias mensais no Raio-X do cliente).
+        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.6")
 
     def test_api_envia_e_le_o_raio_x(self):
         self.assertEqual(self.cliente_http.get(API).status_code, 404)
@@ -794,6 +795,22 @@ class RaioXPortalTests(_PlanosCase):
         self.assertIn("no-store", resposta.headers["Cache-Control"])
         self.assertEqual(self.cliente_http.get(API).get_json()["resultado"]["saude"],
                          corpo["resultado"]["saude"])
+
+    def test_arquivo_fatiado_por_mes_conta_um_arquivo_e_a_api_traz_os_indicadores_do_plano(self):
+        """Indicadores executivos (raio-x-2026-11.6): a venda item a item de dois meses vira dois relatórios
+        mensais, mas o cliente enviou um arquivo só; a API traz os indicadores com o corte do plano Bronze."""
+        texto = ("Relatorio de vendas item a item\nPeriodo: 01/01/2026 a 28/02/2026\n"
+                 "Data;Produto;Qtde;Valor Total;Total Custo\n05/01/2026;CAFE 500G;1;10,00;6,00\n"
+                 "20/01/2026;CAFE 500G;1;10,00;6,00\n05/02/2026;CAFE 500G;2;20,00;12,00\n").encode("utf-8")
+        resposta = self._enviar_raio_x(("item.csv", texto), api=True)
+        self.assertEqual(resposta.status_code, 201, resposta.get_data(as_text=True)[:300])
+        resultado = resposta.get_json()["resultado"]
+        self.assertEqual([fatia["rotulo"] for fatia in resultado["fatias"]], ["01/2026", "02/2026"])
+        self.assertEqual(self._linha().arquivos, 1)
+        indicadores = resultado["indicadores_executivos"]["indicadores"]
+        self.assertEqual(indicadores["faturamento"]["valor"], 40.0)
+        self.assertEqual(indicadores["margem"], {"status": "protegido", "funcionalidade": "margem_bruta"})
+        self.assertIn("1 arquivo(s) de vendas", self.cliente_http.get(PAGINA).get_data(as_text=True))
 
     def test_envio_em_xls_e_em_planilha_xml_como_o_erp_exporta(self):
         from tests import leiautes_erp_support as leiautes
@@ -919,8 +936,10 @@ class RaioXPortalTests(_PlanosCase):
         self.assertEqual(resultado["historico"], {"limite_meses": 6, "ocultas": 2, "primeira_oculta": "01/2025",
                                                   "ultima_oculta": "02/2025"})
         html = self.cliente_http.get(PAGINA).get_data(as_text=True)
-        self.assertIn("2 relatórios anteriores (01/2025 a 02/2025) ficam fora do histórico do seu plano "
+        self.assertIn("2 períodos anteriores (01/2025 a 02/2025) ficam fora do histórico do seu plano "
                       "(últimos 6 meses)", html)
+        # A lista de relatórios da API também perde os meses ocultos.
+        self.assertEqual([a["rotulo"] for a in resultado["arquivos"]], [f["rotulo"] for f in resultado["fatias"]])
         self.assertIn("O plano Prata mostra até 24 meses", html)
         self._mudar_plano("PRATA")
         self.assertEqual(len(self.cliente_http.get(API).get_json()["resultado"]["fatias"]), 8)

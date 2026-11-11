@@ -873,8 +873,8 @@ class WorkerUsaABaiaTests(unittest.TestCase):
         self.assertRegex(fonte, r'if request\.get\("operation"\) == "validate":\n\s+escrita = max\(')
         self.assertIn("resource.RLIMIT_FSIZE, (escrita,) * 2", fonte)
 
-    @unittest.skipUnless(hasattr(__import__("os"), "fork"), "O worker real do ETL exige POSIX")
     def test_worker_real_devolve_a_triagem_e_a_copia(self):
+        # No Windows o worker real roda sem os limites do sistema operacional (etl_worker._limitar_recursos).
         import etl_runtime
         with tempfile.TemporaryDirectory(prefix="nexo-baia-worker-") as pasta:
             caminho = Path(pasta) / "arquivo.csv"

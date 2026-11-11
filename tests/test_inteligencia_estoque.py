@@ -803,7 +803,13 @@ class VariasLojasTests(_Arquivos):
     def test_raio_x_do_cliente_nao_muda_com_a_coluna_de_loja(self):
         com_loja = executar_como_o_worker(self.caminhos(DUAS_LOJAS))
         sem_loja = executar_como_o_worker(self.caminhos(SEM_LOJA))
+        # Os indicadores executivos (raio-x-2026-11.6) usam a loja para saber se o relatório é venda item a
+        # item: uma linha por produto e loja é resumo por loja (modo acumulado). Sem a coluna, o mesmo produto
+        # repetido parece venda item a item. O resto do Raio-X não muda.
+        indicadores_com_loja = com_loja.pop("indicadores_executivos")
+        sem_loja.pop("indicadores_executivos")
         self.assertEqual(com_loja, sem_loja)
+        self.assertEqual(indicadores_com_loja["modo"], "acumulado")
 
 
 # =============================================================================

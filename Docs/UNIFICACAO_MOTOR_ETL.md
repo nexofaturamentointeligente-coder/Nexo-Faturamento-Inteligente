@@ -204,13 +204,13 @@ A conta é feita em milionésimos de real, com inteiros. Com fatias mensais, o f
 
 A venda do mês corrente com data depois de hoje não é inconsistência: o arquivo é fatiado, e ela conta no mês corrente.
 
-**Tetos.** Continuam valendo 36 arquivos por envio. As fatias têm teto próprio, `raio_x.MAX_FATIAS = 60` (5 anos de meses). O contrato do processo isolado (`etl_runtime._meta_valida`) aceita até 60 relatórios; as restrições do banco já aceitavam.
+**Tetos.** Continuam valendo 36 arquivos por envio. As fatias têm teto próprio, `raio_x.MAX_FATIAS`: 60 (5 anos de meses) na unificação e **120 (10 anos) desde os indicadores executivos** (`Docs/INDICADORES_EXECUTIVOS.md`, refatoração 2). O contrato do processo isolado (`etl_runtime._meta_valida`) aceita até esse teto; as restrições do banco já aceitavam.
 
-**Um envio que era aceito e passou a ser recusado.** Antes, cada arquivo de um ano civil era um relatório, e cabiam até 36. Agora o arquivo anual de venda item a item vira 12 relatórios mensais, e o envio em que os relatórios somam mais de 60 depois de fatiados é recusado: seis arquivos anuais somam 72. A recusa diz "Envie no máximo 5 anos por vez". O resumo anual sem data por linha continua valendo como um relatório. Fora esse caso, não conheço arquivo que era aceito e passou a ser recusado por causa das fatias.
+**Um envio que era aceito e passou a ser recusado.** Antes, cada arquivo de um ano civil era um relatório, e cabiam até 36. Agora o arquivo anual de venda item a item vira 12 relatórios mensais, e o envio em que os relatórios somam mais de 60 depois de fatiados é recusado: seis arquivos anuais somavam 72. A recusa dizia "Envie no máximo 5 anos por vez"; com o teto de 120, são onze arquivos anuais (132), e a recusa diz "Envie no máximo 10 anos por vez". O resumo anual sem data por linha continua valendo como um relatório. Fora esse caso, não conheço arquivo que era aceito e passou a ser recusado por causa das fatias.
 
 **O que o consultor vê.** As mensagens continuam com o número do arquivo enviado ("Arquivo 1"), e não o da fatia. A tela do lead mostra "37 relatório(s)" para um arquivo de 37 meses, com a explicação ao passar o cursor.
 
-**O Raio-X do cliente não fatia.** Um arquivo continua uma fatia, como antes: o histórico por plano e a linha do tempo dele são contados em arquivos enviados. Por isso o "vazamento de preço" do Raio-X do cliente ainda depende de como o arquivo foi fatiado (seção 10).
+**O Raio-X do cliente não fatiava.** Na unificação, um arquivo continuava uma fatia, e o "vazamento de preço" do Raio-X do cliente dependia de como o arquivo foi fatiado (seção 10). **Desde os indicadores executivos (raio-x-2026-11.6), ele também fatia por mês** a venda item a item com a data de cada venda, como a Avaliação de Cenário, mas sem recusar a data inconsistente: o arquivo com data ilegível, fora do período ou com mais de 120 meses continua um relatório só, como sempre foi aceito (`Docs/INDICADORES_EXECUTIVOS.md`, refatoração 4).
 
 ## 8. O que os motores compartilham
 
@@ -253,8 +253,8 @@ Os oito relatórios "Giro de Vendas" da auditoria, no `.xls` original, lidos pel
 | Aviso automático de "resumido inflado" | Exigiria ler o número do documento e cruzar os dois relatórios. Fica para a fase seguinte da proposta da auditoria |
 | `.xls` e `.xml` no envio das análises mensais | A Baia grava o arquivo liberado, e só sabe gravar `.csv` e `.xlsx`. É decisão de produto, com mudança no Guia e no NexoBot |
 | HTML com extensão `.xls` | É outro formato (uma página web). Continua em quarentena, agora com a orientação de abrir no Excel e salvar como `.xlsx` (a recusa vinha só com a mensagem padrão) |
-| Fatias mensais no Raio-X do cliente | Mexe no histórico por plano e na linha do tempo que o cliente vê. O "vazamento de preço" dele ainda muda com o fatiamento do arquivo |
-| Custo e estoque do relatório por produto ligados à venda item a item | A venda item a item não traz custo nem estoque, e os dois relatórios do mesmo período se sobrepõem (a Avaliação de Cenário recusa). A ligação pela descrição é a fase seguinte |
+| Fatias mensais no Raio-X do cliente | Feito nos indicadores executivos (raio-x-2026-11.6): o histórico por plano e a linha do tempo do cliente passam a ser contados em meses |
+| Custo e estoque do relatório por produto ligados à venda item a item | Feito na ingestão em lote (11/2026, `Docs/INDICADORES_EXECUTIVOS.md`, seção 13): com a venda item a item com data no envio, o relatório por produto do mesmo período vira tabela auxiliar, ligada pelo código ou, sem ele, pela descrição normalizada, e não soma no faturamento |
 | Cliente, vendedor, documento e forma de pagamento | Campos novos, contrato novo e telas: fases 4 e 5 da proposta da auditoria |
 | Orçamento de células do `.xlsx` | Continua pela área. O relatório detalhado convertido para `.xlsx` pode passar do teto; o `.xls` original não passa |
 | Igualar a contagem de "abaixo do custo" do lead à do Raio-X | Mexe na triagem gravada (seção 5) |
@@ -278,7 +278,7 @@ Os oito relatórios "Giro de Vendas" da auditoria, no `.xls` original, lidos pel
 | Coluna de data com outro começo de título | "Últ. Faturamento" ou "Atualização do Custo", que não começam por "Data" nem por "Dt.", continuam ficando com o valor da venda ou com o custo, como antes da unificação |
 | Leiaute paginado com coluna de texto sem título | O limite descrito na seção 3 |
 | Centavo de uma linha | Os limites descritos na seção 6 |
-| Seis arquivos anuais de venda item a item | Passam do teto de 60 relatórios (seção 7) |
+| Onze arquivos anuais de venda item a item | Passam do teto de 120 relatórios (seção 7; era 60, com seis arquivos) |
 | Neutralização de fórmula: tempo e pilha (já existia, em todos os formatos) | Uma célula montada de propósito com milhares de tabulações seguidas leva segundos para ser neutralizada (o tempo cresce com o quadrado do tamanho da célula), e uma célula com mil restos de BOM derruba a leitura com erro genérico. O processo isolado é cortado aos 120 segundos e a vaga volta; há limite de envios por hora por usuário; nenhum relatório real dispara. A correção mexe na regra da Baia de Segurança e pede testes próprios |
 | Número absurdo (1e308) em valor ou custo (já existia) | Erro genérico do processamento, em vez de recusa com mensagem |
 | `.xls` com a pasta de trabalho fora do primeiro setor do diretório (já existia) | A Baia olha só o primeiro setor do diretório do contêiner. Os gravadores testados (o provedor ACE da Microsoft e o LibreOffice 26.2) põem a pasta de trabalho lá; um arquivo montado de outro jeito é recusado, agora com orientação |
@@ -356,7 +356,7 @@ Cada correção tem teste. O que a verificação achou e não foi corrigido est�
 - `tests/leiautes_erp_support.py`: os relatórios fictícios agora também em `.xls` e em Planilha XML.
 - `tests/test_raio_x_regression.py` e `tests/test_cadastro_regression.py`: os conjuntos históricos saem idênticos. Mudanças aprovadas, cada uma com o motivo no teste: a versão `raio-x-2026-11.5` e o campo `auditoria.custo_a_confirmar`, que vem zerado em todos os conjuntos.
 - `tests/test_planos_raio_x.py`: o custo a confirmar (com a ordem e o limite da lista, e os totais que não podem sair como `-0.0`), o que cada plano vê dele, o Raio-X antigo sem o bloco e o envio em `.xls` e em Planilha XML pelo portal.
-- `tests/test_avaliacao_cenario.py`: o `.xls` de vários anos enviado pela tela do lead e o teto de 60 relatórios do contrato.
+- `tests/test_avaliacao_cenario.py`: o `.xls` de vários anos enviado pela tela do lead e o teto de relatórios do contrato (120 desde os indicadores executivos).
 - `tests/test_security_gatekeeper.py`: a leitura direta (o que passa e o que continua recusado), cada condição da Planilha XML recusando sozinha e a orientação do `.xls` que não é planilha.
 - `tests/test_etl_resource_limits.py`: o teste que guardava o `.xls` desabilitado passou a guardar que só o `.xls` verdadeiro entra.
 

@@ -1,8 +1,36 @@
 """Entrypoint privado SEC-005: stdin/rede/banco não fazem parte do protocolo."""
 
 import json
+import os
 from pathlib import Path
 import sys
+
+
+def _exige_limites():
+    """Os limites do sistema operacional (módulo resource) são exigidos num sistema POSIX, que é o da
+    produção (Linux): lá o processamento nunca roda sem eles. A decisão é só da plataforma, e nenhuma
+    variável de ambiente (FLASK_ENV, DEBUG) a muda: o processo isolado nem as recebe (etl_runtime)."""
+    return os.name == "posix"
+
+
+def _limitar_recursos(limits, escrita):
+    """Aplica os limites do sistema operacional ao processo isolado, antes de importar pandas/openpyxl, e
+    devolve o módulo resource. No Windows, que não tem o módulo, devolve None: o processamento de
+    desenvolvimento segue sem os limites de memória, CPU e gravação do sistema operacional, com o resto do
+    isolamento valendo (processo à parte, prazo do processo pai, ambiente filtrado, recusa de rede e de
+    processos, limites do próprio ETL). Num sistema POSIX, sem o módulo ou sem os limites, levanta OSError
+    ou ValueError, e o processamento é recusado."""
+    try:
+        import resource
+    except ImportError:
+        if _exige_limites():
+            raise OSError("O módulo resource é exigido nesta plataforma.") from None
+        return None
+    resource.setrlimit(resource.RLIMIT_AS, (limits.memory_mb * 1024 * 1024,) * 2)
+    resource.setrlimit(resource.RLIMIT_CPU, (limits.timeout_seconds, limits.timeout_seconds + 1))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (escrita,) * 2)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    return resource
 
 
 def main():
@@ -22,12 +50,8 @@ def main():
         escrita = max(limits.max_output_bytes, limits.max_file_bytes)
     # Limites são aplicados antes de importar pandas/openpyxl.
     try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, (limits.memory_mb * 1024 * 1024,) * 2)
-        resource.setrlimit(resource.RLIMIT_CPU, (limits.timeout_seconds, limits.timeout_seconds + 1))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (escrita,) * 2)
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ImportError, OSError, ValueError):
+        resource = _limitar_recursos(limits, escrita)
+    except (OSError, ValueError):
         output_path.write_text(json.dumps({"ok": False, "code": "platform", "message":
             "A plataforma não oferece o isolamento de recursos exigido para processar arquivos."}))
         return 2
@@ -89,10 +113,11 @@ def main():
         if code == "data":
             message = "Não foi possível identificar os dados essenciais. Revise as colunas de vendas e compras."
         envelope = {"ok": False, "code": code, "message": message}
+    # Sem os limites do sistema operacional (Windows, desenvolvimento), os três primeiros vêm vazios.
     envelope["runtime"] = {
-        "address_space_bytes": resource.getrlimit(resource.RLIMIT_AS)[0],
-        "cpu_seconds": resource.getrlimit(resource.RLIMIT_CPU)[0],
-        "peak_rss_kib_linux": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "address_space_bytes": None if resource is None else resource.getrlimit(resource.RLIMIT_AS)[0],
+        "cpu_seconds": None if resource is None else resource.getrlimit(resource.RLIMIT_CPU)[0],
+        "peak_rss_kib_linux": None if resource is None else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "database_modules_loaded": "models" in sys.modules or "config" in sys.modules,
     }
     from datetime import date, datetime

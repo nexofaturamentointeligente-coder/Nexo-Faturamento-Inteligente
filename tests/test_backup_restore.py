@@ -52,8 +52,9 @@ def _etl_or_platform_refusal(calculate, etl_error, sales, purchases):
     """Executa o ETL do ensaio; None somente quando a SEC-005 recusa a plataforma.
 
     O ETL roda em subprocesso com limites POSIX (etl_worker.py) e recusa, com
-    code="platform", sistemas sem esse isolamento, como o Windows. Qualquer
-    outra falha continua reprovando o ensaio.
+    code="platform", o sistema POSIX em que eles não podem ser aplicados (o
+    Windows de desenvolvimento roda sem eles). Qualquer outra falha continua
+    reprovando o ensaio.
     """
     try:
         return calculate(sales, purchases)

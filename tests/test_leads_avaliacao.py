@@ -18,9 +18,10 @@ from tests.deploy_support import ROOT, DeployTestCase
 
 AGORA = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
 # Última revisão das tabelas de lead (a f4c2a8e1d9b6 as criou; 5e1b9c3a7d20 ampliou a staging,
-# 6a8f2d4c0e13 agenda o expurgo no pg_cron, sem efeito no SQLite, 7c4e2a9b5d31 é a Etapa 2 e
-# 9b3e5d7f1a28, a Etapa 3).
-REVISAO = "9b3e5d7f1a28"
+# 6a8f2d4c0e13 agenda o expurgo no pg_cron, sem efeito no SQLite, 7c4e2a9b5d31 é a Etapa 2,
+# 9b3e5d7f1a28, a Etapa 3, e c5f8a1d3e7b9, os indicadores executivos do lead).
+REVISAO = "c5f8a1d3e7b9"
+REVISAO_ETAPA_3 = "9b3e5d7f1a28"
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 REVISAO_SEM_EFEITO = "6a8f2d4c0e13"
 REVISAO_QUE_RECUSA = "5e1b9c3a7d20"
@@ -71,7 +72,9 @@ class EsquemaTests(_LeadsCase):
             # 7c4e2a9b5d31
             "itens_omissao_erp", "limiares_triagem_json",
             # 9b3e5d7f1a28
-            "resumo_inteligencia_json"})
+            "resumo_inteligencia_json",
+            # c5f8a1d3e7b9
+            "indicadores_executivos_json"})
         colunas = {c["name"] for c in inspetor.get_columns("brainstorming_dados_pdv")}
         self.assertEqual(colunas, {
             "id", "lead_id", "ano_exercicio", "codigo_produto", "descricao_produto", "quantidade",
@@ -297,9 +300,10 @@ class DowngradeTests(_LeadsCase):
         with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
             self._migrar("downgrade", REVISAO_SEM_EFEITO)
         self.assertIn("Downgrade da Etapa 2 da Avaliação de Cenário recusado", registro.output[0])
-        # Sem dado da Etapa 3, a 9b3e5d7f1a28 desce; o SQLite registra esse passo antes da recusa.
+        # Sem dado da Etapa 3 nem indicadores, a c5f8a1d3e7b9 e a 9b3e5d7f1a28 descem; o SQLite registra esses
+        # passos antes da recusa.
         self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
-                      (REVISAO, REVISAO_ETAPA_2))
+                      (REVISAO, REVISAO_ETAPA_3, REVISAO_ETAPA_2))
         self.assertEqual(self.db.session.scalar(text("SELECT categoria_produto FROM brainstorming_dados_pdv")),
                          "BEBIDAS")
 
@@ -307,7 +311,9 @@ class DowngradeTests(_LeadsCase):
         with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
             self._migrar("downgrade", REVISAO_ETAPA_2)
         self.assertIn("Downgrade da Etapa 3 da Avaliação de Cenário recusado", registro.output[0])
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        # Sem indicadores no lead, a c5f8a1d3e7b9 desce antes; o SQLite pode registrar esse passo antes da recusa.
+        self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
+                      (REVISAO, REVISAO_ETAPA_3))
 
     def test_downgrade_da_etapa_3_recusa_linha_das_regras_novas_ou_resumo_preenchido(self):
         lead = self.lead()

@@ -44,6 +44,80 @@ CAMPOS_CMV_LIQUIDO = ("cmv_liquido", "custo_bonificacoes", "custo_devolucoes")
 CAMPOS_FATIA = ("faturamento", "itens", "faturamento_sem_custo", "pct_faturamento_sem_custo", "custo_total",
                 "margem_valor", "margem_percentual", "perda_abaixo_custo", "vazamento_preco", "recuperavel",
                 "devolucoes")
+# Indicadores executivos (indicadores_executivos.py): a funcionalidade do plano que libera cada um. None: todo
+# plano com Raio-X vê (faturamento, venda, volume, estoque em unidades e o mapa de calor de vendas). Margem,
+# CMV, giro e custo seguem as funcionalidades da auditoria do Raio-X; a recompra, a curva de clientes do Ouro.
+FUNCIONALIDADE_DO_INDICADOR = {
+    "faturamento": None, "ticket_medio": None, "margem": "margem_bruta", "giro_estoque": "diagnostico_cmv",
+    "mix": None, "itens_por_venda": None, "recompra": "curva_abc_clientes", "saving": "diagnostico_cmv",
+    "evolucao_custo": "alerta_precificacao", "cmv": "diagnostico_cmv", "curva_abc_faturamento": "curva_abc_vendas",
+    "curva_abc_volume": "curva_abc_vendas", "curva_abc_lucro": "margem_bruta",
+    "margem_negativa": "auditoria_abaixo_custo", "margem_abaixo_minimo": "margem_bruta", "indice_descontos": None,
+    "ruptura": "produtos_parados_ruptura", "encalhados": "produtos_parados_ruptura",
+    "cobertura_estoque": "produtos_parados_ruptura", "gmroi": "margem_bruta", "mapa_calor": None,
+}
+# Sem a funcionalidade, o indicador vira {"status": "protegido", "funcionalidade": ...}, com estes campos ainda
+# abertos: as contagens de margem negativa e de custo a confirmar, que todo plano vê na auditoria.
+_CAMPOS_ABERTOS = {"margem_negativa": ("itens", "itens_custo_a_confirmar")}
+
+
+def _indicadores_visiveis(indicadores, liberadas: frozenset, corte: date | None):
+    """Os indicadores executivos com o que o plano libera; os meses (AAAA-MM) anteriores ao corte do
+    histórico saem da margem negativa por mês e do mapa por produto e mês, como as fatias. Raio-X gravado
+    antes da raio-x-2026-11.6: None."""
+    if not isinstance(indicadores, dict) or not isinstance(indicadores.get("indicadores"), dict):
+        return None
+    itens = indicadores["indicadores"]
+    for chave, valor in list(itens.items()):
+        funcionalidade = FUNCIONALIDADE_DO_INDICADOR.get(chave)
+        if funcionalidade is not None and funcionalidade not in liberadas and isinstance(valor, dict):
+            abertos = {campo: valor.get(campo) for campo in _CAMPOS_ABERTOS.get(chave, ())}
+            itens[chave] = {**abertos, "status": "protegido", "funcionalidade": funcionalidade}
+    if "diagnostico_cmv" not in liberadas:
+        # Valores a custo são do diagnóstico de CMV, também dentro de indicadores de outra funcionalidade: o
+        # estoque parado em unidades é do Bronze; a venda com custo dos itens a confirmar (que, com a perda
+        # desconsiderada da auditoria, daria o custo deles) e o estoque médio a custo do GMROI, também.
+        for chave, campos in (("encalhados", ("valor_a_custo",)), ("margem_negativa", ("faturamento_custo_a_confirmar",)),
+                              ("gmroi", ("estoque_medio_a_custo",))):
+            indicador = itens.get(chave)
+            if isinstance(indicador, dict) and indicador.get("status") != "protegido":
+                for campo in campos:
+                    if campo in indicador:
+                        indicador[campo] = None
+        encalhados = itens.get("encalhados")
+        if isinstance(encalhados, dict) and encalhados.get("status") != "protegido":
+            for item in encalhados.get("lista") or []:
+                item["valor_a_custo"] = None
+    if corte is None:
+        return indicadores
+    limite = f"{corte.year:04d}-{corte.month:02d}"
+    negativa = itens.get("margem_negativa")
+    if isinstance(negativa, dict) and negativa.get("status") == "calculado":
+        negativa["por_mes"] = [mes for mes in negativa.get("por_mes") or [] if mes["mes"] >= limite]
+        matriz = []
+        for linha in negativa.get("matriz") or []:
+            meses = [mes for mes in linha["meses"] if mes["mes"] >= limite]
+            if meses:
+                matriz.append({**linha, "meses": meses, "perda_total": round(sum(mes["perda"] for mes in meses), 2)})
+        # Na ordem dos meses que o plano mostra (a perda oculta não pode decidir quem vem primeiro).
+        matriz.sort(key=lambda linha: -linha["perda_total"])
+        negativa["matriz"] = matriz
+        negativa["perda_q4"] = round(sum(mes["perda"] for mes in negativa["por_mes"] if mes["impacto_q4"]), 2)
+        if "perda_nos_meses" in negativa:
+            negativa["perda_nos_meses"] = round(sum(mes["perda"] for mes in negativa["por_mes"]), 2)
+    calor = itens.get("mapa_calor")
+    if isinstance(calor, dict) and calor.get("tipo") == "sku_mes" and calor.get("meses"):
+        manter = [posicao for posicao, mes in enumerate(calor["meses"]) if mes >= limite]
+        calor["meses"] = [calor["meses"][posicao] for posicao in manter]
+        calor["impacto_q4"] = [calor["impacto_q4"][posicao] for posicao in manter]
+        linhas = []
+        for linha in calor.get("linhas") or []:
+            valores = [linha["valores"][posicao] for posicao in manter]
+            if any(valores):
+                linhas.append({**linha, "valores": valores})
+        linhas.sort(key=lambda linha: -sum(linha["valores"]))
+        calor["linhas"] = linhas
+    return indicadores
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +210,9 @@ def salvar(id_empresa: int, id_usuario: int, resultado: dict, recomendacao: dict
     linha.id_usuario = id_usuario
     linha.gerado_em = agora_utc()
     linha.versao_regras = resultado["versao"]
-    linha.arquivos = len(resultado["arquivos"])
+    # Os arquivos enviados (desde a raio-x-2026-11.6, "arquivos" do resultado traz um relatório por mês do arquivo
+    # fatiado).
+    linha.arquivos = len(nomes) or len(resultado["arquivos"])
     linha.periodo_inicio = date.fromisoformat(periodo["inicio"]) if periodo["inicio"] else None
     linha.periodo_fim = date.fromisoformat(periodo["fim"]) if periodo["fim"] else None
     linha.indice_saude = None if indice is None else Decimal(str(indice)).quantize(Decimal("0.01"))
@@ -157,7 +233,8 @@ def ultimo(id_empresa: int) -> tuple[DiagnosticoEntrada, dict] | None:
     except ValueError:
         logger.warning("Raio-X da empresa %s ilegível: ignorado.", id_empresa)
         return None
-    if not isinstance(dados, dict) or not raio_x.CHAVES_RESULTADO <= set(dados):
+    # O Raio-X gravado antes da raio-x-2026-11.6 não tem os indicadores executivos e continua valendo.
+    if not isinstance(dados, dict) or not raio_x.CHAVES_OBRIGATORIAS <= set(dados):
         return None
     return linha, dados
 
@@ -234,12 +311,19 @@ def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
         else:
             visiveis.append(fatia)
     resultado["fatias"] = visiveis
+    # A lista de relatórios também perde os meses ocultos (o arquivo fatiado traz um item por mês, com as linhas
+    # de venda de cada um): fatias e arquivos usam o mesmo índice.
+    indices_ocultos = {fatia["indice"] for fatia in ocultas}
+    resultado["arquivos"] = [arquivo for arquivo in resultado.get("arquivos") or []
+                             if arquivo.get("indice") not in indices_ocultos]
     # A faixa oculta pelas datas, em mês/ano: um relatório anual oculto não vira "A a B a C".
     de = min((date.fromisoformat(f["inicio"] or f["fim"]) for f in ocultas), default=None)
     ate = max((date.fromisoformat(f["fim"]) for f in ocultas), default=None)
     resultado["historico"] = {"limite_meses": limite_meses, "ocultas": len(ocultas),
                               "primeira_oculta": f"{de.month:02d}/{de.year}" if de else None,
                               "ultima_oculta": f"{ate.month:02d}/{ate.year}" if ate else None}
+    resultado["indicadores_executivos"] = _indicadores_visiveis(resultado.get("indicadores_executivos"), liberadas,
+                                                                corte)
     resultado["protegido"] = {
         "margem": not margem,
         "auditoria": "auditoria_abaixo_custo" not in liberadas,

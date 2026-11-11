@@ -3,6 +3,7 @@
 from dataclasses import asdict
 from datetime import date
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -17,6 +18,20 @@ from etl_limits import ETLLimits, get_limits
 
 _WORKER_PATH = Path(__file__).resolve().with_name("etl_worker.py")
 _ADMISSION = threading.BoundedSemaphore(1)
+logger = logging.getLogger(__name__)
+
+# No Windows o processo isolado roda sem os limites do sistema operacional (etl_worker._limitar_recursos): é o
+# ambiente de desenvolvimento. O servidor avisa no log uma vez.
+_LIMITES_DO_SISTEMA = os.name == "posix"
+_SEM_LIMITES_AVISADO = False
+
+
+def _avisar_sem_limites():
+    global _SEM_LIMITES_AVISADO
+    if not _LIMITES_DO_SISTEMA and not _SEM_LIMITES_AVISADO:
+        _SEM_LIMITES_AVISADO = True
+        logger.warning("ETL: o processo isolado roda sem os limites de memória e de CPU do sistema "
+                       "operacional (Windows). Use só em desenvolvimento.")
 
 
 def _worker_environment():
@@ -61,10 +76,16 @@ def _run_job(operation, paths, *, extension=None, limits=None):
             if len(data.encode()) > 16_384:
                 raise ETLInputError("request", "Referência de arquivo inválida para processamento.")
             request.write_text(data)
+            _avisar_sem_limites()
+            # No Windows a pasta do job não é o diretório atual do filho: o python.exe do venv é um lançador
+            # que abre o interpretador num neto, e o neto, que termina depois do lançador no estouro do prazo,
+            # travaria a remoção da pasta (o "timeout" viraria um erro genérico). O filho só usa caminhos
+            # absolutos.
             process = subprocess.Popen(
                 [sys.executable, "-I", "-B", str(_WORKER_PATH), str(request), str(output)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                cwd=root, env=_worker_environment(), start_new_session=(os.name == "posix"),
+                cwd=root if os.name == "posix" else root.parent, env=_worker_environment(),
+                start_new_session=(os.name == "posix"),
             )
             try:
                 process.wait(timeout=policy.timeout_seconds)
@@ -121,11 +142,15 @@ def run_raio_x(paths, limits=None):
     do configurado, dentro do teto do ETLLimits (120 s)."""
     from dataclasses import replace
     from etl_inputs import ETLInputError
+    import indicadores_executivos
     from raio_x import CHAVES_RESULTADO
     policy = get_limits() if limits is None else limits
     policy = replace(policy, timeout_seconds=min(120, policy.timeout_seconds * 2))
     result = _run_job("raio_x", paths, limits=policy)
-    if set(result) != CHAVES_RESULTADO:
+    # Os indicadores executivos vão para o banco com nome de produto: conferidos inteiros (só texto do
+    # relatório no nome e no código; o resto são números e rótulos fixos).
+    if (not isinstance(result, dict) or set(result) != CHAVES_RESULTADO
+            or not indicadores_executivos.valido(result["indicadores_executivos"])):
         raise ETLInputError("worker", "Resultado inválido do processamento isolado.")
     return result
 
@@ -305,6 +330,7 @@ def _validar_avaliacao(result):
                                  COLUNAS_CONTAGEM, COLUNAS_DATA, COLUNAS_DINHEIRO, COLUNAS_MARCA,
                                  COLUNAS_QUANTIDADE, LIMITE_DESCRICAO, TETOS, VERSAO_REGRAS_LEAD)
     from etl_processor import LIMITE_CATEGORIA
+    import indicadores_executivos
     from raio_x import CHAVES_RESULTADO
 
     def invalido():
@@ -315,6 +341,9 @@ def _validar_avaliacao(result):
     if result["versao"] != VERSAO_REGRAS_LEAD:
         raise invalido()
     if not isinstance(result["raio_x"], dict) or set(result["raio_x"]) != CHAVES_RESULTADO:
+        raise invalido()
+    # Os indicadores do envio vão para o lead (indicadores_executivos_json), com nome de produto, até o expurgo.
+    if not indicadores_executivos.valido(result["raio_x"]["indicadores_executivos"]):
         raise invalido()
     if not _raio_x_valido(result["raio_x"]) or not _meta_valida(result["meta"], result["versao"]):
         raise invalido()

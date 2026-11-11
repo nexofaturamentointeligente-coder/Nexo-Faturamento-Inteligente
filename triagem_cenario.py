@@ -11,12 +11,15 @@ Marcas, por produto e ano (marcas()):
     vendas tem custo (o mesmo critério de saude.itens_sem_custo do Raio-X). Num ano sem relatório com
     a coluna de custo, a marca não se aplica: a falta da coluna é do arquivo exportado, não do ERP;
   - venda abaixo do custo: alguma venda com custo teve receita abaixo do custo da linha (perda > 0,
-    o mesmo critério de auditoria.itens_venda_abaixo_custo do Raio-X);
+    o mesmo critério de auditoria.itens_venda_abaixo_custo do Raio-X). O ano de custo a confirmar (custo
+    implausível no ano) não marca: ele é inconsistência de custo do cadastro, não venda abaixo do custo. O
+    outro ano do mesmo produto, com custo plausível, marca normalmente;
   - omissão no ERP (motivos_de_omissao()): conflito de código e nome no cadastro (ignorado quando algum
     relatório teve cabeçalho ambíguo), custo informado só em parte das vendas (custo_parcial), custo
     implausível (custo >= razao_custo_implausivel x a venda com custo), estoque negativo (entrada de
     compra não lançada), NCM ausente e categoria ausente (só nos anos em que o relatório traz a coluna);
-  - vazamento estimado: o valor recuperável do produto no ano;
+  - vazamento estimado: o valor recuperável do produto no ano; no ano de custo a confirmar, só a variação
+    de preço (a perda contra um custo implausível não é vazamento), como no potencial recuperável do Raio-X;
   - custo médio registrado: custo total / quantidade vendida com custo, com 4 casas.
 
 Ritmo e giro (Cobertura, da meta do envio): o ritmo é a venda por DIA coberto pelos relatórios. A queda
@@ -72,7 +75,22 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from fractions import Fraction
 import re
 
-VERSAO_TRIAGEM = "triagem-2026-11.3"
+# 11.4 (indicadores de 11/2026): o item de custo a confirmar sai da contagem e do motivo "abaixo do custo" e do
+# vazamento (fica a variação de preço), e só aparece como custo implausível. Os limiares não mudaram de sentido:
+# os gravados pela 11.3 continuam valendo (VERSOES_DOS_LIMIARES).
+VERSAO_TRIAGEM = "triagem-2026-11.4"
+# As versões cujos limiares têm o mesmo sentido dos atuais (os gravados por elas valem sem aviso). Por extenso.
+# Revisar a cada troca de VERSAO_TRIAGEM: a versão nova sempre entra; se algum limiar mudou de sentido, as
+# anteriores saem (tests/test_indicadores.py confere que a atual está aqui).
+VERSOES_DOS_LIMIARES = frozenset({"triagem-2026-11.3", "triagem-2026-11.4"})
+# As versões da triagem com as marcas da Etapa 2 (omissão no ERP, venda abaixo do custo linha a linha): a tela
+# do lead escolhe os rótulos dos KPIs por elas, e não pela igualdade com a versão atual. Na troca de
+# VERSAO_TRIAGEM, a nova entra se mantiver essas marcas.
+VERSOES_COM_MARCAS_DA_ETAPA_2 = frozenset({"triagem-2026-11.3", "triagem-2026-11.4"})
+# As versões em que o ano de custo a confirmar fica fora da venda abaixo do custo e do recuperável (os textos da
+# tela e as definições do diagnóstico dizem isso só para elas). Na troca de VERSAO_TRIAGEM, a nova entra se
+# mantiver a regra.
+VERSOES_COM_CUSTO_A_CONFIRMAR_POR_ANO = frozenset({"triagem-2026-11.4"})
 BLOCOS = ("urgencia", "atencao", "eletiva")
 
 _ZERO = Decimal("0")
@@ -178,7 +196,7 @@ class Limiares:
         nomes = {campo.name for campo in fields(cls)}
         if not isinstance(dados, dict) or "versao" not in dados:
             raise ValueError("Limiares gravados ilegíveis.")
-        if dados["versao"] != VERSAO_TRIAGEM:
+        if dados["versao"] not in VERSOES_DOS_LIMIARES:
             raise LimiaresDeOutraVersao(str(dados["versao"])[:40])
         if set(dados) != nomes | {"versao"}:
             raise ValueError("Limiares gravados ilegíveis.")
@@ -276,9 +294,13 @@ def _valor(linha: dict, nome: str, padrao):
     return padrao if valor is None else valor
 
 
-def marcas(linha: dict, limiares: Limiares | None = None, *, conflito_confiavel: bool = True) -> dict:
-    """As marcas gravadas na linha (produto e ano) da staging."""
+def marcas(linha: dict, limiares: Limiares | None = None, *, conflito_confiavel: bool = True,
+           a_confirmar: bool | None = None) -> dict:
+    """As marcas gravadas na linha (produto e ano) da staging. `a_confirmar`: o custo da linha é implausível;
+    sem ele, vale a conta da própria linha (custo_implausivel), que é a regra da triagem."""
     limiares = limiares or LIMIARES_PADRAO
+    if a_confirmar is None:
+        a_confirmar = custo_implausivel(linha, limiares)
     com_custo, custo, quantidade = (linha["faturamento_com_custo"], linha["custo_total"],
                                     linha["quantidade_com_custo"])
     custo_medio = None
@@ -287,9 +309,9 @@ def marcas(linha: dict, limiares: Limiares | None = None, *, conflito_confiavel:
     venda_com_coluna = _valor(linha, "faturamento_em_relatorio_com_custo", linha["valor_venda_bruto"])
     return {
         "flag_venda_sem_custo": venda_com_coluna > 0 and custo == 0,
-        "flag_venda_abaixo_custo": linha["perda"] > 0,
+        "flag_venda_abaixo_custo": linha["perda"] > 0 and not a_confirmar,
         "flag_omissao_erp": bool(motivos_de_omissao(linha, limiares, conflito_confiavel=conflito_confiavel)),
-        "vazamento_estimado_reais": linha["recuperavel"],
+        "vazamento_estimado_reais": _valor(linha, "vazamento_preco", _ZERO) if a_confirmar else linha["recuperavel"],
         "custo_medio_registrado": custo_medio,
     }
 
@@ -299,6 +321,19 @@ def custo_implausivel(linha: dict, limiares: Limiares | None = None) -> bool:
     limiares = limiares or LIMIARES_PADRAO
     com_custo = linha["faturamento_com_custo"]
     return com_custo > 0 and linha["custo_total"] >= limiares.razao_custo_implausivel * com_custo
+
+
+def recuperavel_do_ano(linha: dict, limiares: Limiares | None = None):
+    """O recuperável do produto no ano; no ano de custo a confirmar (custo implausível), só a variação de preço.
+    A regra única do lead: marcas, triagem, matriz por categoria e itens dos blocos usam esta conta."""
+    if custo_implausivel(linha, limiares):
+        return _valor(linha, "vazamento_preco", _ZERO)
+    return linha["recuperavel"]
+
+
+def perda_real_do_ano(linha: dict, limiares: Limiares | None = None):
+    """A venda abaixo do custo do produto no ano, fora o ano de custo a confirmar (que é erro de cadastro)."""
+    return _ZERO if custo_implausivel(linha, limiares) else linha["perda"]
 
 
 def motivos_de_omissao(linha: dict, limiares: Limiares | None = None, *, conflito_confiavel: bool = True) -> tuple:
@@ -510,7 +545,9 @@ def triar(linhas: list, cobertura: Cobertura, limiares: Limiares | None = None) 
     # Totais do lead e referências (sem os itens de custo implausível).
     implausiveis = frozenset(chave for chave, anos in produtos.items()
                              if any(custo_implausivel(l, limiares) for l in anos.values()))
-    recuperavel = {chave: sum((l["recuperavel"] for l in anos.values()), _ZERO) for chave, anos in produtos.items()}
+    # O recuperável do produto: no ano de custo a confirmar, só a variação de preço (marcas: vazamento estimado).
+    recuperavel = {chave: sum((recuperavel_do_ano(l, limiares) for l in anos.values()), _ZERO)
+                   for chave, anos in produtos.items()}
     pareto_recuperavel = _pareto({c: v for c, v in recuperavel.items() if c not in implausiveis},
                                  limiares.pareto_recuperavel)
     faturamento_lead = sum((l["valor_venda_bruto"] for anos in produtos.values() for l in anos.values()), _ZERO)
@@ -552,8 +589,12 @@ def triar(linhas: list, cobertura: Cobertura, limiares: Limiares | None = None) 
         fat = sum((por_ano[a]["valor_venda_bruto"] for a in anos), _ZERO)
         rec = recuperavel[chave]
         vazamento = sum((por_ano[a]["vazamento_preco"] for a in anos), _ZERO)
-        perda = sum((por_ano[a]["perda"] for a in anos), _ZERO)
         com_custo = sum((por_ano[a]["faturamento_com_custo"] for a in anos), _ZERO)
+        # Venda abaixo do custo só nos anos de custo plausível: no ano de custo a confirmar, a perda é erro de
+        # cadastro (o motivo é "custo_implausivel"), e não esconde a perda real de outro ano do produto.
+        anos_reais = [por_ano[a] for a in anos if not custo_implausivel(por_ano[a], limiares)]
+        perda_real = sum((perda_real_do_ano(por_ano[a], limiares) for a in anos), _ZERO)
+        com_custo_real = sum((l["faturamento_com_custo"] for l in anos_reais), _ZERO)
         custo = sum((por_ano[a]["custo_total"] for a in anos), _ZERO)
         plausivel = chave not in implausiveis
         omissao = []
@@ -567,7 +608,7 @@ def triar(linhas: list, cobertura: Cobertura, limiares: Limiares | None = None) 
         # relatórios com a coluna de custo; a venda abaixo do custo é o auditoria.itens_venda_abaixo_custo.
         teve_sem_custo = any(marcas(por_ano[a], limiares)["flag_venda_sem_custo"] for a in anos)
         sem_custo += teve_sem_custo
-        abaixo_custo += perda > 0
+        abaixo_custo += perda_real > 0
         com_omissao += bool(omissao)
 
         queda, giro, vendeu, relatorios_do_giro = _ritmo(por_ano, cobertura, ultimo, limiares)
@@ -614,7 +655,7 @@ def triar(linhas: list, cobertura: Cobertura, limiares: Limiares | None = None) 
         atencao = []
         if teve_sem_custo:
             atencao.append("sem_custo")
-        if perda > 0 and com_custo > 0 and perda >= limiares.abaixo_custo_minimo * com_custo:
+        if perda_real > 0 and com_custo_real > 0 and perda_real >= limiares.abaixo_custo_minimo * com_custo_real:
             atencao.append("abaixo_do_custo")
         margem = _margem(com_custo, custo) if plausivel else None
         anos_com_custo = [a for a in anos if por_ano[a]["faturamento_com_custo"] > 0]
