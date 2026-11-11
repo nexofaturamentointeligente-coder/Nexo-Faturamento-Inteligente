@@ -9,7 +9,10 @@ relatório nenhum que não os tenha.
 
 Campo NOVO só passa se estiver em ACRESCIMOS_APROVADOS, com o motivo. Nenhum valor antigo pode
 mudar nem sumir; a única troca aprovada é o rótulo da versão das regras do Raio-X
-(VALORES_ALTERADOS_APROVADOS), que sobe com o saneamento.
+(VALORES_ALTERADOS_APROVADOS), que subiu com o saneamento (11.4) e com a unificação do motor (11.5).
+Nenhum conjunto histórico tem item de custo implausível nem total informado com fração de centavo
+que mude a soma: as duas regras da unificação não alteram valor nenhum daqui (os testes delas estão
+em test_cobertura_leiautes_erp.py e test_planos_raio_x.py).
 
 Conjuntos:
   - os 22 pares sintéticos do golden SEC-005 (tests/etl_equivalence_support.fixture_pairs): a
@@ -52,13 +55,16 @@ ACRESCIMOS_APROVADOS: dict = {
     "raio_x.*.resultado.auditoria.cmv_liquido": _CMV_LIQUIDO,
     "raio_x.*.resultado.auditoria.margem_liquida_valor": _CMV_LIQUIDO,
     "raio_x.*.resultado.auditoria.margem_liquida_percentual": _CMV_LIQUIDO,
+    "raio_x.*.resultado.auditoria.custo_a_confirmar": (
+        "Unificação 11/2026: os itens de custo implausível (custo a partir de 3 vezes a venda), que saem da "
+        "perda e do recuperável. Campo novo; nos conjuntos históricos vem zerado."),
 }
 # Caminho (padrão fnmatch) -> (valor da referência, valor aprovado, motivo). Só o rótulo da versão:
 # nenhum valor de relatório pode mudar.
 VALORES_ALTERADOS_APROVADOS: dict = {
-    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.4",
-                                  "Saneamento 11/2026: a versão das regras do Raio-X sobe para separar o resultado "
-                                  "gravado antes do saneamento do gravado depois dele."),
+    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.5",
+                                  "Saneamento 11/2026 (11.4) e unificação do motor 11/2026 (11.5): a versão das "
+                                  "regras do Raio-X sobe para separar o resultado gravado antes do gravado depois."),
 }
 
 
@@ -308,6 +314,14 @@ class RegressaoDoMotorTests(unittest.TestCase):
 
     def test_leitura_bruta_identica_no_lote_sintetico(self):
         self._grupo("bruto")
+
+    def test_custo_a_confirmar_vem_zerado_em_todos_os_conjuntos_historicos(self):
+        # O campo novo é aprovado inteiro (ACRESCIMOS_APROVADOS): aqui se confere que ele não esconde mudança.
+        vazio = {"itens": 0, "faturamento_com_custo": 0.0, "custo_total": 0.0, "perda_desconsiderada": 0.0, "lista": []}
+        for caso, saida in self.atual["raio_x"].items():
+            if "resultado" in saida:
+                with self.subTest(caso=caso):
+                    self.assertEqual(saida["resultado"]["auditoria"]["custo_a_confirmar"], vazio)
 
     def test_lote_sintetico_exercita_o_que_promete(self):
         # O golden só protege o que o lote tem: conferido na própria referência.

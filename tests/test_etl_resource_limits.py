@@ -88,8 +88,16 @@ class ETLResourceLimitsTests(unittest.TestCase):
     def test_directory_cannot_be_used_as_input(self):
         self.rejected(self.root, extension="csv", code="invalid_file")
 
-    def test_xls_is_not_silently_enabled(self):
+    def test_xls_that_is_not_an_excel_workbook_is_rejected(self):
+        # O .xls do Excel 97-2003 foi habilitado de propósito na unificação de 11/2026 (etl_biff, testes em
+        # test_etl_biff.py e test_cobertura_leiautes_erp.py). O que só tem a extensão continua fora.
         path = self.root / "data.xls"; path.write_bytes(b"synthetic-old-format")
+        self.rejected(path, code="unsupported")
+        ole = self.root / "container.xls"; ole.write_bytes(bytes.fromhex("d0cf11e0a1b11ae1") + bytes(504))
+        self.rejected(ole, code="invalid")
+
+    def test_xml_that_is_not_a_spreadsheet_is_rejected(self):
+        path = self.root / "data.xml"; path.write_bytes(b"<?xml version=\"1.0\"?><root><a>1</a></root>")
         self.rejected(path, code="unsupported")
 
     def test_unsupported_extension_is_rejected(self):

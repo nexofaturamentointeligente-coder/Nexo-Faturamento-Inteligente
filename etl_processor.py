@@ -84,6 +84,16 @@ class ETLValidationError(ETLInputError):
         super().__init__(code, mensagem)
 
 
+class ETLLeiauteAmbiguo(ETLValidationError):
+    """O relatório foi reconhecido, mas o leiaute não deixa saber qual coluna é a da venda. Na análise
+    mensal é uma recusa de dados como as outras (código "data"); o Raio-X e a Avaliação de Cenário mostram
+    `orientacao`, um texto fixo, depois do número do arquivo."""
+
+    def __init__(self, mensagem, orientacao):
+        super().__init__(mensagem)
+        self.orientacao = orientacao
+
+
 # Encodings e separadores tentados em sequência para arquivos texto/CSV
 ENCODINGS = ("utf-8-sig", "cp1252", "utf-8", "latin1")
 SEPARADORES = (";", ",", "\t", "|")
@@ -227,6 +237,9 @@ def _parse_valor(bruto):
     # núcleo abaixo sempre descartou: original e neutralizado têm de dar o mesmo número.
     s = s.replace("'", "").strip()
     if s.lower() in ("", "nan", "none", "-", "--"):
+        return None
+    # Percentual não é quantidade nem estoque: "-99,97 %" é a margem que o ERP imprime ao lado do custo.
+    if "%" in s:
         return None
 
     s = s.translate(_SINAIS_DE_MENOS).replace("\xa0", " ").strip()
@@ -583,26 +596,81 @@ def _reserva_de(aliases: dict) -> dict:
     return {}
 
 
+# Título que casa um fragmento do dicionário e é outra coisa:
+#   - coluna de data, a que tem numa das linhas do cabeçalho um título que começa por "Data" ou "Dt." ("Data
+#     Faturamento", "Dt. Últ. Custo"), não é quantidade, valor, custo nem estoque;
+#   - coluna de percentual, a do título com um "%" que não vem depois de um número ("% Valor Total",
+#     "Faturamento (%)", "Marg. %"), não fica com campo nenhum. O "%" depois de um número é parâmetro do
+#     título ("Valor Total (-5% desc.)", "Preço c/ ICMS 18%"), e a coluna continua sendo a do valor;
+#   - nas vendas, título de compra ou de custo ("Preço Compra", "Valor Unitário Compra", um segundo título
+#     de custo) não é o preço nem o total da venda. Sem isto, o preço de compra à esquerda do de venda
+#     ficava com o preço unitário, e o faturamento saía de quantidade x preço de compra, sem aviso. A
+#     coluna de compra não é lida como custo: fica sem campo.
+_RE_TITULO_DE_DATA = re.compile(r"(?:data|dt)\b")
+_RE_TITULO_DE_COMPRA_OU_CUSTO = re.compile(r"\b(?:compras?|comprad[oa]s?|custos?|cmv)\b")
+_RE_PERCENTUAL_DE_PARAMETRO = re.compile(r"\d\s*%")
+_CAMPOS_DO_VALOR_DA_VENDA = frozenset({"valor_venda", "preco_unitario"})
+_CAMPOS_NUMERICOS = frozenset({"quantidade", "valor_venda", "preco_unitario", "valor_custo", "estoque",
+                               "qtde_comprada", "valor_nf", "produtos_total", "custo_unitario"})
+
+
+def _titulo_de_percentual(celula) -> bool:
+    """A célula de título, como veio do arquivo, é de coluna de percentual."""
+    return "%" in _RE_PERCENTUAL_DE_PARAMETRO.sub("", str(celula))
+
+
+_RE_DATA_OU_HORA = re.compile(r"\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}:\d{2}")
+_MAXIMO_DO_VALOR_DO_ROTULO = 24
+
+
+def _rotulo_com_valor(linha: list, coluna: int) -> bool:
+    """A célula é um rótulo do topo do relatório com o valor dele, e não título de coluna: traz uma data ou
+    uma hora nela mesma ("Data: 05/02/2026"), ou a próxima célula preenchida da linha é uma data ou uma
+    hora ("Data de emissão" | "05/02/2026"; "Data Inicial" | "01/01/2026"). É a emissão ou o período do
+    relatório. Um dígito ou dois-pontos qualquer não basta: "Data Faturamento:" e "Dt. Últ. Custo 2025"
+    são títulos de coluna."""
+    if _RE_DATA_OU_HORA.search(str(linha[coluna])):
+        return True
+    for proxima in linha[coluna + 1:]:
+        if not _celula_vazia(proxima):
+            texto = str(proxima).strip()
+            return len(texto) <= _MAXIMO_DO_VALOR_DO_ROTULO and _RE_DATA_OU_HORA.match(texto) is not None
+    return False
+
+
+def _titulo_de_outra_coisa(canonico: str, chave: str, de_data: bool = False) -> bool:
+    """O título (normalizado) não pode ficar com o campo, mesmo casando um fragmento dele. `de_data`: a
+    coluna tem título de data numa das linhas do cabeçalho."""
+    if de_data and canonico in _CAMPOS_NUMERICOS:
+        return True
+    return canonico in _CAMPOS_DO_VALOR_DA_VENDA and _RE_TITULO_DE_COMPRA_OU_CUSTO.search(chave) is not None
+
+
 def _mapear_cabecalho(linha_norm: list, aliases: dict, reserva: dict = None,
-                      percentuais: frozenset = frozenset()) -> dict:
+                      percentuais: frozenset = frozenset(), de_data: frozenset = frozenset()) -> dict:
     """
     Para cada COLUNA da linha (já normalizada), encontra o 1º canônico cujo
     fragmento aparece como substring. Cada canônico é claimed no máximo 1x
-    (1ª coluna vence — proteção contra duplicatas no relatório).
+    (1ª coluna vence — proteção contra duplicatas no relatório). A coluna de data (`de_data`)
+    não fica com campo numérico, e o título de compra ou de custo não fica com os campos de valor
+    da venda (_titulo_de_outra_coisa).
 
     Depois, os títulos de reserva (RESERVA_VENDAS/RESERVA_COMPRAS) completam só os
     canônicos que ficaram sem coluna, e só com coluna que o dicionário não reconhece.
-    `percentuais`: colunas cujo título tem "%" ("% Total", "Total (%)", "% CMV"), que a
-    normalização transforma em "total" ou "cmv" e a reserva nunca usa. Título de reserva repetido
+    `percentuais`: colunas de percentual ("% Total", "Total (%)", "% CMV"; ver
+    _titulo_de_percentual), cujo título a normalização transforma em "total" ou "cmv": não
+    ficam com campo nenhum, nem pelo dicionário
+    (o "% Valor Total" à esquerda do "Valor Total" dava a soma dos percentuais como faturamento)
+    nem pela reserva. Título de reserva repetido
     na mesma linha ("Quant." sobre "Pedida" e "Quant." sobre "Vendida") é ambíguo e também não vale:
     o cabeçalho em duas linhas, se houver, desfaz a dúvida.
     """
     mapa: dict = {}
     for idx, chave in enumerate(linha_norm):
-        if not chave:
+        if not chave or idx in percentuais:
             continue
         for canonico, fragmentos in aliases.items():
-            if canonico in mapa:
+            if canonico in mapa or _titulo_de_outra_coisa(canonico, chave, idx in de_data):
                 continue
             for frag in fragmentos:
                 if frag in chave:
@@ -626,6 +694,35 @@ def _mapear_cabecalho(linha_norm: list, aliases: dict, reserva: dict = None,
                 mapa[canonico] = idx
                 break
     return mapa
+
+
+# Uma frase inteira que contém "produto" e "valor total" é aviso ou rodapé do relatório ("Atenção .: Total
+# das vendas não esta considerando "produto genérico"."), não cabeçalho: sem esta conferência, um aviso e
+# a linha de baixo passavam por cabeçalho de compras. A frase é comprida e fica SOZINHA na linha; o título
+# comprido de uma coluna ("Valor Total de Vendas no Período de ...") vem ao lado dos outros títulos. No
+# cabeçalho em duas linhas, a frase sozinha vale quando a outra linha do par (em cima ou embaixo dela) tem
+# três células ou mais: é o título do relatório sobre a linha de títulos ("Relatório de vendas por produto,
+# período de ... a ..." sobre "Item;Qtde;Valor Total"), que já era lido assim. A conferência só conta as
+# células: um aviso com a palavra "produto" colado a uma linha de três células com títulos de quantidade e
+# de valor continua passando por cabeçalho, como antes (Docs/UNIFICACAO_MOTOR_ETL.md, seção 10).
+_MAXIMO_DE_PALAVRAS_DO_TITULO = 8
+
+
+def _titulos_plausiveis(linhas: list, indice: int, linhas_cab: int, mapa: dict) -> bool:
+    """Nenhuma célula que deu o mapeamento é uma frase: mais de 8 palavras, sozinha na linha dela, sem uma
+    linha de títulos (três células ou mais) na outra linha do cabeçalho."""
+    preenchidas = [sum(1 for celula in linhas[indice + deslocamento] if not _celula_vazia(celula))
+                   for deslocamento in range(linhas_cab)]
+    for deslocamento in range(linhas_cab):
+        linha = linhas[indice + deslocamento]
+        if preenchidas[deslocamento] != 1 or any(
+                preenchidas[outra] >= 3 for outra in range(linhas_cab) if outra != deslocamento):
+            continue
+        for coluna in mapa.values():
+            celula = linha[coluna] if coluna < len(linha) else None
+            if not _celula_vazia(celula) and len(str(celula).split()) > _MAXIMO_DE_PALAVRAS_DO_TITULO:
+                return False
+    return True
 
 
 def _detectar_cabecalho(df_bruto: pd.DataFrame, aliases: dict, valida_fn,
@@ -654,8 +751,14 @@ def _detectar_cabecalho(df_bruto: pd.DataFrame, aliases: dict, valida_fn,
     # zip por menor comprimento — colunas extras ficam de fora
     compostas = [[(a + " " + b).strip() for a, b in zip(simples[i], simples[i + 1])]
                  for i in range(limite - 1)]
-    com_percentual = [frozenset(j for j, v in enumerate(linha) if v is not None and "%" in str(v)) for linha in linhas]
+    com_percentual = [frozenset(j for j, v in enumerate(linha) if _titulo_de_percentual(v)) for linha in linhas]
     percentuais = {1: com_percentual, 2: [com_percentual[i] | com_percentual[i + 1] for i in range(limite - 1)]}
+    # O título de data é conferido em cada linha: no cabeçalho de duas linhas, o texto junto pode começar
+    # pela linha de cima ("Período: ..." sobre "Data Faturamento"). Na linha de cima, o rótulo com o valor
+    # dele ("Data: 05/02/2026", ou "Data de emissão" com a data na célula ao lado) não é título de coluna.
+    com_data = [frozenset(j for j, titulo in enumerate(linha) if _RE_TITULO_DE_DATA.match(titulo)) for linha in simples]
+    data_em_cima = [frozenset(j for j in colunas if not _rotulo_com_valor(linhas[i], j)) for i, colunas in enumerate(com_data)]
+    de_data = {1: com_data, 2: [data_em_cima[i] | com_data[i + 1] for i in range(limite - 1)]}
     reserva = _reserva_de(aliases)
     for com_reserva in ((False, True) if reserva else (False,)):
         # 1) cabeçalho de 1 linha; 2) cabeçalho composto (2 linhas)
@@ -663,14 +766,16 @@ def _detectar_cabecalho(df_bruto: pd.DataFrame, aliases: dict, valida_fn,
             melhor = None
             for i, titulos in enumerate(candidatas):
                 mapa = _mapear_cabecalho(titulos, aliases, reserva if com_reserva else {},
-                                         percentuais[linhas_cab][i])
+                                         percentuais[linhas_cab][i], de_data[linhas_cab][i])
                 if len(mapa) > len(melhor_parcial):
                     melhor_parcial = mapa
-                if valida_fn(mapa) and (melhor is None or len(mapa) > len(melhor[1])):
+                if (valida_fn(mapa) and (melhor is None or len(mapa) > len(melhor[1]))
+                        and _titulos_plausiveis(linhas, i, linhas_cab, mapa)):
                     melhor = (i, mapa)
             if melhor is not None:
                 i = melhor[0]
-                return i, _mapear_cabecalho(candidatas[i], aliases, reserva, percentuais[linhas_cab][i]), linhas_cab
+                return i, _mapear_cabecalho(candidatas[i], aliases, reserva, percentuais[linhas_cab][i],
+                                            de_data[linhas_cab][i]), linhas_cab
 
     reconhecidas = ", ".join(sorted(melhor_parcial.keys())) if melhor_parcial else "nenhuma"
     raise ETLValidationError(
@@ -1020,6 +1125,11 @@ _RE_TITULO_MEDIDA = re.compile(
 # Título de produto: "Produto Loja" ou "Descrição do Produto (Filial)" ainda é o produto.
 _RE_TITULO_DE_PRODUTO = re.compile(r"\b(?:produto|produtos|mercadoria|mercadorias|item|itens|sku)\b")
 _RE_NUMERO_INTEIRO_DO_XLSX = re.compile(r"\d+\.0+")
+# Data de cada venda num relatório item a item ("Data", "Data venda", "Dt. Emissão"): com ela, um arquivo de
+# vários meses vira fatias mensais na Avaliação de Cenário (raio_x._fatias_mensais).
+_RE_TITULO_DATA_DA_VENDA = re.compile(
+    r"(?:data|dt)(?: (?:da |de |do )?(?:venda|vendas|emissao|movimento|pedido|documento|doc|nf|nota|cupom|"
+    r"lancamento|faturamento))?|emissao")
 
 
 def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linhas_cab: int) -> dict:
@@ -1027,10 +1137,19 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
     titulos = [[_norm_chave(v) for v in df_bruto.iloc[i].tolist()]
                for i in range(idx_cab, idx_cab + linhas_cab)]
     usadas = set(mapa.values())
-    ncm, niveis, unidade = None, {}, None
+    ncm, niveis, unidade, data = None, {}, None, None
     for indice, partes in enumerate(zip(*titulos)):
         chave = " ".join(partes).strip()
-        if not chave or indice in usadas or _RE_COLUNA_SITUACAO.search(chave):
+        if not chave or indice in usadas:
+            continue
+        # A célula vazia da outra linha do cabeçalho chega como "nan" (XLSX): não faz parte do título. A data
+        # vem antes da situação: "Data Movimento" é a data da venda, embora "movimento" também seja título de
+        # coluna de situação.
+        if _RE_TITULO_DATA_DA_VENDA.fullmatch(" ".join(parte for parte in partes if parte and parte != "nan")):
+            if data is None:
+                data = indice
+            continue
+        if _RE_COLUNA_SITUACAO.search(chave):
             continue
         if (_RE_TITULO_UNIDADE.search(chave) and not _RE_TITULO_NCM.search(chave)
                 and not _RE_TITULO_MEDIDA.search(chave)
@@ -1050,6 +1169,8 @@ def _colunas_de_cadastro(df_bruto: pd.DataFrame, idx_cab: int, mapa: dict, linha
                 niveis[nivel] = indice
                 break
     colunas = {} if ncm is None else {"ncm": ncm}
+    if data is not None:
+        colunas["data"] = data
     if unidade is not None:
         colunas["unidade"] = unidade
     for nivel in _NIVEIS_DE_CATEGORIA:
@@ -1142,6 +1263,186 @@ def _validar_compras(mapa: dict) -> bool:
     return tem_chave and (tem_total or tem_derivavel)
 
 
+# O .csv lido pela vírgula em que a linha de títulos tem ponto e vírgula, tabulação ou barra vertical dentro
+# de uma célula: o separador do arquivo é esse outro, e a vírgula é a decimal (o relatório com ";" em que os
+# títulos têm tantas vírgulas quanto as linhas de dado, e nenhum registro que o ";" organize melhor). Lido
+# pela vírgula, o cabeçalho partido ainda pode dar produto, quantidade e valor, e os números sairiam de
+# pedaços das células, sem aviso. Num CSV separado por vírgula de verdade, o outro separador fica nos dados,
+# e não nos títulos. A leitura recusa, com a orientação de salvar como .xlsx.
+_OUTROS_SEPARADORES = (";", "\t", "|")
+
+
+def _recusar_separador_duvidoso(bruto: pd.DataFrame, idx: int, linhas_cab: int, nome: str) -> None:
+    if bruto.attrs.get("format") != "csv" or bruto.attrs.get("separator") != ",":
+        return
+    titulos = [str(celula) for celula in bruto.iloc[idx + linhas_cab - 1].tolist() if not _celula_vazia(celula)]
+    if any(separador in titulo for titulo in titulos for separador in _OUTROS_SEPARADORES):
+        raise ETLLeiauteAmbiguo(
+            f"O arquivo '{nome}' foi lido como separado por vírgula, mas a linha de títulos tem ponto e vírgula, "
+            "tabulação ou barra vertical dentro de uma célula: não dá para decidir o separador do arquivo. Abra "
+            "o arquivo no Excel, salve como .xlsx e envie novamente.",
+            "a linha de títulos tem ponto e vírgula, tabulação ou barra vertical dentro de uma célula, e não dá "
+            "para decidir o separador do arquivo .csv. Abra o arquivo no Excel, salve como .xlsx e envie "
+            "novamente.")
+
+
+# Dois títulos iguais para um valor em dinheiro ("Valor Unitário" de compra e "Valor Unitário" vendido,
+# que só a segunda linha do cabeçalho distingue): a primeira coluna ficaria com o campo e o faturamento
+# sairia do valor errado, sem aviso (o relatório de vendas abaixo do custo do ERP). A leitura recusa.
+_CAMPOS_SEM_TITULO_REPETIDO = ("preco_unitario", "valor_venda", "valor_custo")
+
+
+def _titulos_do_cabecalho(bruto: pd.DataFrame, idx: int, linhas_cab: int) -> list:
+    """O título normalizado de cada coluna, com as linhas do cabeçalho juntas."""
+    return [" ".join(_norm_chave(bruto.iat[idx + k, coluna]) for k in range(linhas_cab)).strip()
+            for coluna in range(bruto.shape[1])]
+
+
+def _recusar_titulos_repetidos(bruto: pd.DataFrame, idx: int, linhas_cab: int, mapa: dict, nome: str) -> None:
+    titulos = _titulos_do_cabecalho(bruto, idx, linhas_cab)
+    # A coluna de percentual ("% Valor Total", "Faturamento (%)", da curva ABC) perde o "%" na normalização
+    # e ficaria com o título da coluna do valor: não conta como repetição (e nunca fica com o campo).
+    percentuais = {coluna for coluna in range(bruto.shape[1])
+                   if any(_titulo_de_percentual(bruto.iat[idx + k, coluna]) for k in range(linhas_cab)
+                          if not _celula_vazia(bruto.iat[idx + k, coluna]))}
+    repetidos = Counter(titulo for coluna, titulo in enumerate(titulos) if titulo and coluna not in percentuais)
+    for campo in _CAMPOS_SEM_TITULO_REPETIDO:
+        if campo in mapa and repetidos[titulos[mapa[campo]]] > 1:
+            raise ETLLeiauteAmbiguo(
+                f"Relatório de VENDAS '{nome}' com dois títulos de coluna iguais para um valor (por exemplo, "
+                "dois \"Valor Unitário\"): não dá para saber qual é o da venda. Envie o relatório de vendas "
+                "por produto.",
+                "o relatório tem dois títulos de coluna iguais para um valor (por exemplo, dois \"Valor "
+                "Unitário\", o de compra e o vendido): não dá para saber qual é o da venda. Envie o relatório "
+                "de vendas por produto ou a venda item a item.")
+
+
+# Relatório de VENDAS enviado no campo de COMPRAS. Sem a recusa, o "total comprado" saía do custo ou da
+# venda do relatório, sem aviso. A recusa só vale com sinal inequívoco, nesta ordem:
+#   1. o relatório que se diz de compras ou de entradas, em qualquer célula do topo, é de compras;
+#   2. o título do relatório é de vendas ("Relatório de Vendas...", "Giro de vendas por fornecedor",
+#      "Vendas por produto"): recusa, com qualquer coluna (vendas por fornecedor tem a coluna Fornecedor);
+#   3. sem título que decida, o cabeçalho tem coluna que só existe em vendas ("Qtde Vend", "Total Venda")
+#      e nenhuma de compras, de entrada, de fornecedor ou de nota: recusa.
+# Uma palavra solta no topo que só comece por "Venda" (a cidade "Venda Nova do Imigrante") não é título de
+# relatório, e "Dt. Faturamento" não é coluna só de vendas.
+_RE_TITULO_DE_RELATORIO_DE_VENDAS = re.compile(
+    r"^(?:(?:relatorio|giro|resumo|analise|listagem|ranking|mapa|curva)(?: geral)? (?:d[eao]s? )?vendas?\b"
+    r"|vendas? por\b)")
+_RE_TITULO_DE_COMPRAS = re.compile(r"\b(?:compras?|comprad\w*|entradas?)\b")
+_RE_COLUNA_SO_DE_VENDAS = re.compile(
+    r"\b(?:qtde?|qtd|quantidade) vend\w*|\btotal vendas?\b|\bvalor total venda\b")
+_RE_COLUNA_DE_COMPRAS = re.compile(r"\b(?:compras?|comprad\w*|entradas?|fornecedor(?:es)?|nfe?|notas?)\b")
+
+
+def _recusar_relatorio_de_vendas_nas_compras(bruto: pd.DataFrame, idx: int, linhas_cab: int, nome: str) -> None:
+    topo = [_norm_chave(celula) for linha in range(min(idx, 30)) for celula in bruto.iloc[linha].tolist()
+            if not _celula_vazia(celula)]
+    if any(_RE_TITULO_DE_COMPRAS.search(texto) for texto in topo):
+        return
+    titulos = [titulo for titulo in _titulos_do_cabecalho(bruto, idx, linhas_cab) if titulo]
+    so_de_vendas = (any(_RE_COLUNA_SO_DE_VENDAS.search(titulo) for titulo in titulos)
+                    and not any(_RE_COLUNA_DE_COMPRAS.search(titulo) for titulo in titulos))
+    titulo_de_vendas = any(_RE_TITULO_DE_RELATORIO_DE_VENDAS.match(texto) for texto in topo)
+    if so_de_vendas or titulo_de_vendas:
+        raise ETLValidationError(
+            f"O arquivo de COMPRAS '{nome}' é um relatório de VENDAS (o título ou as colunas falam em venda, "
+            "e não em compra). Envie o relatório de compras ou de entradas de mercadoria.")
+
+
+# Prova de leitura do alinhamento: parte das linhas de item em que o produto tem de ser texto e a quantidade
+# e o valor têm de ser números.
+_PROVA_DO_ALINHAMENTO = 0.9
+
+
+def _so_numero(valor) -> bool:
+    """A célula é só um número (sem letra nenhuma): não é nome de produto."""
+    return not any(caractere.isalpha() for caractere in str(valor)) and _parse_valor(valor) is not None
+
+
+def _comeca_por_numero(valor) -> bool:
+    """A célula é um número, no máximo com a moeda antes e a unidade depois. O texto que começa por letra
+    ("CX 12", "LOTE 7") não é, embora o conversor de quantidade tire dele um número."""
+    texto = _RE_MOEDA.sub("", str(valor)).strip()
+    return bool(texto) and not texto[0].isalpha() and _parse_valor(valor) is not None
+
+
+def _alinhar_relatorio_paginado(bruto: pd.DataFrame, idx: int, linhas_cab: int, mapa: dict) -> pd.DataFrame:
+    """Relatório paginado de ERP exportado para planilha: as células mescladas deixam o título de cada
+    coluna numa coluna e o dado em outra, na mesma ordem (o título "Produto" na coluna I e os nomes na E).
+    Cada dado passa para a coluna do título correspondente, pela ordem, quando TUDO isto vale:
+      - a coluna do título do produto não tem dado nenhum no corpo (só o próprio título, repetido a cada
+        página);
+      - há tantas colunas com título quanto colunas com dado nas linhas de item (a forma mais comum das
+        linhas com três células ou mais, somada às formas que só diferem dela por células em branco);
+      - cada título fica entre a coluna de dado anterior e a seguinte (é a mesma coluna visual);
+      - depois de alinhar, o produto é texto e a quantidade e o valor são números em ao menos 90% das
+        linhas de item (a prova de leitura: pega a coluna a menos compensada por outra a mais quando isso
+        põe um número no lugar do nome, ou um texto que começa por letra no lugar da quantidade ou do
+        valor).
+    As linhas a que falta o produto, a quantidade ou o valor ficam vazias: o cliente do bloco, os rodapés,
+    os totais e o frete, e também a linha de item com a quantidade ou o valor em branco. Em qualquer outro
+    caso a matriz volta como veio: o relatório que já era lido não muda, e o que não era lido continua
+    recusado.
+
+    Limite conhecido: uma coluna com título e sem dado em quase todas as linhas, compensada por uma coluna
+    sem título, passa pelas conferências quando o que cai em cada lugar tem o tipo esperado. Um TEXTO ao
+    lado do nome do produto (a unidade, a marca) vira o nome do produto; um NÚMERO ao lado da quantidade ou
+    do valor vira a quantidade ou o valor. Os títulos e os dados ficam em mesmo número e na mesma ordem: a
+    matriz não traz as mesclas, e só elas diriam qual dado é de qual título (Docs/UNIFICACAO_MOTOR_ETL.md,
+    seções 3 e 10)."""
+    inicio = idx + linhas_cab
+    if inicio >= len(bruto) or "produto" not in mapa:
+        return bruto
+    corpo = bruto.iloc[inicio:]
+    ocupadas = ~corpo.apply(lambda serie: serie.map(_celula_vazia)).to_numpy(dtype=bool)
+    # A forma (colunas preenchidas) mais comum entre as linhas com três células ou mais é a das linhas de item.
+    formas = Counter(tuple(int(coluna) for coluna in np.flatnonzero(linha)) for linha in ocupadas if linha.sum() >= 3)
+    if not formas:
+        return bruto
+    principal, vezes = formas.most_common(1)[0]
+    # A mesma linha de item com uma célula em branco (o vendedor, o documento) tem uma forma contida na
+    # principal, ou a contém: entra na conta das colunas de dado quando é frequente (um quinto da principal).
+    dados = set(principal)
+    for forma, quantas in formas.items():
+        if quantas * 5 >= vezes and (dados.issuperset(forma) or set(principal).issubset(forma)):
+            dados |= set(forma)
+    dados = sorted(dados)
+    titulos = sorted({coluna for k in range(linhas_cab) for coluna in range(bruto.shape[1])
+                      if not _celula_vazia(bruto.iat[idx + k, coluna])})
+    if mapa["produto"] in dados or len(titulos) != len(dados) or titulos == dados:
+        return bruto
+    # Geometria: o título de cada coluna fica entre a coluna de dado anterior e a seguinte.
+    for posicao, titulo in enumerate(titulos):
+        anterior = dados[posicao - 1] if posicao else -1
+        seguinte = dados[posicao + 1] if posicao + 1 < len(dados) else bruto.shape[1]
+        if not anterior <= titulo <= seguinte:
+            return bruto
+    # A coluna do título do produto só pode ter, no corpo, o próprio título (o cabeçalho repetido): com
+    # qualquer outro valor ali, o relatório não é o paginado que esta função conhece.
+    do_titulo = {_norm_chave(bruto.iat[idx + k, mapa["produto"]]) for k in range(linhas_cab)}
+    if any(not _celula_vazia(valor) and _norm_chave(valor) not in do_titulo
+           for valor in corpo.iloc[:, mapa["produto"]].tolist()):
+        return bruto
+    alinhado = pd.DataFrame(None, index=corpo.index, columns=corpo.columns, dtype=object)
+    for origem, alvo in zip(dados, titulos):
+        alinhado.iloc[:, alvo] = corpo.iloc[:, origem].to_numpy()
+    essenciais = [mapa[campo] for campo in ("produto", "quantidade") if campo in mapa]
+    essenciais.append(mapa["valor_venda"] if "valor_venda" in mapa else mapa["preco_unitario"])
+    incompletas = alinhado.iloc[:, essenciais].apply(lambda serie: serie.map(_celula_vazia)).any(axis=1)
+    # Prova de leitura, nas linhas de item: o nome do produto não é um número, e a quantidade e o valor são.
+    itens = alinhado.loc[~incompletas.to_numpy()]
+    if itens.empty or (~itens.iloc[:, essenciais[0]].map(_so_numero).astype(bool)).mean() < _PROVA_DO_ALINHAMENTO:
+        return bruto
+    for coluna in essenciais[1:]:
+        if itens.iloc[:, coluna].map(_comeca_por_numero).mean() < _PROVA_DO_ALINHAMENTO:
+            return bruto
+    alinhado.loc[incompletas.to_numpy(), :] = None
+    resultado = pd.concat([bruto.iloc[:inicio], alinhado])
+    resultado.attrs = dict(bruto.attrs)
+    return resultado
+
+
 def carregar_vendas(caminho: str) -> pd.DataFrame:
     return _vendas_do_bruto(_ler_bruto(caminho), os.path.basename(caminho))
 
@@ -1158,6 +1459,9 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) 
         raise ETLValidationError(f"O arquivo de vendas '{nome}' está totalmente vazio.")
 
     idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_VENDAS, _validar_vendas)
+    _recusar_separador_duvidoso(bruto, idx, linhas_cab, nome)
+    _recusar_titulos_repetidos(bruto, idx, linhas_cab, mapa, nome)
+    bruto = _alinhar_relatorio_paginado(bruto, idx, linhas_cab, mapa)
     # Título normalizado de cada coluna reconhecida. Os KPIs não o usam; o Raio-X precisa
     # saber se o custo é unitário e se o total da linha veio do preço unitário.
     cabecalhos = {canonico: " ".join(_norm_chave(bruto.iat[idx + k, coluna]) for k in range(linhas_cab)).strip()
@@ -1174,6 +1478,7 @@ def _vendas_do_bruto(bruto: pd.DataFrame, nome: str, *, cadastro: bool = False) 
             df["_" + chave] = bloco.iloc[:, coluna].tolist()
         info_cadastro = {
             "ncm": "ncm" in colunas, "categoria": "categoria" in colunas, "unidade": "unidade" in colunas,
+            "data": "data" in colunas,
             "ambiguo": any(_RE_TITULO_DE_CADASTRO.search(cabecalhos.get(c, "")) for c in ("codigo", "produto")),
             # A coluna lida como código ou como produto é de loja ou filial ("Cód. Loja" antes do código,
             # "Descrição Loja" antes da descrição do produto): os "produtos" seriam as lojas; o lead recusa.
@@ -1331,6 +1636,8 @@ def carregar_compras(caminho: str):
         raise ETLValidationError(f"O arquivo de compras '{nome}' está totalmente vazio.")
 
     idx, mapa, linhas_cab = _detectar_cabecalho(bruto, ALIAS_COMPRAS, _validar_compras)
+    _recusar_separador_duvidoso(bruto, idx, linhas_cab, nome)
+    _recusar_relatorio_de_vendas_nas_compras(bruto, idx, linhas_cab, nome)
     df = _construir_df_canonico(bruto, idx, mapa, linhas_cab)
     situacao = _situacao_das_linhas(bruto, idx, mapa, linhas_cab,
                                     outro_assunto=_RE_COLUNA_DE_OUTRO_ASSUNTO_NAS_COMPRAS)
@@ -1398,6 +1705,23 @@ def _parse_data_br(grupos) -> "datetime.date | None":
         return datetime(y, m, d).date()
     except ValueError:
         return None
+
+
+def data_da_linha(valor) -> "datetime.date | None":
+    """A data de uma linha de venda: a data da planilha ("2023-11-09 00:00:00") ou o texto dd/mm/aa ou
+    dd/mm/aaaa, com ou sem hora depois. Qualquer outra coisa não é data (None)."""
+    if valor is None:
+        return None
+    texto = str(valor).strip()
+    if len(texto) >= 10 and texto[4] == "-" and texto[7] == "-":
+        try:
+            return datetime.strptime(texto[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    achado = _RE_DATA_BR.match(texto)
+    if achado is None or (achado.end() < len(texto) and not texto[achado.end()].isspace()):
+        return None
+    return _parse_data_br(achado.groups())
 
 
 def _extrair_periodo_base(df_bruto: pd.DataFrame, janela: int = 30):

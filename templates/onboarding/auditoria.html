@@ -53,7 +53,10 @@
     <div class="col-12 col-sm-6 col-xl-3">
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Perda em vendas abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
             <div class="kpi-value"><small>R$</small> {{ m.brl(aud.perda_abaixo_custo) }}</div>
-            <div class="kpi-foot">{{ m.num(aud.itens_venda_abaixo_custo) }} item(ns) vendidos abaixo do custo</div></div>
+            <div class="kpi-foot">{{ m.num(aud.itens_venda_abaixo_custo) }} item(ns) vendidos abaixo do custo</div>
+            {% if aud.custo_a_confirmar and aud.custo_a_confirmar.itens %}
+            <div class="kpi-foot">Fora desta perda: {{ m.num(aud.custo_a_confirmar.itens) }} item(ns) com custo a confirmar (R$ {{ m.brl(aud.custo_a_confirmar.perda_desconsiderada) }})</div>
+            {% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Itens com margem negativa</span><span class="kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span></div>
@@ -95,6 +98,31 @@
         </div>
         {% else %}
         <p class="field-hint mb-0">Nenhuma venda abaixo do custo informado nos relatórios enviados.</p>
+        {% endif %}
+        {# Custo a confirmar: itens de custo implausível, fora da perda e do potencial recuperável. #}
+        {% set confirmar = aud.custo_a_confirmar %}
+        {% if confirmar and confirmar.itens %}
+        <p class="field-hint mt-3 mb-2" id="custoAConfirmar"><strong>Custo a confirmar:</strong> {{ m.num(confirmar.itens) }} item(ns) com custo muito acima da venda ficaram fora da perda e do potencial recuperável (R$ {{ m.brl(confirmar.perda_desconsiderada) }} desconsiderados). Costuma ser embalagem cadastrada como unidade ou item genérico vendido por valor: confira o custo deles no cadastro do PDV.</p>
+        {% if confirmar.lista %}
+        <div class="table-wrap">
+            <div class="table-responsive-x">
+                <table class="nexo-table" id="tabelaCustoAConfirmar">
+                    <caption class="visually-hidden">Itens com custo a confirmar</caption>
+                    <thead><tr><th>Produto</th><th class="text-end">Qtde com custo</th><th class="text-end">Vendido por</th><th class="text-end">Custo informado</th></tr></thead>
+                    <tbody>
+                        {% for item in confirmar.lista %}
+                        <tr>
+                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
+                            <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
+                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_total)) if item.custo_total is not none else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
         {% endif %}
     </div>
 </section>

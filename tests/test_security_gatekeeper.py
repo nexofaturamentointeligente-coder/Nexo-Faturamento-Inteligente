@@ -255,6 +255,108 @@ class AssinaturaTests(_Pasta):
                 self.recusa(documento_ole(fluxo), "xlsx", "xls_disfarcado")
                 self.recusa(documento_ole(fluxo), "csv", "xls_disfarcado")
 
+    PLANILHA_XML = (b'<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'
+                    b'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" '
+                    b'xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="R"><Table/>'
+                    b'</Worksheet></Workbook>')
+
+    def test_leitura_direta_aceita_xls_verdadeiro_e_planilha_xml(self):
+        """Raio-X e Avaliação de Cenário: o arquivo é lido no processo isolado e descartado, sem cópia a
+        liberar. Só aí passam o Excel 97-2003 verdadeiro e a Planilha XML 2003."""
+        xlsx = planilha([["Produto", "Qtde"], ["Cafe", 1]])
+        utf16 = "\ufeff".encode("utf-16-le") + self.PLANILHA_XML.decode("ascii").encode("utf-16-le")
+        casos = [(documento_ole("Workbook"), "xls", "xls"), (self.PLANILHA_XML, "xml", "xml"), (utf16, "xml", "xml"),
+                 (b"\xef\xbb\xbf" + self.PLANILHA_XML, "xml", "xml"), (VENDAS, "csv", "csv"), (xlsx, "xlsx", "xlsx")]
+        for conteudo, extensao, formato in casos:
+            with self.subTest(extensao=extensao, inicio=conteudo[:6]):
+                caminho = self.arquivo(conteudo, extensao)
+                self.assertEqual(baia.inspecionar_arquivo(caminho, extensao, leitura_direta=True), formato)
+        # Sem a leitura direta (arquivo guardado), os dois continuam fora.
+        self.recusa(documento_ole("Workbook"), "xls", "xls_binario")
+        self.recusa(self.PLANILHA_XML, "xml", "extensao_nao_aceita")
+
+    def test_leitura_direta_continua_recusando_disfarce_e_o_que_nao_e_planilha(self):
+        xlsx = planilha([["Produto", "Qtde"], ["Cafe", 1]])
+        html = b"<html><body><table><tr><td>Produto</td></tr></table></body></html>"
+        com_doctype = (b'<?xml version="1.0"?><!DOCTYPE Workbook [<!ENTITY a "b">]>'
+                       b'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"/>')
+        casos = [
+            (documento_ole("WordDocument"), "xls", "documento_ole"), (html, "xls", "marcacao"),
+            (VENDAS, "xls", "disfarce_texto_como_xls"), (xlsx, "xls", "disfarce_zip_como_xls"),
+            (self.PLANILHA_XML, "xls", "marcacao"), (self.PLANILHA_XML, "csv", "marcacao"),
+            (documento_ole("Workbook"), "csv", "xls_disfarcado"), (documento_ole("Workbook"), "xlsx", "xls_disfarcado"),
+            (documento_ole("Workbook"), "xml", "xml_nao_e_planilha"), (html, "xml", "xml_nao_e_planilha"),
+            (com_doctype, "xml", "xml_nao_e_planilha"), (VENDAS, "xml", "xml_nao_e_planilha"),
+            (b'<?xml version="1.0"?><nfeProc xmlns="http://www.portalfiscal.inf.br/nfe"/>', "xml", "xml_nao_e_planilha"),
+            (b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', "xml", "xml_nao_e_planilha"),
+            (executavel_pe(), "xls", "executavel_pe"), (executavel_pe(), "xml", "xml_nao_e_planilha"),
+            (b"", "xml", "vazio"), (VENDAS, "pdf", "extensao_nao_aceita"),
+        ]
+        for conteudo, extensao, motivo in casos:
+            with self.subTest(extensao=extensao, motivo=motivo, inicio=conteudo[:8]):
+                caminho = self.arquivo(conteudo, extensao)
+                with self.assertRaises(SecurityGatekeeperError) as erro:
+                    baia.inspecionar_arquivo(caminho, extensao, leitura_direta=True)
+                self.assertEqual(erro.exception.motivo, motivo)
+                self.assertTrue(erro.exception.safe_message.startswith(MENSAGEM_PADRAO))
+        with self.assertRaises(SecurityGatekeeperError) as erro:
+            baia.inspecionar_arquivo(self.arquivo(html, "xml"), "xml", leitura_direta=True, rotulo="Arquivo 2")
+        self.assertEqual(erro.exception.safe_message,
+                         f"Arquivo 2: arquivo fora do padrão aceito para auditoria. {baia.ORIENTACAO_XML}")
+
+    def test_cada_condicao_da_planilha_xml_recusa_sozinha(self):
+        """Pedido pelo teste de mutação da revisão final. Cada caso viola UMA condição de _e_planilha_xml e
+        cumpre as outras (o caso que já existia, com DOCTYPE e ENTITY juntos, passava com qualquer uma das
+        duas conferências removida)."""
+        espaco = b'xmlns="urn:schemas-microsoft-com:office:spreadsheet"'
+        casos = {
+            "não é texto (controles)": self.PLANILHA_XML + b"\x01" * 64,
+            "não começa pela declaração nem pelo elemento": b"Produto;Qtde\n" + self.PLANILHA_XML,
+            "DOCTYPE sem ENTITY": (b'<?xml version="1.0"?><!DOCTYPE Workbook SYSTEM "http://example.invalid/x.dtd">'
+                                   b"<Workbook " + espaco + b"><Worksheet/></Workbook>"),
+            "ENTITY sem DOCTYPE": (b'<?xml version="1.0"?><Workbook ' + espaco + b'><!ENTITY a "b">'
+                                   b"<Worksheet/></Workbook>"),
+            "Workbook de outro espaço de nomes": (b'<?xml version="1.0"?><Workbook xmlns="urn:example:outro">'
+                                                  b"<Worksheet/></Workbook>"),
+            "espaço de nomes da planilha sem Workbook": b'<?xml version="1.0"?><Dados ' + espaco + b"><Linha/></Dados>",
+        }
+        for caso, conteudo in casos.items():
+            with self.subTest(caso=caso):
+                caminho = self.arquivo(conteudo, "xml")
+                with self.assertRaises(SecurityGatekeeperError) as erro:
+                    baia.inspecionar_arquivo(caminho, "xml", leitura_direta=True)
+                self.assertEqual(erro.exception.motivo, "xml_nao_e_planilha")
+
+    def test_xls_que_nao_e_planilha_e_recusado_com_orientacao(self):
+        """Achado da revisão final: a página HTML com a extensão .xls (o "exportar para Excel" de muitos
+        sistemas), o Excel antigo sem contêiner e outro documento do Office eram recusados só com a mensagem
+        padrão; o texto delimitado e o .xlsx com a extensão .xls, com uma orientação que não dizia o que
+        fazer. A orientação vale para a extensão .xls e para esses motivos, com ou sem a leitura direta."""
+        html = b"<html><body><table><tr><td>Produto</td></tr></table></body></html>"
+        casos = {"marcacao": html, "binario": bytes(range(256)) * 8, "documento_ole": documento_ole("WordDocument"),
+                 "disfarce_texto_como_xls": VENDAS,
+                 "disfarce_zip_como_xls": planilha([["Produto", "Qtde"], ["Cafe", 1]])}
+        for motivo, conteudo in casos.items():
+            for direta in (False, True):
+                with self.subTest(motivo=motivo, leitura_direta=direta):
+                    caminho = self.arquivo(conteudo, "xls")
+                    with self.assertRaises(SecurityGatekeeperError) as erro:
+                        baia.inspecionar_arquivo(caminho, "xls", leitura_direta=direta, rotulo="Arquivo 1")
+                    self.assertEqual(erro.exception.motivo, motivo)
+                    self.assertEqual(erro.exception.safe_message, "Arquivo 1: arquivo fora do padrão aceito para "
+                                     f"auditoria. {baia.ORIENTACAO_XLS_ILEGIVEL}")
+        self.assertEqual(self.recusa(html, "xls", "marcacao").safe_message,
+                         f"{MENSAGEM_PADRAO} {baia.ORIENTACAO_XLS_ILEGIVEL}")
+        # A frase diz o que fazer sem afirmar que o arquivo não é planilha: o motivo documento_ole também sai
+        # para a planilha verdadeira em que a Baia não acha a pasta de trabalho (verificação das correções).
+        self.assertNotIn("não é uma planilha", baia.ORIENTACAO_XLS_ILEGIVEL)
+        self.assertIn("salve como .xlsx", baia.ORIENTACAO_XLS_ILEGIVEL)
+        # Outra extensão, ou outro motivo com a extensão .xls: a mensagem continua a de sempre.
+        self.assertEqual(self.recusa(html, "csv", "marcacao").safe_message, MENSAGEM_PADRAO)
+        self.assertEqual(self.recusa(executavel_pe(), "xls", "executavel_pe").safe_message, MENSAGEM_PADRAO)
+        self.assertEqual(self.recusa(VENDAS, "xlsx", "disfarce_texto_como_xlsx").safe_message,
+                         f"{MENSAGEM_PADRAO} {baia.ORIENTACAO_EXTENSAO}")
+
     def test_formatos_verdadeiros_passam_e_dizem_como_ler(self):
         xlsx = planilha([["Produto", "Qtde"], ["Cafe", 1]])
         utf16 = "Produto\tQtde\tValor total\r\nCafé\t2\t10,00\r\n".encode("utf-16")

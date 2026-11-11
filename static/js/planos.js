@@ -89,7 +89,7 @@
         var nome = String(arquivo.name).toLowerCase();
         return aceitos.length && !aceitos.some(function (ext) { return nome.slice(-ext.length) === ext; });
       })[0];
-      if (recusado) return 'O arquivo “' + recusado.name + '” não é .csv nem .xlsx.';
+      if (recusado) return 'O arquivo “' + recusado.name + '” não está num formato aceito (' + aceitos.join(', ') + ').';
       var total = arquivos.reduce(function (soma, arquivo) { return soma + arquivo.size; }, 0);
       if (maxBytes && total > maxBytes) {
         return 'Os arquivos somam ' + megabytes(total) + '; o limite por envio é ' + megabytes(maxBytes) + '.';

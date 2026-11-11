@@ -75,7 +75,7 @@
         <div class="kpi-tile">
             <div class="kpi-top"><span class="kpi-label">Plano sugerido</span><span class="kpi-icon is-green"><i class="bi bi-award" aria-hidden="true"></i></span></div>
             <div class="kpi-value">{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</div>
-            <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}{{ lead.arquivos or 0 }} relatório(s)</div>
+            <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}<span title="O arquivo que traz a data de cada venda conta um relatório por mês.">{{ lead.arquivos or 0 }} relatório(s)</span></div>
         </div>
     </div>
     {% if triagem_da_versao_atual %}
@@ -498,9 +498,9 @@
                 <div class="dz-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></div>
                 <div class="dz-estado" id="dzEstadoReenvio" data-dz-estado data-vazio=""></div>
                 <div class="dz-title" id="dzNomeReenvio" data-dz-label data-vazio="Arraste os relatórios ou clique para selecionar">Arraste os relatórios ou clique para selecionar</div>
-                <div class="dz-hint" id="dzHintReenvio">De 1 a {{ max_arquivos }} arquivos .csv ou .xlsx, até {{ teto_bytes // 1048576 }} MB somados.</div>
+                <div class="dz-hint" id="dzHintReenvio">De 1 a {{ max_arquivos }} arquivos .csv, .xlsx, .xls ou .xml (Planilha XML 2003), até {{ teto_bytes // 1048576 }} MB somados.</div>
                 <div class="dz-erro" data-dz-erro role="alert"></div>
-                <input type="file" name="arquivos" accept=".csv,.xlsx" multiple data-dz-input
+                <input type="file" name="arquivos" accept=".csv,.xlsx,.xls,.xml" multiple data-dz-input
                        aria-labelledby="refazerTitulo dzEstadoReenvio dzNomeReenvio" aria-describedby="dzHintReenvio">
             </label>
             <div class="form-check mt-3">

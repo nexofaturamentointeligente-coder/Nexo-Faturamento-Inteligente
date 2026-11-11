@@ -198,13 +198,14 @@ def _meta_valida(meta, versao) -> bool:
     from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_AJUSTES, CHAVES_META, CHAVES_QUALIDADE,
                                  CHAVES_RELATORIOS_POR_ANO, CHAVES_SITUACAO_CONTAGENS, CHAVES_SITUACAO_VALORES,
                                  TETO_DINHEIRO_DA_META)
-    from raio_x import MAX_ARQUIVOS, VERSAO_REGRAS
+    # "arquivos" conta os relatórios do envio: um arquivo com a data de cada venda vira um por mês.
+    from raio_x import MAX_FATIAS, VERSAO_REGRAS
     if not isinstance(meta, dict) or set(meta) != CHAVES_META:
         return False
     if meta["versao_regras"] != versao or meta["versao_raio_x"] != VERSAO_REGRAS:
         return False
     arquivos = meta["arquivos"]
-    if not _inteiro(arquivos, 1, MAX_ARQUIVOS):
+    if not _inteiro(arquivos, 1, MAX_FATIAS):
         return False
     por_ano, dias, mensais = meta["arquivos_por_ano"], meta["dias_por_ano"], meta["relatorios_mensais_por_ano"]
     if not all(isinstance(contagem, dict) for contagem in (por_ano, dias, mensais)):
@@ -214,7 +215,7 @@ def _meta_valida(meta, versao) -> bool:
             or not all(isinstance(ano, str) and _ANO.fullmatch(ano)
                        and ANO_MINIMO <= int(ano) <= ANO_MAXIMO_DO_BANCO for ano in anos)):
         return False
-    if (not all(_inteiro(quantos, 1, MAX_ARQUIVOS) for quantos in por_ano.values())
+    if (not all(_inteiro(quantos, 1, MAX_FATIAS) for quantos in por_ano.values())
             or sum(por_ano.values()) != arquivos
             or not all(_inteiro(quantos, 1, 366) for quantos in dias.values())
             or not all(type(mensal) is bool for mensal in mensais.values())):
@@ -249,7 +250,7 @@ def _meta_valida(meta, versao) -> bool:
         return False
     # Etapa 3: períodos cobertos em ordem, sem sobreposição, nos anos do envio.
     periodos = meta["periodos_cobertos"]
-    if not isinstance(periodos, list) or not 1 <= len(periodos) <= MAX_ARQUIVOS:
+    if not isinstance(periodos, list) or not 1 <= len(periodos) <= MAX_FATIAS:
         return False
     anterior = None
     for par in periodos:

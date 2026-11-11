@@ -63,6 +63,7 @@ from etl_inputs import ETLInputError
 from etl_limits import get_limits
 from etl_processor import LIMITE_CATEGORIA
 import raio_x
+from security_gatekeeper import neutralizar_celula
 
 VERSAO_REGRAS_LEAD = "lead-2026-11.4"
 ANO_MINIMO = 2000
@@ -144,7 +145,7 @@ def _data_br(valor: date) -> str:
 def _ano_do_arquivo(resumo: dict, ano_maximo: int, hoje: date) -> int:
     """Ano civil do relatório; recusa sem período, período que cruza o ano, fora da faixa ou que
     começa depois de hoje."""
-    numero = resumo["indice"] + 1
+    numero = raio_x._numero_do_arquivo(resumo)
     inicio, fim = resumo["inicio"], resumo["fim"]
     if inicio is None or fim is None:
         raise ETLInputError("avaliacao_sem_periodo", (
@@ -219,7 +220,8 @@ def _recusar_sobreposicao(resumos: list) -> None:
     for atual in sorted(resumos, key=lambda r: (r["inicio"], r["indice"])):
         if anterior is not None and atual["inicio"] <= anterior["fim"]:
             raise ETLInputError("avaliacao_sobreposicao", (
-                f"Os arquivos {anterior['indice'] + 1} e {atual['indice'] + 1} cobrem períodos que se sobrepõem. "
+                f"Os arquivos {raio_x._numero_do_arquivo(anterior)} e {raio_x._numero_do_arquivo(atual)} cobrem "
+                "períodos que se sobrepõem. "
                 "Envie cada período uma vez só."))
         if anterior is None or atual["fim"] > anterior["fim"]:
             anterior = atual
@@ -250,10 +252,18 @@ def _texto_limpo(valor) -> str:
     return " ".join(texto.split())
 
 
+def _sem_formula(texto: str) -> str:
+    """O texto já limpo, neutralizado de novo contra fórmula, pela regra da leitura (o que já saiu
+    neutralizado não muda). A leitura julga a célula como ela chega; a limpeza daqui tira do começo o que a
+    leitura não trata como começo de célula (NBSP, espaço de largura zero, caractere de controle), e sem
+    isto o texto gravado na staging voltaria a começar por "="."""
+    return neutralizar_celula(texto)
+
+
 def _descricao(nome, produto: str) -> str:
-    """Nome para a staging: limpo (a coluna exige texto além de espaços) e, se o nome do relatório
-    ficar vazio, a chave normalizada do produto."""
-    return (_texto_limpo(nome) or _texto_limpo(produto) or "PRODUTO")[:LIMITE_DESCRICAO].strip()
+    """Nome para a staging: limpo (a coluna exige texto além de espaços), sem fórmula e, se o nome do
+    relatório ficar vazio, a chave normalizada do produto."""
+    return _sem_formula(_texto_limpo(nome) or _texto_limpo(produto) or "PRODUTO")[:LIMITE_DESCRICAO].strip()
 
 
 def _cadastro(resumo: dict) -> dict:
@@ -379,10 +389,10 @@ def _linhas_produto_ano(por_arquivo, resumos: list, anos: dict, hoje: date) -> t
     linhas = []
     for i, (ano, produto) in enumerate(indice):
         codigo = codigos[i]
-        codigo = _texto_limpo(codigo)[:60].strip() if isinstance(codigo, str) else None
+        codigo = _sem_formula(_texto_limpo(codigo))[:60].strip() if isinstance(codigo, str) else None
         categoria = categorias_do_ano[i]
         if isinstance(categoria, str) and categoria.strip():
-            categoria = categoria[:LIMITE_CATEGORIA].strip()
+            categoria = _sem_formula(categoria)[:LIMITE_CATEGORIA].strip()
             if categoria not in posicao_da_categoria:
                 posicao_da_categoria[categoria] = len(nomes_de_categoria)
                 nomes_de_categoria.append(categoria)
@@ -478,14 +488,14 @@ def _meta(resumos: list, anos: dict, hoje: date, ajustes_sem_venda: dict) -> dic
 
 def avaliar_cenario(caminhos: list, *, ano_maximo: int | None = None, hoje: date | None = None) -> dict:
     """Raio-X e matriz produto x ano dos relatórios de vendas do lead (na ordem recebida)."""
-    por_arquivo, resumos, envolvidos = raio_x._ler_envio(caminhos, cadastro=True)
     hoje = date.today() if hoje is None else hoje
+    por_arquivo, resumos, envolvidos = raio_x._ler_envio(caminhos, cadastro=True, ate=hoje)
     ano_maximo = hoje.year if ano_maximo is None else ano_maximo
     anos = {r["indice"]: _ano_do_arquivo(r, ano_maximo, hoje) for r in resumos}
     for resumo in resumos:
         if (resumo.get("_cadastro") or {}).get("produto_de_loja"):
             raise ETLInputError("avaliacao_cabecalho_loja", (
-                f"Arquivo {resumo['indice'] + 1}: a coluna lida como código ou descrição do produto é de loja ou "
+                f"Arquivo {raio_x._numero_do_arquivo(resumo)}: a coluna lida como código ou descrição do produto é de loja ou "
                 "filial (por exemplo, \"Descrição Loja\" antes da descrição do produto). Exporte o relatório com as "
                 "colunas de loja depois das do produto, ou sem elas."))
     _recusar_sobreposicao(resumos)

@@ -207,9 +207,9 @@
                 <div class="dz-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></div>
                 <div class="dz-estado" id="dzEstadoRaioX" data-dz-estado data-vazio=""></div>
                 <div class="dz-title" id="dzNomeRaioX" data-dz-label data-vazio="Arraste os relatórios ou clique para selecionar">Arraste os relatórios ou clique para selecionar</div>
-                <div class="dz-hint" id="dzHintRaioX">De 1 a {{ max_arquivos }} arquivos .csv ou .xlsx, até {{ teto_bytes // 1048576 }} MB somados.</div>
+                <div class="dz-hint" id="dzHintRaioX">De 1 a {{ max_arquivos }} arquivos .csv, .xlsx, .xls ou .xml (Planilha XML 2003), até {{ teto_bytes // 1048576 }} MB somados.</div>
                 <div class="dz-erro" data-dz-erro role="alert"></div>
-                <input type="file" name="arquivos" accept=".csv,.xlsx" multiple data-dz-input
+                <input type="file" name="arquivos" accept=".csv,.xlsx,.xls,.xml" multiple data-dz-input
                        aria-labelledby="envioTitulo dzEstadoRaioX dzNomeRaioX" aria-describedby="dzHintRaioX">
             </label>
             <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Gerar Raio-X</button>

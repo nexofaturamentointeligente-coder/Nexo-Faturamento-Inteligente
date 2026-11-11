@@ -87,6 +87,7 @@ CHECKS = (
     "policies_for_api_and_server_roles", "api_roles_lose_default_privileges",
     "restrictive_policy_denies_even_with_grant", "uuid_and_defaults_from_database", "dollar_columns_via_orm",
     "constraints_enforced", "purge_job_scheduled", "service_writes_on_postgresql",
+    "monthly_slices_from_xls_write_on_postgresql",
     # 2. Função de expurgo
     "purge_function_hardened", "purge_function_not_executable_by_api_roles", "purge_matches_sqlalchemy_rule",
     "purge_respects_concurrent_writer",
@@ -288,6 +289,22 @@ class _ClusterDosLeads(_PrivateCluster):
                    linhas == 4 and resumo == ("concluido", 2, Decimal("15.00"), 1, 1, 0, True) and unico and refeito,
                    f"linhas={linhas} resumo={resumo} unico={unico} refeito={refeito}")
 
+        # Unificação do motor (11/2026): o .xls de venda item a item, com 36 meses no cabeçalho, lido direto
+        # e fatiado por mês em memória; o lead recebe os 37 relatórios mensais do período do arquivo.
+        self.stage = "venda item a item em .xls, fatiada por mês"
+        id_fatiado, itens = self._registrar_xls_fatiado()
+        with self.app.app_context():
+            gravado = self.db.session.get(LeadAvaliacao, id_fatiado)
+            meta = json.loads(gravado.meta_json)
+            fatiado = (gravado.status, gravado.arquivos, meta["arquivos_por_ano"], meta["linhas_lidas"],
+                       self.db.session.scalar(select(func.count()).select_from(BrainstormingDadosPdv)),
+                       self.db.session.scalar(select(func.sum(BrainstormingDadosPdv.valor_venda_bruto))),
+                       self.db.session.scalar(select(func.max(BrainstormingDadosPdv.meses))))
+        self._executar("DELETE FROM lead_avaliacao")
+        self.check("monthly_slices_from_xls_write_on_postgresql",
+                   fatiado == ("concluido", 37, {"2023": 2, "2024": 12, "2025": 12, "2026": 11}, itens, 15, Decimal("479.48"), 2),
+                   f"fatiado={fatiado}")
+
     def _registrar_pelo_servico(self):
         """Grava (com commit) um lead pelo serviço, com o motor como o worker: devolve o id."""
         import avaliacao_cenario
@@ -310,6 +327,26 @@ class _ClusterDosLeads(_PrivateCluster):
             id_lead = lead.id
             self.db.session.remove()
         return id_lead
+
+    def _registrar_xls_fatiado(self):
+        """Grava (com commit) um lead a partir do .xls fictício de venda item a item, que cobre vários anos:
+        devolve o id e a quantidade de linhas de venda do arquivo."""
+        import avaliacao_cenario
+        from tests import leiautes_erp_support as leiautes
+        from tests.raio_x_support import avaliar_como_o_worker
+        linhas, mesclas, formatos, verdade = leiautes.relatorio_detalhado()
+        with tempfile.TemporaryDirectory(prefix="nexo-leads-pg-") as pasta:
+            caminho = leiautes.gravar_xls(linhas, mesclas, formatos, Path(pasta) / "detalhado.xls")
+            with self.app.app_context():
+                resultado = avaliar_como_o_worker([caminho])
+        with self.app.app_context():
+            lead = avaliacao_cenario.registrar(
+                resultado, contato={"nome_contato": "Contato fictício", "email": "fatiado@example.invalid",
+                                    "whatsapp": None, "nome_loja": "Loja fictícia"}, meses_prata=24)
+            self.db.session.commit()
+            id_lead = lead.id
+            self.db.session.remove()
+        return id_lead, verdade["itens"]
 
     # ------------------------------------------------- 5. Etapa 2 (7c4e2a9b5d31)
     def _colunas_e_checks_da_etapa_2(self):

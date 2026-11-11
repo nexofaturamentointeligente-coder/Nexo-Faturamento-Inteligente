@@ -35,6 +35,9 @@ import security_gatekeeper
 logger = logging.getLogger(__name__)
 
 _BLOCO = 64 * 1024
+# Formatos do Raio-X e da Avaliação de Cenário: os arquivos são lidos no processo isolado e descartados.
+# O .xls é o do Excel 97-2003 e o .xml, a Planilha XML 2003 (security_gatekeeper, leitura direta).
+EXTENSOES_ACEITAS = ("csv", "xlsx", "xls", "xml")
 CAMPOS_MARGEM = ("custo_total", "custo_medio", "margem_valor", "margem_percentual")
 CAMPOS_MARGEM_LIQUIDA = ("margem_liquida_valor", "margem_liquida_percentual")
 CAMPOS_CMV_LIQUIDO = ("cmv_liquido", "custo_bonificacoes", "custo_devolucoes")
@@ -77,7 +80,7 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
     executar = etl_runtime.run_raio_x if executar is None else executar
     arquivos = [arquivo for arquivo in arquivos if arquivo is not None and arquivo.filename]
     if not arquivos:
-        raise ETLInputError("raio_x_vazio", "Selecione ao menos um relatório de vendas (CSV ou XLSX).")
+        raise ETLInputError("raio_x_vazio", "Selecione ao menos um relatório de vendas (CSV, XLSX ou XLS).")
     if len(arquivos) > raio_x.MAX_ARQUIVOS:
         raise ETLInputError("raio_x_arquivos", f"Envie no máximo {raio_x.MAX_ARQUIVOS} relatórios por vez: "
                             "até 3 anos, um por mês.")
@@ -92,16 +95,18 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
             for numero, arquivo in enumerate(arquivos, 1):
                 nome = secure_filename(arquivo.filename) or f"arquivo-{numero}"
                 extensao = os.path.splitext(nome)[1].lower().lstrip(".")
-                if extensao not in ("csv", "xlsx"):
-                    raise ETLInputError("unsupported_format",
-                                        f"Arquivo {numero}: formato não suportado. Envie CSV ou XLSX.")
+                if extensao not in EXTENSOES_ACEITAS:
+                    raise ETLInputError("unsupported_format", f"Arquivo {numero}: formato não suportado. Envie "
+                                        "CSV, XLSX, XLS ou Planilha XML 2003 (.xml).")
                 caminho = Path(diretorio) / f"arquivo_{numero:02d}.{extensao}"
                 digest = _gravar_limitado(arquivo, caminho, limits, numero)
                 # Baia de Segurança: assinatura e extensão antes do processo isolado. Os arquivos
                 # do Raio-X não são gravados, então não há cópia neutralizada a liberar; a
-                # leitura do motor já neutraliza as células (etl_inputs.read_raw).
+                # leitura do motor já neutraliza as células (etl_inputs.read_raw). Por isso a
+                # leitura direta aceita também o .xls verdadeiro e a Planilha XML 2003.
                 try:
-                    security_gatekeeper.inspecionar_arquivo(caminho, extensao, rotulo=f"Arquivo {numero}")
+                    security_gatekeeper.inspecionar_arquivo(caminho, extensao, rotulo=f"Arquivo {numero}",
+                                                            leitura_direta=True)
                 except security_gatekeeper.SecurityGatekeeperError as erro:
                     security_gatekeeper.registrar_recusa(erro, sha256=digest, tamanho=caminho.stat().st_size,
                                                          extensao=extensao, origem=origem)
@@ -207,6 +212,19 @@ def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
             auditoria[campo] = None
     if "alerta_precificacao" not in liberadas:
         auditoria["precificacao"] = None
+    # Custo a confirmar (unificação de 11/2026): os itens de custo implausível, fora da perda e do
+    # recuperável. Raio-X gravado antes (até raio-x-2026-11.4) não tem o bloco: entra como nulo. A contagem e
+    # a perda desconsiderada são totais como a perda abaixo do custo, que todo plano vê; a lista, com o
+    # custo de cada item, é da auditoria de custos, como a das vendas abaixo do custo; e o custo e a venda
+    # com custo do bloco (que com a perda dariam o custo) são do diagnóstico de CMV, como o custo total.
+    a_confirmar = auditoria.get("custo_a_confirmar")
+    if not isinstance(a_confirmar, dict):
+        auditoria["custo_a_confirmar"] = None
+    else:
+        if "auditoria_abaixo_custo" not in liberadas:
+            a_confirmar["lista"] = None
+        if "diagnostico_cmv" not in liberadas:
+            a_confirmar["custo_total"] = a_confirmar["faturamento_com_custo"] = None
 
     corte = _corte_historico(resultado["fatias"], limite_meses)
     visiveis, ocultas = [], []

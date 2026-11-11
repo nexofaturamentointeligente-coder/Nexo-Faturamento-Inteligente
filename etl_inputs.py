@@ -2,9 +2,17 @@
 
 As verificações cooperativas complementam o isolamento de processo do chamador;
 não constituem, sozinhas, timeout rígido de uma biblioteca nativa.
+
+Formatos: .csv (texto delimitado), .xlsx (openpyxl e pandas, depois da conferência do pacote), .xls do
+Excel 97-2003 (etl_biff) e Planilha XML 2003 (etl_planilha_xml). Os dois últimos são leitores próprios,
+só com a biblioteca padrão: do arquivo saem apenas os valores das células (fórmula entra pelo valor
+guardado; macro, objeto embutido e vínculo não são abertos), e a matriz devolvida segue a mesma convenção
+de texto do .xlsx (_texto_tipado), para o motor ler o mesmo relatório do mesmo jeito nos três formatos.
 """
 
 import csv
+from datetime import datetime
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -101,7 +109,35 @@ class _CSVLines:
         return line.replace("\x00", "")
 
 
-def _csv_pass(path, encoding, separator, budget, *, materialize=False, validate_fields=False):
+class _SeparatorShape:
+    """O que um separador candidato faz do arquivo: quantos registros têm cada largura (`widths`); se ele
+    separa, em dois campos ou mais, algum registro que não tem vírgula nenhuma (`comma_free`); e, dos
+    registros com vírgula que ele separa em MAIS campos do que a vírgula separaria, o menor número de
+    vírgulas de cada largura (`wider`)."""
+
+    def __init__(self):
+        self.widths, self.comma_free, self.wider = {}, False, {}
+
+    def add(self, row):
+        fields = len(row)
+        self.widths[fields] = self.widths.get(fields, 0) + 1
+        if fields < 2 or self.comma_free:
+            return
+        commas = sum(field.count(",") for field in row)
+        if not commas:
+            self.comma_free = True
+        elif fields > commas + 1 and commas < self.wider.get(fields, commas + 1):
+            self.wider[fields] = commas
+
+    def beats_comma(self, width, comma_width):
+        """O separador, de largura típica `width`, organiza ao menos um registro melhor do que a vírgula, de
+        largura típica `comma_width`: um registro sem vírgula nenhuma, ou uma linha inteira da tabela dele
+        que ele separa em mais campos do que a vírgula e que a vírgula não leva à largura dela."""
+        return self.comma_free or any(fields >= width and commas + 1 < comma_width
+                                      for fields, commas in self.wider.items())
+
+
+def _csv_pass(path, encoding, separator, budget, *, materialize=False, validate_fields=False, shape=None):
     rows, columns, values = 0, 0, [] if materialize else None
     with open(path, "r", encoding=encoding, newline="") as stream:
         lines = _CSVLines(stream, budget)
@@ -114,6 +150,8 @@ def _csv_pass(path, encoding, separator, budget, *, materialize=False, validate_
                 break
             rows += 1
             columns = max(columns, len(row))
+            if shape is not None:
+                shape.add(row)
             if validate_fields and rows > budget.limits.max_rows:
                 _reject("rows", "O CSV excede o limite de linhas permitido.")
             if validate_fields and columns > budget.limits.max_columns:
@@ -227,15 +265,82 @@ def _reparar_codificacao(rows, encoding, budget):
     return reparadas
 
 
+def _typical_width(widths):
+    """(largura típica, linhas que a alcançam) de um separador candidato, a partir de {largura: linhas}.
+
+    A largura típica é a maior que mais de um quinto das linhas com mais de um campo alcança, e nunca
+    uma linha sozinha (quando há mais de uma). Num arquivo regular é a própria largura da tabela, como o
+    máximo de antes. A diferença está nas poucas linhas mais largas que as outras: um nome de produto
+    com várias vírgulas, num relatório de valores com vírgula decimal, dava a uma linha mais colunas
+    pela vírgula do que a tabela tem pelo ponto e vírgula, e o máximo trocava o separador do arquivo
+    inteiro. Linhas mais curtas (título, rótulo e valor, campos vazios do fim omitidos) não mudam a
+    escolha enquanto as linhas inteiras da tabela passarem de um quinto."""
+    multi = sorted(((width, count) for width, count in widths.items() if width > 1), reverse=True)
+    total = sum(count for _width, count in multi)
+    need = max(total // 5 + 1, min(2, total))
+    reach = 0
+    for width, count in multi:
+        reach += count
+        if reach >= need:
+            return width, reach
+    return 0, 0
+
+
+def _choose_separator(candidates):
+    """O candidato (separador, linhas, colunas, (largura típica, linhas que a alcançam), _SeparatorShape) que
+    fica com o arquivo.
+
+    Vence a maior largura típica; no empate, quem a alcança em mais linhas e, depois, a ordem de SEPARATORS,
+    como sempre. A vírgula tem uma condição a mais, porque num relatório brasileiro ela é quase sempre a
+    vírgula decimal: cada número com decimais dá à linha uma "coluna" a mais pela vírgula, e uma vírgula no
+    nome do produto ("ESMALTE 3,6L") dá outra. Numa tabela em que todas as colunas, menos a do nome, têm
+    vírgula decimal, a vírgula empata com o separador de verdade, ou passa dele por uma coluna. Por isso a
+    vírgula perde para outro separador em dois casos:
+      - ele tem a mesma largura típica (ou, numa tabela de três colunas ou mais, uma coluna a menos) e a
+        alcança em ao menos metade das linhas que a vírgula alcança;
+      - ele alcança a largura típica dele em mais que o dobro das linhas da vírgula, com qualquer largura
+        (um bloco grande de "rótulo;valor" antes de uma tabela de dois produtos).
+    Quando o outro separador só aparece em poucas linhas (um ";" no nome de dois fornecedores de um CSV
+    separado por vírgula) ou organiza bem menos colunas (um ";" dentro de um campo de texto), a vírgula
+    fica.
+
+    Nos dois casos, o outro separador tem de organizar ao menos um registro melhor do que a vírgula
+    (_SeparatorShape.beats_comma): um registro sem vírgula nenhuma, ou uma linha inteira da tabela dele que
+    ele separa em mais campos do que a vírgula separaria e que a vírgula não leva à largura típica dela.
+    Num relatório com vírgula decimal, é a linha de títulos ("Produto;Qtde;Valor Total", ou
+    "Produto;Qtde, Un;Valor Total", com uma vírgula dentro de um título). Num CSV separado por vírgula de
+    verdade, o ";" ou a "|" de dentro de um campo de texto ("organico;torrado;moido", "CAMISETA | AZUL | M")
+    aparece em registros que a vírgula separa em tantos campos quanto ele, ou em mais, e a vírgula fica com
+    o arquivo."""
+    best = None
+    for candidate in candidates:
+        if best is None or candidate[3] > best[3]:
+            best = candidate
+    if best is None or best[0] != ",":
+        return best
+    width, lines = best[3]
+    rival = None
+    for candidate in candidates:
+        other_width, other_lines = candidate[3]
+        if candidate[0] == "," or not candidate[4].beats_comma(other_width, width):
+            continue
+        close = other_width == width or (other_width == width - 1 and other_width >= 3)
+        if (2 * other_lines >= lines if close else other_lines > 2 * lines):
+            if rival is None or candidate[3] > rival[3]:
+                rival = candidate
+    return best if rival is None else rival
+
+
 def _csv_input(path, budget, materialize):
     _csv_signature(path)
     selected = None
     for encoding in ENCODINGS:
-        best = None
+        candidates = []
         decode_failed = False
         for separator in SEPARATORS:
+            shape = _SeparatorShape()
             try:
-                rows, columns, _ = _csv_pass(path, encoding, separator, budget)
+                rows, columns, _ = _csv_pass(path, encoding, separator, budget, shape=shape)
             except UnicodeDecodeError:
                 decode_failed = True
                 break
@@ -243,12 +348,12 @@ def _csv_input(path, budget, materialize):
                 # O leitor anterior também descartava separadores que não
                 # podiam ser interpretados pelo csv.reader padrão.
                 continue
-            if best is None or columns > best[2]:
-                best = (separator, rows, columns)
+            candidates.append((separator, rows, columns, _typical_width(shape.widths), shape))
         if decode_failed:
             continue
+        best = _choose_separator(candidates)
         if best is not None and best[2] > 1:
-            selected = (encoding, *best)
+            selected = (encoding, *best[:3])
             break
     if selected is None:
         _reject("csv_invalid", "Não foi possível interpretar o CSV com os formatos suportados.")
@@ -682,6 +787,80 @@ def _xlsx_input(path, size, budget, materialize):
     return metadata
 
 
+# Planilha do Excel 97-2003: o contêiner OLE2 começa por esta assinatura.
+_OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# Os leitores de .xls e de Planilha XML contam as células COM VALOR (o relatório paginado de ERP espalha
+# poucas células por muitas colunas). A matriz devolvida é retangular: a área (linhas x colunas) também
+# tem teto, de quatro vezes o orçamento de células por aba, para a memória não depender das posições. O
+# leitor confere esse teto antes de montar a matriz: duas células distantes num arquivo de poucos bytes
+# são recusadas sem ocupar a área.
+_AREA_POR_CELULA = 4
+
+
+def _texto_tipado(valor):
+    """O valor tipado de uma célula no texto que o leitor de .xlsx (pandas, dtype=str) daria: inteiro sem
+    ".0", decimal como o Python o escreve (com um zero a mais quando parece milhar pt-BR: "19.4310"), data
+    como "2023-11-09 00:00:00", booleano como "True" ou "False". Vazio, número não finito e os textos que
+    o pandas lê como ausentes ("", "NA", "N/A", "NULL", "nan") saem como None. O texto perde o NUL (U+0000),
+    como no leitor de CSV: o motor o descarta mais adiante, e um NUL antes de "=" esconderia a fórmula da
+    neutralização (o .xlsx não guarda NUL)."""
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        return "True" if valor else "False"
+    if isinstance(valor, (int, float)):
+        if not math.isfinite(valor):
+            return None
+        if valor == int(valor):
+            return str(int(valor))
+        texto = repr(float(valor))
+        return texto + "0" if _LOOKS_LIKE_THOUSANDS.fullmatch(texto) else texto
+    if isinstance(valor, datetime):
+        return str(valor)
+    texto = str(valor).replace("\x00", "")
+    return None if texto in STR_NA_VALUES else texto
+
+
+def _typed_sheet_input(path, budget, materialize, kind):
+    """.xls (BIFF8) e Planilha XML 2003: uma leitura só, com os limites aplicados durante ela."""
+    if kind == "xls":
+        with open(path, "rb") as stream:
+            if stream.read(len(_OLE2)) != _OLE2:
+                _reject("unsupported", "O arquivo .xls não é uma planilha do Excel 97-2003 (pode ser uma página "
+                        "HTML ou um texto com a extensão trocada). Abra no Excel, salve como .xlsx e envie novamente.")
+        import etl_biff as reader
+    else:
+        import etl_planilha_xml as reader
+    limits = budget.limits
+    try:
+        sheet = reader.ler(path, max_abas=limits.max_sheets, max_linhas=limits.max_rows,
+                           max_colunas=limits.max_columns, max_celulas=limits.max_cells_per_sheet,
+                           max_caracteres=limits.max_field_chars,
+                           max_area=_AREA_POR_CELULA * limits.max_cells_per_sheet, verificar=budget.check,
+                           materializar=materialize)
+    except reader.LeituraRecusada as error:
+        _reject(error.codigo, error.mensagem)
+    if sheet["celulas_no_arquivo"] > limits.max_cells_per_file:
+        _reject("cells", "A planilha excede o orçamento acumulado de células permitido.")
+    if not materialize:
+        return {"format": kind, "sheets": sheet["abas"], "cells": sheet["celulas_no_arquivo"],
+                "rows": sheet["linhas"], "columns": sheet["colunas"], "selected_sheet": sheet["aba"],
+                "filled_cells_selected": sheet["celulas"]}
+    values = sheet.pop("valores")
+    missing = float("nan")  # o mesmo vazio do leitor de .xlsx
+    for number, row in enumerate(values):
+        if not number & 0x3FF:
+            budget.check()
+        for index, value in enumerate(row):
+            text = _texto_tipado(value)
+            row[index] = missing if text is None else text
+    frame = _trim(pd.DataFrame(values, dtype=object))
+    if frame.empty or frame.isna().all().all():
+        _reject("empty", "A planilha não contém dados na aba selecionada.")
+    frame.attrs["format"] = kind
+    return frame
+
+
 def _run(path, extension, limits, materialize):
     budget = _Budget(limits)
     size = _file_size(path, limits)
@@ -691,10 +870,10 @@ def _run(path, extension, limits, materialize):
             result = _csv_input(path, budget, materialize)
         elif extension == "xlsx":
             result = _xlsx_input(path, size, budget, materialize)
-        elif extension == "xls":
-            _reject("unsupported", "Formato .xls não suportado. Converta o arquivo para .xlsx ou .csv.")
+        elif extension in ("xls", "xml"):
+            result = _typed_sheet_input(path, budget, materialize, extension)
         else:
-            _reject("unsupported", "Formato não suportado. Envie um arquivo CSV ou XLSX.")
+            _reject("unsupported", "Formato não suportado. Envie um arquivo CSV, XLSX ou XLS.")
     except ETLInputError:
         raise
     except MemoryError:

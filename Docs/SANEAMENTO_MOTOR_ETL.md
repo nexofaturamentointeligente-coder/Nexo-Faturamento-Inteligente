@@ -28,7 +28,7 @@ Os conjuntos capturados são:
 
 **Regra.** Todo valor capturado tem de continuar idêntico, inclusive o tipo (`1` ≠ `1.0`). Há só duas exceções, cada uma listada com o motivo:
 - `ACRESCIMOS_APROVADOS`: campo novo. Hoje são os cinco campos de CMV líquido da seção 6.
-- `VALORES_ALTERADOS_APROVADOS`: valor que muda de propósito. Hoje é só o rótulo `raio_x.*.resultado.versao`, de "raio-x-2026-11.3" para "raio-x-2026-11.4" (seção 6). Nenhum valor de relatório.
+- `VALORES_ALTERADOS_APROVADOS`: valor que muda de propósito. Hoje é só o rótulo `raio_x.*.resultado.versao`, de "raio-x-2026-11.3" para "raio-x-2026-11.4" (seção 6). Nenhum valor de relatório. A unificação do motor (`Docs/UNIFICACAO_MOTOR_ETL.md`) levou o rótulo aprovado para "raio-x-2026-11.5" e acrescentou `auditoria.custo_a_confirmar` aos campos novos aprovados; nenhum valor dos conjuntos históricos mudou.
 
 Para recapturar, só com motivo documentado e numa cópia sem `.env`, informando o commit do motor que está rodando:
 

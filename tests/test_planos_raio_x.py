@@ -147,6 +147,105 @@ class MotorRaioXTests(unittest.TestCase):
         item = self._diagnosticar(conteudo)["auditoria"]["itens_abaixo_custo"][0]
         self.assertEqual((item["faturamento_abaixo"], item["custo_abaixo"], item["perda"]), (11.04, 11.09, 0.05))
 
+    # Um item genérico vendido por valor, com custo de cadastro absurdo: 80 vezes a venda.
+    CUSTO_ABSURDO = ("Relatorio de vendas por produto\nPeriodo: 01/01/2026 a 31/01/2026\n"
+                     "Codigo;Produto;Qtde;Valor Total;Total Custo\n1;Cafe 500g;10;200,00;150,00\n"
+                     "2;Leite 1L;20;100,00;110,00\n9;Item Generico;100;500,00;40000,00\n").encode("utf-8")
+
+    def test_item_de_custo_implausivel_fica_a_confirmar_fora_da_perda_e_do_recuperavel(self):
+        r = self._diagnosticar(self.CUSTO_ABSURDO)
+        auditoria = r["auditoria"]
+        self.assertEqual((auditoria["perda_abaixo_custo"], auditoria["itens_venda_abaixo_custo"]), (10.0, 1))
+        self.assertEqual([item["produto"] for item in auditoria["itens_abaixo_custo"]], ["Leite 1L"])
+        self.assertEqual(auditoria["custo_a_confirmar"], {
+            "itens": 1, "faturamento_com_custo": 500.0, "custo_total": 40000.0, "perda_desconsiderada": 39500.0,
+            "lista": [{"produto": "Item Generico", "codigo": "9", "quantidade_com_custo": 100.0,
+                       "faturamento_com_custo": 500.0, "custo_total": 40000.0, "custo_medio": 400.0}]})
+        self.assertEqual(r["recuperavel"], {"total": 10.0, "abaixo_custo": 10.0, "variacao_preco": 0.0})
+        self.assertEqual((r["fatias"][0]["perda_abaixo_custo"], r["fatias"][0]["recuperavel"]), (10.0, 10.0))
+        # O custo total, a margem e a contagem de margem negativa continuam com o item.
+        self.assertEqual((auditoria["custo_total"], auditoria["itens_margem_negativa"]), (40260.0, 2))
+        self.assertIn("1 produto(s) com custo a partir de 3 vezes a venda", " ".join(r["avisos"]))
+
+    def test_totais_sem_os_itens_a_confirmar_fecham_e_nunca_saem_negativos(self):
+        """Sorteio com semente fixa (o roteiro da revisão independente): com itens de custo implausível em
+        vários meses, a perda e o recuperável das fatias fecham com os totais, nada sai negativo nem como
+        zero negativo, e o que saiu da perda e da contagem é exatamente o que está em custo_a_confirmar."""
+        import random
+        sorteio = random.Random(6)
+
+        def br(valor):
+            return f"{valor:.2f}".replace(".", ",")
+
+        for ensaio in range(30):
+            arquivos = []
+            for mes in range(1, sorteio.randrange(2, 5)):
+                linhas = []
+                for produto in range(1, sorteio.randrange(4, 12)):
+                    for _ in range(sorteio.randrange(1, 4)):
+                        quantidade = sorteio.randrange(1, 6)
+                        venda = round(quantidade * sorteio.choice((1.1, 2.35, 7.9, 12.49)) * sorteio.choice((1, 1, 0.9, 1.05)), 2)
+                        fator = sorteio.uniform(3.5, 9.0) if produto <= 3 else sorteio.uniform(0.3, 1.6)
+                        linhas.append(f"{produto};PRODUTO {produto};{quantidade};;{br(venda)};{br(venda * fator)}")
+                arquivos.append(_mes(2026, mes, linhas))
+            with self.subTest(ensaio=ensaio):
+                novo = self._diagnosticar(*arquivos)
+                with patch.object(raio_x, "RAZAO_CUSTO_IMPLAUSIVEL", 10 ** 18):
+                    antigo = self._diagnosticar(*arquivos)
+                auditoria, recuperavel, fatias = novo["auditoria"], novo["recuperavel"], novo["fatias"]
+                a_confirmar = auditoria["custo_a_confirmar"]
+                self.assertEqual((a_confirmar["itens"], antigo["auditoria"]["custo_a_confirmar"]["itens"]), (3, 0))
+                folga = 0.005 * len(fatias) + 0.006
+                self.assertAlmostEqual(sum(fatia["perda_abaixo_custo"] for fatia in fatias),
+                                       auditoria["perda_abaixo_custo"], delta=folga)
+                self.assertAlmostEqual(sum(fatia["recuperavel"] for fatia in fatias), recuperavel["total"], delta=folga)
+                self.assertEqual(recuperavel["abaixo_custo"], auditoria["perda_abaixo_custo"])
+                self.assertNotRegex(json.dumps(novo), r"-0\.0(?![0-9])")
+                self.assertGreaterEqual(min(auditoria["perda_abaixo_custo"], recuperavel["total"],
+                                            *(fatia["recuperavel"] for fatia in fatias),
+                                            *(fatia["perda_abaixo_custo"] for fatia in fatias)), 0)
+                self.assertAlmostEqual(antigo["auditoria"]["perda_abaixo_custo"],
+                                       auditoria["perda_abaixo_custo"] + a_confirmar["perda_desconsiderada"], delta=0.011)
+                self.assertEqual(antigo["auditoria"]["itens_venda_abaixo_custo"],
+                                 auditoria["itens_venda_abaixo_custo"] + a_confirmar["itens"])
+
+    def test_custo_abaixo_de_tres_vezes_a_venda_continua_na_perda(self):
+        r = self._diagnosticar(self.CUSTO_ABSURDO.replace(b"40000,00", b"1499,99"))
+        self.assertEqual(r["auditoria"]["custo_a_confirmar"]["itens"], 0)
+        self.assertEqual((r["auditoria"]["perda_abaixo_custo"], r["auditoria"]["itens_venda_abaixo_custo"]), (1009.99, 2))
+        self.assertEqual(self._diagnosticar(self.CUSTO_ABSURDO.replace(b"40000,00", b"1500,00"))
+                         ["auditoria"]["custo_a_confirmar"]["itens"], 1)
+
+    def test_custo_a_confirmar_segue_o_que_o_plano_libera(self):
+        import raio_x_servico
+        dados = self._diagnosticar(self.CUSTO_ABSURDO)
+        tudo = frozenset({"margem_bruta", "auditoria_abaixo_custo", "diagnostico_cmv", "alerta_precificacao"})
+
+        def bloco(liberadas):
+            return raio_x_servico.visao(dados, liberadas, None)["auditoria"]["custo_a_confirmar"]
+
+        self.assertEqual(bloco(tudo), dados["auditoria"]["custo_a_confirmar"])
+        # Sem nada liberado: só a contagem e a perda desconsiderada, que são totais como a perda abaixo do custo.
+        self.assertEqual(bloco(frozenset()), {"itens": 1, "faturamento_com_custo": None, "custo_total": None,
+                                              "perda_desconsiderada": 39500.0, "lista": None})
+        self.assertNotIn("40000", json.dumps(raio_x_servico.visao(dados, frozenset(), None)))
+        # A lista segue a das vendas abaixo do custo: é da auditoria de custos e traz o custo de cada item.
+        so_auditoria = bloco(frozenset({"auditoria_abaixo_custo"}))
+        self.assertEqual(so_auditoria["lista"], dados["auditoria"]["custo_a_confirmar"]["lista"])
+        self.assertEqual((so_auditoria["custo_total"], so_auditoria["faturamento_com_custo"]), (None, None))
+        self.assertIsNone(bloco(tudo - {"auditoria_abaixo_custo"})["lista"])
+        # Os totais de custo do bloco seguem o custo total da auditoria: são do diagnóstico de CMV.
+        so_cmv = bloco(frozenset({"diagnostico_cmv"}))
+        self.assertEqual((so_cmv["custo_total"], so_cmv["faturamento_com_custo"], so_cmv["lista"]), (40000.0, 500.0, None))
+        # A visão é uma cópia: o resultado gravado não muda.
+        self.assertEqual(dados["auditoria"]["custo_a_confirmar"]["custo_total"], 40000.0)
+
+    def test_raio_x_gravado_antes_da_unificacao_nao_tem_custo_a_confirmar(self):
+        import raio_x_servico
+        dados = self._diagnosticar(JANEIRO)
+        del dados["auditoria"]["custo_a_confirmar"]
+        self.assertIsNone(raio_x_servico.visao(dados, frozenset(), None)["auditoria"]["custo_a_confirmar"])
+
     def test_faixa_do_historico_oculto_sai_das_datas(self):
         import raio_x_servico
         anual = ("Relatorio de vendas por produto\nPeriodo: 01/01/2024 a 31/12/2024\n"
@@ -182,6 +281,29 @@ class MotorRaioXTests(unittest.TestCase):
         # 10 un. a R$ 6 (tabela R$ 10, custo R$ 8): R$ 40 abaixo do preço e R$ 20 abaixo do custo.
         r = self._diagnosticar(_mes(2026, 3, ["9;Item;10;10,00;60,00;80,00"]))
         self.assertEqual(r["recuperavel"], {"total": 40.0, "abaixo_custo": 20.0, "variacao_preco": 40.0})
+
+    def test_lista_a_confirmar_vem_do_maior_custo_para_o_menor_e_tem_limite(self):
+        # Pedido pelo teste de mutação da revisão final: a ordem e o limite da lista não tinham teste.
+        linhas = [f"{n};GENERICO {n};10;;100,00;{1000 + n},00" for n in range(1, 61)]  # custo de 10 vezes a venda
+        bloco = self._diagnosticar(_mes(2026, 1, linhas))["auditoria"]["custo_a_confirmar"]
+        self.assertEqual((bloco["itens"], len(bloco["lista"])), (60, raio_x.LIMITE_ITENS_LISTA))
+        self.assertEqual([item["custo_total"] for item in bloco["lista"][:3]], [1060.0, 1059.0, 1058.0])
+        self.assertEqual(bloco["custo_total"], float(sum(1000 + n for n in range(1, 61))))
+
+    def test_totais_zerados_pelos_itens_a_confirmar_nao_saem_como_zero_negativo(self):
+        """Quando TODA a perda é de itens a confirmar, a subtração em ponto flutuante dá um negativo minúsculo:
+        cada total sai 0.0, e não -0.0 (os dois relatórios vêm da busca da revisão independente final)."""
+        casos = (["1;PRODUTO 1;5;;5,50;43,99", "2;PRODUTO 2;5;;11,75;79,33", "2;PRODUTO 2;1;;2,35;10,71"],
+                 ["1;PRODUTO 1;3;;7,05;51,93", "1;PRODUTO 1;5;;5,50;37,84", "2;PRODUTO 2;4;;4,40;36,94",
+                  "3;PRODUTO 3;5;;62,45;271,54"])
+        for numero, linhas in enumerate(casos):
+            with self.subTest(caso=numero):
+                r = self._diagnosticar(_mes(2026, 1, linhas))
+                self.assertEqual(r["auditoria"]["custo_a_confirmar"]["itens"], len({linha.split(";")[0] for linha in linhas}))
+                self.assertEqual((r["auditoria"]["perda_abaixo_custo"], r["recuperavel"]["total"],
+                                  r["recuperavel"]["abaixo_custo"], r["fatias"][0]["recuperavel"],
+                                  r["fatias"][0]["perda_abaixo_custo"]), (0.0, 0.0, 0.0, 0.0, 0.0))
+                self.assertNotRegex(json.dumps(r), r"-0\.0(?![0-9])")
 
     def test_linha_por_venda_usa_o_preco_mais_praticado_e_o_menor_no_empate(self):
         linhas = ["1;Pao;1;;2,00;", "1;Pao;1;;2,00;", "1;Pao;1;;1,50;", "2;Bolo;2;;20,00;", "2;Bolo;2;;24,00;"]
@@ -617,6 +739,23 @@ class RaioXPortalTests(_PlanosCase):
         corpo = self.cliente_http.get(API_AUDITORIA).get_json()
         self.assertEqual(corpo["auditoria"]["itens_abaixo_custo"][0]["perda"], 10.0)
 
+    def test_auditoria_mostra_o_custo_a_confirmar_e_o_bronze_nao_recebe_a_lista(self):
+        self._mudar_plano("PRATA")
+        self._enviar_raio_x(("jan.csv", MotorRaioXTests.CUSTO_ABSURDO))
+        texto = self.cliente_http.get(AUDITORIA).get_data(as_text=True)
+        self.assertIn("Fora desta perda: 1 item(ns) com custo a confirmar (R$ 39.500,00)", texto)
+        self.assertIn("Custo a confirmar:", texto)
+        self.assertIn('id="tabelaCustoAConfirmar"', texto)
+        self.assertIn("Item Generico", texto)
+        bloco = self.cliente_http.get(API_AUDITORIA).get_json()["auditoria"]["custo_a_confirmar"]
+        self.assertEqual((bloco["itens"], bloco["lista"][0]["produto"]), (1, "Item Generico"))
+        # A página do Raio-X traz o aviso para todos os planos; a lista dos itens é da auditoria de custos.
+        self.assertIn("ficaram fora da perda e do potencial recuperável", self.cliente_http.get(PAGINA).get_data(as_text=True))
+        self._mudar_plano("BRONZE")
+        bronze = self.cliente_http.get(API).get_json()["resultado"]["auditoria"]["custo_a_confirmar"]
+        self.assertEqual((bronze["itens"], bronze["lista"], bronze["custo_total"]), (1, None, None))
+        self.assertNotIn("40000", json.dumps(self.cliente_http.get(API).get_json()))
+
     def test_raio_x_gravado_antes_do_saneamento_abre_a_auditoria(self):
         # Raio-X gravado pelo motor de 91e5fb0 (a referência do golden): sem os campos de CMV
         # líquido. A tela e a API continuam abrindo, com os campos novos nulos.
@@ -643,7 +782,8 @@ class RaioXPortalTests(_PlanosCase):
     def test_raio_x_novo_grava_a_versao_do_saneamento(self):
         self._enviar_raio_x(("jan.csv", JANEIRO))
         self.assertEqual(self._linha().versao_regras, raio_x.VERSAO_REGRAS)
-        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.4")
+        # 11.4: saneamento de 11/2026; 11.5: unificação do motor (custo a confirmar, centavos, formatos).
+        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.5")
 
     def test_api_envia_e_le_o_raio_x(self):
         self.assertEqual(self.cliente_http.get(API).status_code, 404)
@@ -654,6 +794,27 @@ class RaioXPortalTests(_PlanosCase):
         self.assertIn("no-store", resposta.headers["Cache-Control"])
         self.assertEqual(self.cliente_http.get(API).get_json()["resultado"]["saude"],
                          corpo["resultado"]["saude"])
+
+    def test_envio_em_xls_e_em_planilha_xml_como_o_erp_exporta(self):
+        from tests import leiautes_erp_support as leiautes
+        pasta = tempfile.TemporaryDirectory(prefix="raio-x-formatos-")
+        self.addCleanup(pasta.cleanup)
+        linhas, mesclas, formatos, verdade = leiautes.relatorio_por_produto()
+        xls = Path(leiautes.gravar_xls(linhas, mesclas, formatos, Path(pasta.name) / "giro.xls")).read_bytes()
+        xml = Path(leiautes.gravar_planilha_xml(linhas, mesclas, Path(pasta.name) / "giro.xml")).read_bytes()
+        for nome, conteudo in (("giro.xls", xls), ("giro.xml", xml)):
+            with self.subTest(arquivo=nome):
+                resposta = self._enviar_raio_x((nome, conteudo), api=True)
+                self.assertEqual(resposta.status_code, 201, resposta.get_data(as_text=True)[:300])
+                self.assertEqual(resposta.get_json()["resultado"]["saude"]["faturamento_total"], verdade["venda"])
+        self.assertEqual(self._linha().versao_regras, raio_x.VERSAO_REGRAS)
+        # Página HTML com a extensão .xls (a "exportação para Excel" de sistemas web) continua recusada,
+        # e o Raio-X gravado fica como estava.
+        html = b"<html><body><table><tr><td>Produto</td><td>Qtde</td></tr></table></body></html>"
+        recusa = self._enviar_raio_x(("exportado.xls", html), api=True)
+        self.assertEqual((recusa.status_code, recusa.get_json()["codigo"]), (422, "quarentena:marcacao"))
+        self.assertIn("Arquivo 1: arquivo fora do padrão aceito", recusa.get_json()["erro"])
+        self.assertIn('accept=".csv,.xlsx,.xls,.xml"', self.cliente_http.get(PAGINA).get_data(as_text=True))
 
     def test_api_sem_csrf_e_recusada(self):
         resposta = self.cliente_http.post(API, data={"arquivos": [(io.BytesIO(JANEIRO), "jan.csv")]},

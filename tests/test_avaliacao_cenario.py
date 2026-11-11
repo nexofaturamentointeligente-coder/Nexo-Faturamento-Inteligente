@@ -451,6 +451,20 @@ class ContratoTests(_Arquivos):
             with self.subTest(caso=caso):
                 self._invalido(mudar)
 
+    def test_meta_aceita_ate_sessenta_relatorios_e_recusa_sessenta_e_um(self):
+        """O teto de relatórios da meta é o das fatias mensais (raio_x.MAX_FATIAS): 60 passam, 61 não (pedido
+        pelo teste de mutação da revisão final: nenhum teste fixava a fronteira)."""
+        def meta(no_primeiro_ano, no_segundo):
+            copia = json.loads(json.dumps(self.valido["meta"]))
+            primeiro, segundo = sorted(copia["arquivos_por_ano"])
+            copia["arquivos_por_ano"] = {primeiro: no_primeiro_ano, segundo: no_segundo}
+            copia["arquivos"] = no_primeiro_ano + no_segundo
+            return copia
+
+        self.assertEqual(raio_x.MAX_FATIAS, 60)
+        self.assertTrue(etl_runtime._meta_valida(meta(30, 30), avaliacao_motor.VERSAO_REGRAS_LEAD))
+        self.assertFalse(etl_runtime._meta_valida(meta(31, 30), avaliacao_motor.VERSAO_REGRAS_LEAD))
+
     def test_colunas_da_etapa_2_fora_do_formato_sao_recusadas(self):
         from tests.test_cadastro_regression import montar_conjuntos
         conjuntos = montar_conjuntos(self.pasta)
@@ -933,6 +947,28 @@ class RotasTests(_BancoCase):
             self.assertIn(texto, html)
         self.assertNotIn("Triagem feita com regras anteriores", html)
         self.assertIn("Mercado fictício", self.client.get(self.PAGINA).get_data(as_text=True))
+
+    def test_venda_item_a_item_em_xls_de_varios_anos_vira_um_relatorio_por_mes(self):
+        """O .xls que o ERP exporta, com a data de cada venda e 36 meses no cabeçalho: lido direto, sem
+        conversão, e fatiado por mês em memória."""
+        from models import LeadAvaliacao
+        from tests import leiautes_erp_support as leiautes
+        linhas, mesclas, formatos, verdade = leiautes.relatorio_detalhado()
+        xls = Path(leiautes.gravar_xls(linhas, mesclas, formatos, self.pasta / "detalhado.xls")).read_bytes()
+        self.login("admin-test@example.invalid")
+        pagina = self.client.get(self.PAGINA).get_data(as_text=True)
+        self.assertIn('accept=".csv,.xlsx,.xls,.xml"', pagina)
+        resposta = self._enviar(("giro_detalhado.xls", xls))
+        self.assertEqual(resposta.status_code, 303, resposta.get_data(as_text=True)[:500])
+        lead = self.db.session.scalar(select(LeadAvaliacao))
+        # Um relatório por mês do período do cabeçalho (09/11/2023 a 09/11/2026).
+        self.assertEqual(lead.arquivos, 37)
+        self.assertEqual((lead.periodo_inicio, lead.periodo_fim), (date(2023, 11, 9), date(2026, 11, 9)))
+        meta = json.loads(lead.meta_json)
+        self.assertEqual(meta["arquivos_por_ano"], {"2023": 2, "2024": 12, "2025": 12, "2026": 11})
+        self.assertEqual(meta["linhas_lidas"], verdade["itens"])
+        html = self.client.get(f"{self.PAGINA}/{lead.id}").get_data(as_text=True)
+        self.assertIn("37 relatório(s)", html)
 
     def test_triagem_de_versao_anterior_nao_mistura_motivos_novos(self):
         from models import LeadAvaliacao

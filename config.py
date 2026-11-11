@@ -272,8 +272,9 @@ class Config:
     # Quando não há credenciais, o envio é suprimido pela camada emails.py
     # (sem quebrar fluxos). Flag derivada para checagem rápida nos gatilhos.
     MAIL_ATIVO = bool((MAIL_USERNAME and MAIL_PASSWORD) or BREVO_API_KEY)
-    # Formatos REALMENTE suportados pelo ETL. .xls fica de fora porque não há
-    # dependência (xlrd) nem caminho de leitura — não anunciamos o que não lemos.
+    # Formatos aceitos no envio das análises mensais, em que o arquivo é guardado. O .xls e a
+    # Planilha XML são lidos só no Raio-X e na Avaliação de Cenário, em que o arquivo é lido e
+    # descartado (Docs/UNIFICACAO_MOTOR_ETL.md): aqui continuam de fora.
     ALLOWED_EXTENSIONS = {"csv", "xlsx"}
 
     # SEC-005: limites finitos; valores invalidos impedem inicializacao.

@@ -12,12 +12,18 @@ do motor em 53020e6, ANTES da Etapa 2, e todo valor tem de continuar idêntico, 
 Além disso, nos mesmos relatórios, o Raio-X que a Avaliação de Cenário devolve junto da matriz é
 o mesmo de raio_x.diagnosticar.
 
+Mudanças aprovadas depois da captura (MUDANCAS_APROVADAS; todo o resto continua idêntico): a unificação
+do motor de 11/2026 subiu a versão das regras do Raio-X para 11.5 e acrescentou à auditoria o bloco
+"custo_a_confirmar" (itens de custo implausível, fora da perda e do recuperável). Nenhum relatório deste
+conjunto tem item assim: o bloco vem zerado, e o teste confere isso antes de comparar o resto.
+
 Recapturar (só com motivo documentado, numa cópia sem .env), informando o commit do motor que roda:
     python -B -m tests.test_cadastro_regression --capturar --commit <commit>
 e depois trocar COMMIT_DE_REFERENCIA para o mesmo commit.
 """
 
 from contextlib import ExitStack
+import copy
 import json
 from pathlib import Path
 import sys
@@ -30,6 +36,13 @@ from tests.test_raio_x_regression import _analise, _raio_x
 
 EXPECTED = Path(__file__).parent / "fixtures" / "cadastro_regression_expected.json"
 COMMIT_DE_REFERENCIA = "53020e6"
+
+# O que mudou de propósito no Raio-X depois da captura (ver o texto do módulo).
+MUDANCAS_APROVADAS = {
+    "versao": ("raio-x-2026-11.4", "raio-x-2026-11.5"),
+    "custo_a_confirmar": {"itens": 0, "faturamento_com_custo": 0.0, "custo_total": 0.0,
+                          "perda_desconsiderada": 0.0, "lista": []},
+}
 
 _COMPRAS = "Fornecedor;Valor NF\nDistribuidora Alfa;1.000,00\n"
 
@@ -143,13 +156,27 @@ class CadastroRegressaoTests(unittest.TestCase):
         cls.pasta = Path(pilha.enter_context(tempfile.TemporaryDirectory(prefix="nexo-cadastro-")))
         cls.atual = capturar(cls.pasta)
 
+    def _sem_as_mudancas_aprovadas(self, saida):
+        """A saída atual do Raio-X como a referência a gravou: confere e desfaz só as mudanças aprovadas."""
+        saida = copy.deepcopy(saida)
+        resultado = saida.get("resultado")
+        if resultado is not None:
+            antiga, nova = MUDANCAS_APROVADAS["versao"]
+            self.assertEqual(resultado["versao"], nova)
+            resultado["versao"] = antiga
+            self.assertEqual(resultado["auditoria"].pop("custo_a_confirmar"), MUDANCAS_APROVADAS["custo_a_confirmar"])
+        return saida
+
     def _grupo(self, grupo):
         esperado = self.referencia[grupo]
         self.assertEqual(sorted(self.atual[grupo]), sorted(esperado), f"{grupo}: casos diferentes")
         for caso, valor in esperado.items():
             with self.subTest(grupo=grupo, caso=caso):
+                atual = self.atual[grupo][caso]
+                if grupo == "raio_x":
+                    atual = self._sem_as_mudancas_aprovadas(atual)
                 # Idêntico, inclusive o tipo (o JSON gravado separa 10 de 10.0).
-                self.assertEqual(json.dumps(self.atual[grupo][caso], sort_keys=True),
+                self.assertEqual(json.dumps(atual, sort_keys=True),
                                  json.dumps(valor, sort_keys=True), f"{grupo}.{caso}")
 
     def test_raio_x_do_cliente_identico(self):

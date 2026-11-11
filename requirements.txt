@@ -1,7 +1,7 @@
 # NEXO - Faturamento Inteligente | Semanas 1 e 2
 # Plotly.js é JS e carrega via CDN — não entra aqui.
-# Suporte a .xls NÃO é declarado: o ETL lê .xlsx (openpyxl) e .csv. Para habilitar
-# .xls seria necessário adicionar 'xlrd' e o caminho de leitura correspondente.
+# O ETL lê .xlsx (openpyxl) e .csv. O .xls do Excel 97-2003 e a Planilha XML 2003 são lidos por
+# leitores próprios (etl_biff.py e etl_planilha_xml.py), sem dependência nova: o 'xlrd' não é usado.
 
 Flask==3.1.3
 Flask-SQLAlchemy==3.1.1

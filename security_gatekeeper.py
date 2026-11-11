@@ -30,9 +30,19 @@ No processo isolado do ETL (etl_worker, operação "validate", função triar):
     motor. Se a cópia não reproduz exatamente o que o motor leria do original, o arquivo é
     recusado: nada com conteúdo ativo é gravado e nenhum número muda em silêncio.
 
-O XLS (BIFF) é reconhecido, mas recusado com a orientação de salvar como .xlsx ou .csv: o
-motor isolado não lê esse formato. O TXT é lido como CSV (texto delimitado). O portal aceita
-hoje só .csv e .xlsx (config.ALLOWED_EXTENSIONS): habilitar .txt é decisão de produto.
+Dois destinos, duas listas de formatos:
+  - Arquivo GUARDADO (o envio das análises mensais, etl_uploads): só .csv e .xlsx
+    (config.ALLOWED_EXTENSIONS), porque a liberação grava o próprio arquivo ou a cópia só com valores
+    nesses dois formatos. O XLS (BIFF) é reconhecido e recusado com a orientação de salvar como .xlsx
+    ou .csv. O TXT é lido como CSV (texto delimitado); habilitá-lo é decisão de produto.
+  - LEITURA DIRETA (Raio-X e Avaliação de Cenário, inspecionar_arquivo(..., leitura_direta=True)): o
+    arquivo é lido no processo isolado e descartado, sem cópia a liberar. Além de .csv e .xlsx, passam
+    o .xls verdadeiro do Excel 97-2003 (OLE2 com o fluxo Workbook) e a Planilha XML 2003 (.xml com o
+    elemento Workbook da planilha, sem DOCTYPE nem entidade). Os leitores desses dois formatos
+    (etl_biff e etl_planilha_xml) só tiram valores de célula: a fórmula entra pelo valor guardado, e
+    macro, objeto embutido e vínculo ficam sem abrir. É o expurgo em memória: nada além de valores sai
+    do arquivo, e a leitura do motor neutraliza as células como nos outros formatos. HTML com a
+    extensão .xls (a "exportação para Excel" de sistemas web) continua recusado.
 """
 
 from __future__ import annotations
@@ -66,7 +76,23 @@ FORMATO_DE_LEITURA = {"xlsx": "xlsx", "csv": "csv", "txt": "csv"}
 NOME_LIBERADO = "liberado"
 _AMOSTRA = 8192
 
+# Formatos a mais da leitura direta (Raio-X e Avaliação de Cenário): o arquivo não é guardado.
+FORMATOS_DE_LEITURA_DIRETA = frozenset({"xls", "xml"})
+_ESPACO_DA_PLANILHA_XML = b"urn:schemas-microsoft-com:office:spreadsheet"
+_RE_WORKBOOK_XML = re.compile(rb"<(?:[a-z0-9_.-]+:)?workbook[\s>]")
+
 ORIENTACAO_XLS = "Salve a planilha como .xlsx ou .csv e envie novamente."
+# O .xls que não é a planilha do Excel 97-2003: a página HTML, a Planilha XML ou o texto delimitado que
+# muitos sistemas exportam com a extensão .xls, o .xlsx renomeado, o Excel antigo sem contêiner, outro
+# documento do Office. A frase não afirma que o arquivo não é planilha: o motivo documento_ole também sai
+# para a planilha verdadeira em que a Baia não acha a pasta de trabalho (ver _ole_e_planilha).
+ORIENTACAO_XLS_ILEGIVEL = ("Não foi possível reconhecer o arquivo .xls como planilha do Excel 97-2003 (ele pode ser "
+                           "uma página HTML ou um texto com a extensão trocada). Abra no Excel, salve como .xlsx "
+                           "e envie novamente.")
+_MOTIVOS_DO_XLS_ILEGIVEL = frozenset({"marcacao", "binario", "documento_ole", "disfarce_texto_como_xls",
+                                      "disfarce_zip_como_xls"})
+ORIENTACAO_XML = ("O .xml precisa ser uma Planilha XML 2003 do Excel. Salve a planilha como .xlsx e envie "
+                  "novamente.")
 ORIENTACAO_EXTENSAO = "O conteúdo não corresponde à extensão do arquivo."
 ORIENTACAO_ESTRUTURA = ("O relatório precisa ter colunas legíveis de produto e de quantidade ou valor, "
                         "como o PDV exporta.")
@@ -214,27 +240,52 @@ def identificar_conteudo(amostra: bytes, caminho=None) -> str:
     return "texto"
 
 
-def inspecionar_arquivo(caminho, extensao: str, *, rotulo: str | None = None) -> str:
+def _e_planilha_xml(amostra: bytes) -> bool:
+    """A amostra é o começo de uma Planilha XML 2003 (SpreadsheetML)? Texto que começa pela declaração XML
+    ou pelo próprio elemento, com o elemento Workbook no espaço de nomes da planilha e sem DOCTYPE nem
+    declaração de entidade (o leitor recusa as duas em qualquer ponto do arquivo). HTML, SVG e qualquer
+    outro XML ficam de fora."""
+    if not _e_texto(amostra) or not _inicio_textual(amostra).startswith((b"<?xml", b"<workbook", b"<ss:workbook")):
+        return False
+    corpo = amostra.replace(b"\x00", b"").lower()
+    return (b"<!doctype" not in corpo and b"<!entity" not in corpo and _ESPACO_DA_PLANILHA_XML in corpo
+            and _RE_WORKBOOK_XML.search(corpo) is not None)
+
+
+def inspecionar_arquivo(caminho, extensao: str, *, rotulo: str | None = None, leitura_direta: bool = False) -> str:
     """Primeira triagem, no processo do servidor, lendo só os primeiros bytes do arquivo já
-    gravado com teto. Devolve o formato em que o motor deve lê-lo ("xlsx" ou "csv")."""
+    gravado com teto. Devolve o formato em que o motor deve lê-lo ("xlsx" ou "csv"; na leitura
+    direta, também "xls" e "xml").
+
+    `leitura_direta`: o arquivo vai ser lido no processo isolado e descartado (Raio-X e Avaliação de
+    Cenário), sem cópia a liberar. Só aí passam o .xls verdadeiro e a Planilha XML 2003."""
     extensao = (extensao or "").lower().lstrip(".")
     try:
-        if extensao not in EXTENSOES_RECONHECIDAS:
+        if extensao not in EXTENSOES_RECONHECIDAS and not (leitura_direta and extensao in FORMATOS_DE_LEITURA_DIRETA):
             raise SecurityGatekeeperError("extensao_nao_aceita")
         with open(caminho, "rb") as arquivo:
             amostra = arquivo.read(_AMOSTRA)
+        if extensao == "xml":
+            if not amostra:
+                raise SecurityGatekeeperError("vazio")
+            if not _e_planilha_xml(amostra):
+                raise SecurityGatekeeperError("xml_nao_e_planilha", ORIENTACAO_XML)
+            return "xml"
         natureza = identificar_conteudo(amostra, caminho)
         if natureza == "xls":
-            # Excel 97-2003 verdadeiro: reconhecido, mas o motor isolado não lê BIFF.
+            if leitura_direta and extensao == "xls":
+                return "xls"  # Excel 97-2003 verdadeiro: lido pelo etl_biff, só os valores das células
+            # Arquivo guardado: reconhecido, mas a liberação só grava .csv e .xlsx.
             raise SecurityGatekeeperError("xls_binario" if extensao == "xls" else "xls_disfarcado", ORIENTACAO_XLS)
         esperado = "zip" if FORMATO_DE_LEITURA.get(extensao) == "xlsx" else "texto"
         if extensao == "xls" or natureza != esperado:
             raise SecurityGatekeeperError(f"disfarce_{natureza}_como_{extensao}", ORIENTACAO_EXTENSAO)
         return FORMATO_DE_LEITURA[extensao]
     except SecurityGatekeeperError as erro:
-        if rotulo:
-            raise SecurityGatekeeperError(erro.motivo, erro.orientacao, rotulo=rotulo) from None
-        raise
+        orientacao = erro.orientacao
+        if extensao == "xls" and erro.motivo in _MOTIVOS_DO_XLS_ILEGIVEL:
+            orientacao = ORIENTACAO_XLS_ILEGIVEL
+        raise SecurityGatekeeperError(erro.motivo, orientacao, rotulo=rotulo) from None
 
 
 def ler_liberado(entrada, extensao: str, teto: int) -> bytes | None:
