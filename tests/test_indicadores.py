@@ -1662,11 +1662,24 @@ class IngestaoEmLoteTests(_Arquivos):
         self.assertEqual(self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(self.RESUMO), self.csv(self.COMPRAS)]),
                          MENSAGEM_DE_COMPRAS.replace("Arquivo 1", "Arquivo 2"))
 
-    def test_sem_ancora_a_tabela_auxiliar_e_recusada_como_antes(self):
-        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(self.RESUMO), self.csv(self.POSICAO)])
-        self.assertTrue(mensagem.startswith("Arquivo 2: não foi possível identificar produto"), mensagem)
-        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(self.PRECOS), self.csv(self.RESUMO)])
-        self.assertTrue(mensagem.startswith("Arquivo 1: não foi possível identificar produto"), mensagem)
+    def test_sem_ancora_a_tabela_auxiliar_fica_fora_das_contas_e_sozinha_e_recusada(self):
+        """Diretriz de 11/2026: a tabela auxiliar nunca passa pela trava de produto, quantidade e valor de venda. Com
+        relatório de vendas no envio e sem a âncora, ela fica fora das contas (não há o que completar); sem relatório de
+        vendas, o envio é recusado com o que o arquivo é."""
+        cliente = executar_como_o_worker([self.csv(self.RESUMO), self.csv(self.POSICAO)])
+        self.assertEqual(cliente["saude"]["faturamento_total"], 210.0)
+        self.assertIn("O arquivo 2 é uma posição de estoque, uma tabela auxiliar que só completa a venda item a item",
+                      " ".join(cliente["avisos"]))
+        cliente = executar_como_o_worker([self.csv(self.PRECOS), self.csv(self.RESUMO)])
+        self.assertEqual(cliente["saude"]["faturamento_total"], 210.0)
+        self.assertIn("O arquivo 1 é uma lista de preços", " ".join(cliente["avisos"]))
+        for textos, inicio in (([self.POSICAO], "Arquivo 1: o arquivo é uma posição de estoque"),
+                               ([self.PRECOS, self.POSICAO], "Arquivo 1: o arquivo é uma lista de preços"),
+                               ([self.DOCUMENTOS], "Arquivo 1: o arquivo é um resumo por pedido ou documento")):
+            with self.subTest(primeiro=textos[0].split("\n")[0]):
+                mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(texto) for texto in textos])
+                self.assertTrue(mensagem.startswith(inicio), mensagem)
+                self.assertNotIn("não foi possível identificar produto", mensagem)
 
     def test_outra_loja_ou_outro_periodo_continua_somando_como_venda(self):
         com_loja = self.ANCORA.replace("Data;Nr. Doc.;", "Data;Loja;Nr. Doc.;").replace(";P1-", ";LOJA 1;P1-")
@@ -1711,6 +1724,631 @@ class IngestaoEmLoteTests(_Arquivos):
                          ("calculado", "calculado", "calculado"))
         self.assertEqual(ind["ticket_medio"], ind_sozinho["ticket_medio"])
         self.assertTrue(indicadores_executivos.valido(lote["indicadores_executivos"]))
+
+
+class LeiautesReaisDoLoteTests(_Arquivos):
+    """A classificação prévia do lote e os leiautes reais do ERP da Opção 27 (11/2026), nas réplicas com os dados
+    inventados de tests/leiautes_erp_support.py: a posição de estoque, o inventário, a lista de preços, o resumo por
+    documento, a posição das compras e os resumos de vendas sem produto, gravados em .xls como o ERP exporta."""
+
+    HOJE = date(2026, 11, 9)
+
+    def setUp(self):
+        super().setUp()
+        from tests import leiautes_erp_support
+        self.leiautes = leiautes_erp_support
+
+    def xls(self, nome, relatorio):
+        self.numero += 1
+        return self.leiautes.gravar_xls(*relatorio[:3], self.pasta / f"{self.numero:02d}_{nome}.xls")
+
+    def auxiliar(self, nome, **opcoes):
+        return self.xls(nome, self.leiautes.AUXILIARES[nome](**opcoes))
+
+    def ancora(self):
+        return self.xls("detalhado", self.leiautes.relatorio_detalhado(clientes=1))
+
+    @staticmethod
+    def lido(caminho):
+        return raio_x._ler_arquivo_do_envio(caminho, 1, True, auxiliar=True)
+
+    def estoque_a_custo(self, estoque=None):
+        estoque = self.leiautes.ESTOQUE if estoque is None else estoque
+        return round(sum(item[4] * item[7] for item in estoque if item[4] > 0), 2)
+
+    def test_cada_leiaute_e_classificado_antes_da_trava_de_vendas(self):
+        casos = {"posicao_de_estoque": ("estoque", "posição de estoque"),
+                 "inventario": ("estoque", "inventário de estoque"),
+                 "lista_de_precos": ("precos", "lista de preços"),
+                 "por_documento": ("documentos", "resumo por pedido ou documento"),
+                 "posicao_de_compras": ("compras", None)}
+        for nome, (papel, rotulo) in casos.items():
+            with self.subTest(relatorio=nome):
+                lido = self.lido(self.auxiliar(nome))
+                self.assertIsNone(lido.df)
+                self.assertEqual((lido.tabela["papel"], lido.tabela.get("rotulo")), (papel, rotulo))
+                self.assertNotIn("não foi possível identificar produto", lido.recusa.safe_message)
+        for nome in ("por_fornecedor", "por_grupo_de_produto", "por_grupo_de_cliente", "por_forma_de_pagamento",
+                     "ranking_de_clientes"):
+            with self.subTest(relatorio=nome):
+                self.assertEqual(self.lido(self.xls(nome, self.leiautes.RELATORIOS[nome]())).tabela["papel"],
+                                 "resumo_de_vendas")
+        self.assertEqual(self.lido(self.xls("abaixo", self.leiautes.relatorio_abaixo_do_custo())).tabela["papel"],
+                         "ambiguo")
+        # A Opção 27 e o relatório por produto continuam relatórios de vendas.
+        for nome in ("detalhado", "por_produto"):
+            with self.subTest(relatorio=nome):
+                self.assertIsNotNone(self.lido(self.xls(nome, self.leiautes.RELATORIOS[nome]())).df)
+
+    def test_o_que_cada_leiaute_real_da(self):
+        estoque = self.leiautes.ESTOQUE
+        posicao = self.lido(self.auxiliar("posicao_de_estoque")).tabela
+        produtos = posicao["produtos"].set_index("nome")
+        self.assertEqual(len(produtos), len(estoque))
+        self.assertEqual(produtos["estoque"].to_dict(), {item[3]: item[4] for item in estoque})
+        self.assertEqual(produtos["custo_unitario"].to_dict(), {item[3]: item[7] for item in estoque})
+        self.assertEqual(produtos.at["MASSA DE REPARO FICTICIA 1KG", "codigo"], "700019")  # o "0700019" do resumido
+        self.assertEqual((posicao["loja"], posicao["data"], posicao["prioridade"]),
+                         ("009 loja ficticia", date(2026, 11, 9), 0))
+        # O inventário: duas páginas, o título da descrição com as letras separadas e a data do período.
+        inventario = self.lido(self.auxiliar("inventario")).tabela
+        produtos = inventario["produtos"].set_index("nome")
+        self.assertEqual(produtos["estoque"].to_dict(), {item[3]: item[4] for item in estoque})
+        self.assertEqual(produtos["custo_unitario"].to_dict(), {item[3]: item[7] for item in estoque})
+        self.assertEqual((inventario["loja"], inventario["data"], inventario["prioridade"]), (None, date(2026, 11, 9), 1))
+        # A lista de preços: as duas linhas de cada produto (os grupos de preço), sem os parâmetros do topo.
+        precos = self.lido(self.auxiliar("lista_de_precos")).tabela["produtos"]
+        self.assertEqual(len(precos), 2 * len(self.leiautes.PRECOS))
+        self.assertEqual(precos["chave_nome"].nunique(), len(self.leiautes.PRECOS))
+        self.assertEqual(sorted(precos["preco"]), sorted(p for _c, _n, *dupla in self.leiautes.PRECOS for p in dupla))
+        # Com o produto e o grupo de preço na mesma linha de parâmetros, ela continua não sendo o cabeçalho.
+        precos = self.lido(self.auxiliar("lista_de_precos", parametros_juntos=True)).tabela["produtos"]
+        self.assertEqual((len(precos), precos["chave_nome"].nunique()),
+                         (2 * len(self.leiautes.PRECOS), len(self.leiautes.PRECOS)))
+        # O resumo por documento: o percentual sobre o bruto vira reais (valor x p / (100 - p)).
+        documentos = self.lido(self.auxiliar("por_documento")).tabela["documentos"]
+        self.assertEqual(sorted(documentos.index), [f"P9-{n}" for n in range(1, 6)])
+        self.assertEqual(round(float(documentos["desconto"].sum()), 2), self.leiautes.DESCONTO_DOS_DOCUMENTOS)
+        self.assertEqual(round(float(documentos.at["P9-1", "desconto"]), 2), 5.81)
+        # O percentual de 100% ou mais é inconsistente e fica de fora.
+        from datetime import datetime
+        com_120 = self.leiautes.DOCUMENTOS + [("VENDEDOR FICTICIO B", "P9-00006", datetime(2026, 1, 5), "CONSUMIDOR",
+                                                10.0, 120.0)]
+        documentos = self.lido(self.auxiliar("por_documento", documentos=com_120)).tabela["documentos"]
+        self.assertEqual(round(float(documentos["desconto"].sum()), 2), self.leiautes.DESCONTO_DOS_DOCUMENTOS)
+        # Todo percentual até 1 pode ser a fração (0,2 = 20%): o desconto fica de fora, e não 100 vezes menor.
+        em_fracao = [documento[:5] + (documento[5] / 100,) for documento in self.leiautes.DOCUMENTOS]
+        tabela = self.lido(self.auxiliar("por_documento", documentos=em_fracao)).tabela
+        self.assertEqual(tabela["papel"], "documentos")
+        self.assertNotIn("desconto", tabela["documentos"].columns)
+        # O fornecedor em branco na maior parte dos produtos não desfaz o alinhamento da posição de estoque.
+        produtos = self.lido(self.auxiliar("posicao_de_estoque", fornecedor_so_no_primeiro=True)).tabela["produtos"]
+        self.assertEqual(produtos.set_index("nome")["estoque"].to_dict(),
+                         {item[3]: item[4] for item in self.leiautes.ESTOQUE})
+
+    def test_a_opcao_27_com_os_auxiliares_reais_nas_duas_rotas(self):
+        ancora = self.ancora()
+        auxiliares = [self.auxiliar(nome) for nome in self.leiautes.AUXILIARES]
+        sozinha = executar_como_o_worker([ancora])
+        for executor, extra in ((executar_como_o_worker, {}), (avaliar_como_o_worker, {"hoje": self.HOJE})):
+            with self.subTest(rota=executor.__name__):
+                resultado = executor([ancora] + auxiliares, **extra)
+                raio = resultado.get("raio_x", resultado)
+                self.assertEqual(raio["saude"]["faturamento_total"], sozinha["saude"]["faturamento_total"])
+                ind = raio["indicadores_executivos"]["indicadores"]
+                self.assertEqual(ind["ticket_medio"], sozinha["indicadores_executivos"]["indicadores"]["ticket_medio"])
+                self.assertEqual((ind["indice_descontos"]["status"], ind["indice_descontos"]["descontos"]),
+                                 ("calculado", self.leiautes.DESCONTO_DOS_DOCUMENTOS))
+                self.assertEqual(ind["margem"]["status"], "calculado")
+                # O saldo é o da posição de estoque: o inventário da mesma loja e da mesma data não soma.
+                self.assertEqual(ind["giro_estoque"]["estoque_a_custo"], self.estoque_a_custo())
+                # O cadastro: os 7 produtos do estoque e a fita, que só a lista de preços traz.
+                self.assertEqual((ind["mix"]["skus_vendidos"], ind["mix"]["skus_cadastrados"]), (5, 8))
+                avisos = " ".join(raio["avisos"])
+                for trecho in ("O arquivo 2 entrou como posição de estoque", "O arquivo 3 entrou como inventário de estoque",
+                               "O arquivo 4 entrou como lista de preços", "O arquivo 5 entrou como resumo por pedido",
+                               "O arquivo 6 é um relatório de compras",
+                               "O saldo de estoque veio do arquivo 2; o arquivo 3 traz o saldo dos mesmos produtos"):
+                    self.assertIn(trecho, avisos)
+
+    def test_o_lote_com_todos_os_relatorios_da_pasta(self):
+        """O envio do dono: a Opção 27 com os resumos do mesmo ERP (por produto, por fornecedor, por grupo, por forma de
+        pagamento, o ranking de clientes, o de vendas abaixo do custo) e os auxiliares. Nenhum é recusado, e o
+        faturamento é o da Opção 27."""
+        ancora = self.ancora()
+        outros = [self.xls(nome, relatorio()) for nome, relatorio in self.leiautes.RELATORIOS.items() if nome != "detalhado"]
+        outros += [self.auxiliar(nome) for nome in self.leiautes.AUXILIARES]
+        sozinha = executar_como_o_worker([ancora])
+        for executor, extra in ((executar_como_o_worker, {}), (avaliar_como_o_worker, {"hoje": self.HOJE})):
+            with self.subTest(rota=executor.__name__):
+                resultado = executor([ancora] + outros, **extra)
+                raio = resultado.get("raio_x", resultado)
+                self.assertEqual(raio["saude"]["faturamento_total"], sozinha["saude"]["faturamento_total"])
+                avisos = " ".join(raio["avisos"])
+                self.assertEqual(avisos.count("é um resumo de vendas sem produto"), 5)
+                self.assertIn("é um relatório de vendas de leiaute ambíguo", avisos)
+                self.assertIn("entrou como tabela auxiliar (custo, estoque e cadastro por produto)", avisos)
+
+    def _estoque_do_lote(self, *auxiliares):
+        resultado = executar_como_o_worker([self.ancora(), *auxiliares])
+        indicadores = resultado["indicadores_executivos"]["indicadores"]
+        return indicadores["giro_estoque"]["estoque_a_custo"], indicadores, " ".join(resultado["avisos"])
+
+    def test_tabelas_de_estoque_so_somam_entre_lojas_diferentes(self):
+        pincel = "PINCEL FICTICIO 2 POL"
+        base = self.estoque_a_custo()
+        # Mesma data: vale a posição de estoque (o inventário com o pincel em 8 fica de fora).
+        valor, _ind, avisos = self._estoque_do_lote(self.auxiliar("inventario", saldos={pincel: 8.0}),
+                                                    self.auxiliar("posicao_de_estoque"))
+        self.assertEqual(valor, base)
+        self.assertIn("O saldo de estoque veio do arquivo 3; o arquivo 2 traz o saldo dos mesmos produtos", avisos)
+        # A data é o FIM do período do cabeçalho: o inventário de 01/11 a 30/11 vence a posição de 09/11.
+        inventario = self.auxiliar("inventario", saldos={pincel: 8.0}, dia="01/11/2026 a 30/11/2026")
+        self.assertEqual(self.lido(inventario).tabela["data"], date(2026, 11, 30))
+        valor, _ind, _avisos = self._estoque_do_lote(self.auxiliar("posicao_de_estoque"), inventario)
+        self.assertEqual(valor, base - 2 * 4.0)
+        # A data num rótulo ("Emitido em:") é lida: a posição de 10/11 vence o inventário de 09/11.
+        posicao = self.auxiliar("posicao_de_estoque", emissao=None, emitido_em="10/11/2026 10:35")
+        self.assertEqual(self.lido(posicao).tabela["data"], date(2026, 11, 10))
+        valor, _ind, _avisos = self._estoque_do_lote(self.auxiliar("inventario", saldos={pincel: 8.0}), posicao)
+        self.assertEqual(valor, base)
+        # A tabela sem data é a mais antiga, como o relatório sem período: a posição datada vence.
+        sem_data = self.auxiliar("posicao_de_estoque", emissao=None, estoque=[
+            item[:4] + (8.0,) + item[5:] if item[3] == pincel else item for item in self.leiautes.ESTOQUE])
+        valor, _ind, avisos = self._estoque_do_lote(sem_data, self.auxiliar("posicao_de_estoque"))
+        self.assertEqual(valor, base)
+        self.assertIn("O saldo de estoque veio do arquivo 3", avisos)
+        # A tabela que traz produto que a outra não tem completa só esse produto.
+        sem_o_pincel = [item for item in self.leiautes.ESTOQUE if item[3] != pincel]
+        valor, _ind, avisos = self._estoque_do_lote(self.auxiliar("posicao_de_estoque", estoque=sem_o_pincel),
+                                                    self.auxiliar("inventario"))
+        self.assertEqual(valor, base)
+        self.assertIn("O saldo de estoque veio do arquivo 2; o arquivo 3 só completou os produtos que ele não traz",
+                      avisos)
+        # Os depósitos da mesma tabela (o produto em duas linhas) somam.
+        dois_depositos = self.leiautes.ESTOQUE + [("GRUPO FICTICIO C", "000008000.10", 11.0, pincel, 5.0, 0.0, 0.0, 4.0,
+                                                   96034010.0)]
+        valor, _ind, _avisos = self._estoque_do_lote(self.auxiliar("posicao_de_estoque", estoque=dois_depositos))
+        self.assertEqual(valor, base + 5 * 4.0)
+        # Duas lojas com nome diferentes no topo somam, com a empresa (a mesma) acima da filial, com uma segunda tabela
+        # da loja A e com um inventário sem a loja no topo (que só completaria o produto que nenhuma traz).
+        loja_a = self.auxiliar("posicao_de_estoque", loja="001 - LOJA FICTICIA A", empresa="COMERCIO FICTICIO LTDA")
+        loja_b = self.auxiliar("posicao_de_estoque", loja="002 - LOJA FICTICIA B", empresa="COMERCIO FICTICIO LTDA")
+        valor, _ind, avisos = self._estoque_do_lote(loja_a, loja_b)
+        self.assertEqual(valor, 2 * base)
+        self.assertIn("O saldo de estoque soma as tabelas de 2 lojas diferentes (os arquivos 2 e 3).", avisos)
+        outra_da_a = self.auxiliar("posicao_de_estoque", loja="001 - LOJA FICTICIA A", estoque=dois_depositos)
+        valor, _ind, avisos = self._estoque_do_lote(loja_a, loja_b, outra_da_a, self.auxiliar("inventario"))
+        self.assertEqual(valor, 2 * base)
+        self.assertIn("os arquivos 4 e 5 trazem o saldo dos mesmos produtos", avisos)
+        # O rótulo da filial numa célula e o nome na seguinte também identificam a loja.
+        valor, _ind, _avisos = self._estoque_do_lote(
+            self.auxiliar("posicao_de_estoque", loja="001 - LOJA FICTICIA A", loja_em_duas_celulas=True),
+            self.auxiliar("posicao_de_estoque", loja="002 - LOJA FICTICIA B", loja_em_duas_celulas=True))
+        self.assertEqual(valor, 2 * base)
+        # A empresa sozinha e a filial "Todas" não são uma loja: não somam com a filial (dobraria o estoque).
+        for outra in (self.auxiliar("posicao_de_estoque", loja=None, empresa="COMERCIO FICTICIO LTDA"),
+                      self.auxiliar("posicao_de_estoque", loja="Todas")):
+            valor, _ind, _avisos = self._estoque_do_lote(outra, self.auxiliar("posicao_de_estoque",
+                                                                             loja="001 - LOJA FICTICIA A"))
+            self.assertEqual(valor, base)
+
+    def test_ancora_com_codigo_e_com_lojas(self):
+        """A verificação do código final: com a âncora com código, a tabela sem código não fica de fora e os códigos com
+        o mesmo nome somam; o relatório por produto com lojas da âncora e de fora é recusado."""
+        ancora = self.csv("Relatorio de vendas item a item\nPeriodo: 01/10/2025 a 31/10/2025\n"
+                          "Data;Nr. Doc.;Codigo;Produto;Qtde;Valor Total\n06/10/2025;P1-0001;1;CAFE 500G;1;20,00\n"
+                          "11/10/2025;P1-0002;1;CAFE 500G;2;40,00\n06/10/2025;P1-0001;2;LEITE 1L;2;10,00\n"
+                          "25/10/2025;P1-0004;2;LEITE 1L;3;15,00\n")
+        loja_a = self.csv("Posicao de Estoque\nFilial: 001 - LOJA A\nCodigo;Descricao;Saldo Atual;Custo Medio\n"
+                          "1;CAFE 500G;25;11,00\n2;LEITE 1L;9;3,00\n")
+        loja_b_sem_codigo = self.csv("Posicao de Estoque\nFilial: 002 - LOJA B\nDescricao;Saldo Atual;Custo Medio\n"
+                                     "CAFE 500G;30;11,00\nLEITE 1L;4;3,00\n")
+        resultado = executar_como_o_worker([ancora, loja_a, loja_b_sem_codigo])
+        self.assertEqual(resultado["indicadores_executivos"]["indicadores"]["giro_estoque"]["estoque_a_custo"],
+                         55 * 11.0 + 13 * 3.0)
+        dois_codigos = self.csv("Posicao de Estoque\nCodigo;Descricao;Saldo Atual;Custo Medio\n1;CAFE 500G;25;11,00\n"
+                                "2;LEITE 1L;9;3,00\n3;LEITE 1L;4;3,00\n")
+        resultado = executar_como_o_worker([ancora, dois_codigos])
+        self.assertEqual(resultado["indicadores_executivos"]["indicadores"]["giro_estoque"]["estoque_a_custo"],
+                         25 * 11.0 + 13 * 3.0)
+        com_loja = IngestaoEmLoteTests.ANCORA.replace("Data;Nr. Doc.;", "Data;Loja;Nr. Doc.;").replace(";P1-", ";LOJA A;P1-")
+        misto = ("Giro de vendas por produto\nPeriodo: 01/10/2025 a 31/10/2025\nLoja;Codigo;Produto;Qtde;Valor Total\n"
+                 "LOJA A;1;CAFE 500G;4;80,00\nLOJA B;2;LEITE 1L;10;50,00\n")
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(com_loja), self.csv(misto)])
+        self.assertTrue(mensagem.startswith("Arquivo 2: o relatório traz vendas de lojas que a venda item a item"),
+                        mensagem)
+
+    def test_custo_do_estoque_vem_da_tabela_que_deu_o_saldo(self):
+        """Achado da revisão de 11/2026: o inventário antigo, que fica fora do saldo, não entra no custo."""
+        _valor, so_a_posicao, _avisos = self._estoque_do_lote(self.auxiliar("posicao_de_estoque"))
+        antigo = [item[:4] + (item[4] * 10,) + item[5:7] + (item[7] * 2,) + item[8:] for item in self.leiautes.ESTOQUE]
+        valor, indicadores, _avisos = self._estoque_do_lote(
+            self.auxiliar("posicao_de_estoque"), self.auxiliar("inventario", estoque=antigo, dia="31/12/2024"))
+        self.assertEqual(valor, self.estoque_a_custo())
+        self.assertEqual(indicadores["cmv"]["valor"], so_a_posicao["cmv"]["valor"])
+
+    def test_sem_a_opcao_27(self):
+        por_produto = self.xls("por_produto", self.leiautes.relatorio_por_produto())
+        sozinho = executar_como_o_worker([por_produto])["saude"]["faturamento_total"]
+        # Com relatório de vendas no envio, a tabela auxiliar e o resumo sem produto ficam fora das contas.
+        for nome, trecho in (("posicao_de_estoque", "O arquivo 2 é uma posição de estoque, uma tabela auxiliar"),
+                             ("lista_de_precos", "O arquivo 2 é uma lista de preços, uma tabela auxiliar"),
+                             ("por_documento", "O arquivo 2 é um resumo por pedido ou documento")):
+            with self.subTest(relatorio=nome):
+                resultado = executar_como_o_worker([por_produto, self.auxiliar(nome)])
+                self.assertEqual(resultado["saude"]["faturamento_total"], sozinho)
+                self.assertIn(trecho, " ".join(resultado["avisos"]))
+        resultado = executar_como_o_worker([por_produto, self.xls("fornecedor", self.leiautes.relatorio_por_fornecedor())])
+        self.assertEqual(resultado["saude"]["faturamento_total"], sozinho)
+        self.assertIn("O arquivo 2 é um resumo de vendas sem produto", " ".join(resultado["avisos"]))
+        # Só tabelas auxiliares: a recusa diz o que o arquivo é, sem a trava de produto, quantidade e valor de venda.
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               [self.auxiliar("lista_de_precos"), self.auxiliar("posicao_de_estoque")])
+        self.assertTrue(mensagem.startswith("Arquivo 1: o arquivo é uma lista de preços, uma tabela auxiliar"), mensagem)
+        mensagem = self.recusa("raio_x_dados", avaliar_como_o_worker, [self.auxiliar("inventario")], hoje=self.HOJE)
+        self.assertTrue(mensagem.startswith("Arquivo 1: o arquivo é um inventário de estoque"), mensagem)
+        # O resumo de vendas sem produto sozinho, o relatório de compras e o de leiaute ambíguo: as recusas de sempre.
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               [self.xls("fornecedor", self.leiautes.relatorio_por_fornecedor())])
+        self.assertIn("não foi possível identificar produto, quantidade e valor de venda", mensagem)
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [por_produto, self.auxiliar("posicao_de_compras")])
+        self.assertEqual(mensagem, MENSAGEM_DE_COMPRAS.replace("Arquivo 1", "Arquivo 2"))
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               [por_produto, self.xls("abaixo", self.leiautes.relatorio_abaixo_do_custo())])
+        self.assertIn("dois títulos de coluna iguais", mensagem)
+
+    def test_relatorio_de_vendas_que_nao_e_lido_continua_recusado(self):
+        """A trava de produto, quantidade e valor de venda continua para o relatório de vendas por produto que não foi
+        lido (sem a coluna da quantidade), mesmo com a Opção 27 no envio: ele não vira resumo sem produto nem posição
+        de estoque pelo "Estoque Atual". E o relatório de leiaute ambíguo de fora do período da âncora é recusado."""
+        ancora = self.ancora()
+        linhas, mesclas, formatos, _verdade = self.leiautes.relatorio_por_produto()
+        sem_quantidade = [{coluna: valor for coluna, valor in linha.items() if valor not in ("Qtde", "Vend")}
+                          for linha in linhas]
+        caminho = self.xls("sem_quantidade", (sem_quantidade, mesclas, formatos))
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [ancora, caminho])
+        self.assertTrue(mensagem.startswith("Arquivo 2: não foi possível identificar produto"), mensagem)
+        linhas, mesclas, formatos, _verdade = self.leiautes.relatorio_abaixo_do_custo()
+        de_2020 = [{coluna: (valor.replace("09/11/23 á 09/11/26", "01/01/20 á 31/12/20") if isinstance(valor, str)
+                             else valor) for coluna, valor in linha.items()} for linha in linhas]
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               [ancora, self.xls("abaixo_2020", (de_2020, mesclas, formatos))])
+        self.assertIn("Arquivo 2: o relatório tem dois títulos de coluna iguais", mensagem)
+        # O período que passa do fim da âncora também é recusado.
+        ate_2027 = [{coluna: (valor.replace("09/11/23 á 09/11/26", "01/01/26 á 31/12/27") if isinstance(valor, str)
+                              else valor) for coluna, valor in linha.items()} for linha in linhas]
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               [ancora, self.xls("abaixo_2027", (ate_2027, mesclas, formatos))])
+        self.assertIn("Arquivo 2: o relatório tem dois títulos de coluna iguais", mensagem)
+        # Achados da revisão de 11/2026: o relatório de vendas sem a quantidade não vira resumo por documento, lista de
+        # preços, posição de estoque nem resumo sem produto pelas colunas, com ou sem a âncora.
+        por_produto = self.xls("por_produto", self.leiautes.relatorio_por_produto())
+        corrompidos = {
+            "com o documento": ("Relatorio de vendas item a item\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                "Data;Nr. Pedido;Produto;Valor Total\n05/09/2025;P8-0001;CAFE 500G;70,00\n"),
+            "como lista de preços": "Codigo;Produto;Preco Unit.;Valor Total\n1;CAFE 500G;10,00;70,00\n",
+            "como posição de estoque": "Codigo;Produto;Valor Total;Estoque\n1;CAFE 500G;70,00;4\n",
+            "por vendedor": ("Giro de vendas por vendedor\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                             "Vendedor;Produto;Valor Total\nV1;CAFE 500G;70,00\n"),
+            "só com o preço": ("Relatorio de vendas por produto\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                               "Codigo;Produto;Preco Venda\n1;CAFE 500G;20,00\n"),
+            "por vendedor, com Total": ("Giro de vendas por vendedor\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                        "Vendedor;Produto;Total\nV1;CAFE 500G;70,00\n"),
+            # A verificação do código final: o valor em "Valor", "Vlr" ou "Valor R$", o produto em "Item",
+            # "Descrição" ou "Mercadoria", o cabeçalho de duas colunas e a tabela auxiliar com o "Valor" sozinho.
+            "com o documento e Valor": ("Relatorio de vendas item a item\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                        "Data;Nr. Pedido;Produto;Valor\n05/09/2025;P8-0001;CAFE 500G;70,00\n"),
+            "cupom e Vlr": "Cupom;Descricao;Vlr\n12345;CAFE 500G;70,00\n",
+            "cupom e mercadoria": "Cupom;Mercadoria;Valor R$\n12345;CAFE 500G;70,00\n",
+            "item": ("Relatorio de vendas item a item\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                     "Data;Nr. Pedido;Item;Qtde;Valor Total\n05/09/2025;P8-0001;CAFE 500G;1;70,00\n"),
+            "por vendedor, com Valor": ("Giro de vendas por vendedor\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                        "Vendedor;Produto;Valor\nV1;CAFE 500G;70,00\n"),
+            "duas colunas": ("Giro de vendas por vendedor\nPeriodo: 01/09/2025 a 30/09/2025\nVendedor: V1\n"
+                             "Produto;Valor Total\nCAFE 500G;70,00\n"),
+            "por cliente, sem o valor": "Vendas por cliente\nCliente: CLIENTE FICTICIO\nProduto;Qtde\nCAFE 500G;3\n",
+            "curva ABC com Valor": ("Curva ABC de Produtos\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                    "Codigo;Descricao;Preco Medio;Valor\n1;CAFE 500G;20,00;60,00\n"),
+            "ranking com Valor e Estoque": ("Ranking de Produtos\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                            "Codigo;Produto;Valor;Estoque\n1;CAFE 500G;60,00;4\n"),
+        }
+        for nome, texto in corrompidos.items():
+            caminho = self.csv(texto)
+            for primeiro in (ancora, por_produto):
+                with self.subTest(arquivo=nome, primeiro=Path(primeiro).stem):
+                    mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [primeiro, caminho])
+                    self.assertTrue(mensagem.startswith("Arquivo 2: não foi possível identificar produto"), mensagem)
+        bruto = etl_processor._ler_bruto(self.csv(corrompidos["por vendedor"]))
+        self.assertFalse(etl_processor.resumo_de_vendas_sem_produto(bruto))
+
+    def test_titulo_de_estoque_decide_antes_das_colunas(self):
+        """A posição de estoque com "Qtde" e "Valor Total" (o limite da rodada anterior) é lida como estoque pelo
+        título; o "Vendas x Estoque" e a coluna que só existe em vendas continuam venda."""
+        posicao = self.csv("Posicao de Estoque\nCodigo;Produto;Qtde;Valor Total\n1;CAFE 500G;10;120,00\n"
+                           "2;LEITE 1L;9;27,00\n")
+        tabela = self.lido(posicao).tabela
+        self.assertEqual(tabela["papel"], "estoque")
+        self.assertEqual(tabela["produtos"].set_index("chave_nome")["custo_unitario"].round(2).to_dict(),
+                         {"CAFE 500G": 12.0, "LEITE 1L": 3.0})
+        resultado = executar_como_o_worker([self.csv(IngestaoEmLoteTests.ANCORA), posicao])
+        self.assertEqual(resultado["saude"]["faturamento_total"], 105.0)
+        self.assertEqual(resultado["indicadores_executivos"]["indicadores"]["giro_estoque"]["estoque_a_custo"], 147.0)
+        # A posição de estoque sem saldo nenhum lido não entra calada como se tivesse dado o estoque: é recusada.
+        sem_saldo = self.csv("Posicao de Estoque\nCodigo;Descricao;Saldo Atual\n1;CAFE 500G;-\n2;LEITE 1L;-\n")
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [self.csv(IngestaoEmLoteTests.ANCORA), sem_saldo])
+        self.assertTrue(mensagem.startswith("Arquivo 2: não foi possível identificar produto"), mensagem)
+        # O título com palavra de compra ou de entrada não é de posição de estoque: a quantidade é a comprada.
+        entradas = self.csv("Estoque - Entradas de Mercadorias\nPeriodo: 01/10/2025 a 31/10/2025\n"
+                            "Codigo;Produto;Qtde;Valor Total\n1;CAFE 500G;10;120,00\n")
+        tabela = self.lido(entradas).tabela
+        self.assertTrue(tabela is None or tabela["papel"] != "estoque", tabela)
+        for texto in ("Vendas x Estoque\nProduto;Qtde;Valor Total;Estoque\nCAFE 500G;10;100,00;4\n",
+                      "Posicao de Estoque\nProduto;Qtde Vendida;Valor Total;Saldo Atual\nCAFE 500G;10;100,00;4\n"):
+            with self.subTest(texto=texto.split("\n")[0]):
+                self.assertIsNotNone(self.lido(self.csv(texto)).df)
+
+    def test_titulos_com_letras_separadas_e_parametros_do_topo(self):
+        self.assertEqual(etl_processor._desespacar("D e s c r i ç ã o   d o   p r o d u t o"), "Descrição do produto")
+        for titulo in ("Qtde", "Valor Total", "A B", "Cód. Prod.", 12.5, None):
+            self.assertEqual(etl_processor._desespacar(titulo), titulo)
+        # Os parâmetros do topo da lista de preços não são um cabeçalho em duas linhas; a linha de dado também não
+        # continua o título; "Est." sobre "Atual" continua.
+        linhas = [["Grupo Preço inicial .: 1", None, "Grupo Preço final ...: 4"],
+                  ["Produto inicial .....: 0001", None, "Produto final .......: 0009"],
+                  ["Cód. Prod.", "Nome", "Preço"], ["0001", "CAFE 500G", "12,50"],
+                  ["Est.", "Est.", "Valor"], ["Atual", "Mín.", "Estoque"]]
+        self.assertFalse(etl_processor._linha_continua_o_cabecalho(linhas, 0))
+        self.assertFalse(etl_processor._linha_continua_o_cabecalho(linhas, 2))
+        self.assertTrue(etl_processor._linha_continua_o_cabecalho(linhas, 4))
+        # A linha de dado com data (e sem número) e a célula sem título em cima também não continuam o título.
+        self.assertFalse(etl_processor._linha_continua_o_cabecalho(
+            [["Nr. Doc.", "Data", "Cliente"], ["P9-1", "07/11/2026", "CONSUMIDOR"]], 0))
+        self.assertFalse(etl_processor._linha_continua_o_cabecalho(
+            [["Codigo", "Forn.", None, "Nome produto", "Est."], [None, None, "GRUPO FICTICIO A", None, "Atual"]], 0))
+
+    def test_alinhamento_so_quando_tudo_confere(self):
+        alinhar = etl_processor._alinhar_tabela_auxiliar
+
+        def matriz(linhas, largura):
+            return pd.DataFrame([[linha.get(coluna) for coluna in range(largura)] for linha in linhas], dtype=object)
+
+        opcoes = {"textos": ("produto",), "numeros": ("estoque",)}
+        # Três títulos e quatro colunas de dado: não alinha.
+        bruto = matriz([{0: "Codigo", 4: "Produto", 8: "Saldo"}]
+                       + [{0: str(i), 2: f"PRODUTO {i}", 5: str(7 + i), 8: str(i)} for i in range(1, 6)], 9)
+        self.assertIs(alinhar(bruto, 0, 1, {"codigo": 0, "produto": 4, "estoque": 8}, **opcoes), bruto)
+        # O título do produto depois da coluna de dado seguinte: não é a mesma coluna visual, não alinha.
+        bruto = matriz([{0: "Codigo", 6: "Produto", 7: "Saldo"}]
+                       + [{0: str(i), 3: f"PRODUTO {i}", 4: str(i)} for i in range(1, 6)], 8)
+        self.assertIs(alinhar(bruto, 0, 1, {"codigo": 0, "produto": 6, "estoque": 7}, **opcoes), bruto)
+        # Depois de alinhar, o produto seria número: não alinha.
+        bruto = matriz([{0: "Codigo", 2: "Produto", 4: "Saldo"}]
+                       + [{1: f"X{i}", 3: str(200 + i), 5: str(i)} for i in range(1, 6)], 6)
+        self.assertIs(alinhar(bruto, 0, 1, {"codigo": 0, "produto": 2, "estoque": 4}, **opcoes), bruto)
+        # O controle: o mesmo leiaute com o nome em texto alinha.
+        bruto = matriz([{0: "Codigo", 2: "Produto", 4: "Saldo"}]
+                       + [{1: f"X{i}", 3: f"PRODUTO {i}", 5: str(i)} for i in range(1, 6)], 6)
+        alinhado = alinhar(bruto, 0, 1, {"codigo": 0, "produto": 2, "estoque": 4}, **opcoes)
+        self.assertIsNot(alinhado, bruto)
+        self.assertEqual((alinhado.iat[1, 0], alinhado.iat[1, 2], alinhado.iat[1, 4]), ("X1", "PRODUTO 1", "1"))
+
+    def test_filtro_do_topo_nao_e_titulo(self):
+        """Achado grave da revisão de 11/2026: um relatório de vendas com título genérico e um filtro de preço ou de
+        estoque no topo era lido como lista de preços ou posição de estoque, e a venda dele sumia. Só o título do
+        relatório decide; o filtro nunca."""
+        venda = ("{titulo}\nPeriodo: 01/09/2025 a 30/09/2025\n{parametro}\n"
+                 "Codigo;Descricao;Qtde;Preco Unit.;Valor Total\n1;CAFE 500G;3;20,00;60,00\n2;LEITE 1L;10;5,00;50,00\n")
+        casos = [("Curva ABC de Produtos", "Tabela de Preco: 1 - VAREJO"),
+                 ("Ranking de Produtos", "Considerar estoque atual: Sim"),
+                 ("Curva ABC de Produtos", "Somente produtos com saldo em estoque: Nao"),
+                 ("Giro de Produtos", "Tabela de Preco:;1 - VAREJO"),
+                 ("Relacao de Produtos", "Vendedor: Todos"),
+                 ("ESTOQUE DE FABRICA CALCADOS LTDA", "Curva ABC de Produtos"),
+                 ("Estoque - Curva ABC de Produtos", "Vendedor: Todos")]
+        for titulo, parametro in casos:
+            with self.subTest(titulo=titulo, parametro=parametro):
+                caminho = self.csv(venda.format(titulo=titulo, parametro=parametro))
+                self.assertIsNotNone(self.lido(caminho).df)
+                self.assertEqual(executar_como_o_worker([caminho])["saude"]["faturamento_total"], 110.0)
+                lote = executar_como_o_worker([self.csv(IngestaoEmLoteTests.ANCORA), caminho])
+                self.assertEqual(lote["saude"]["faturamento_total"], 215.0)  # setembro soma: fora do período da âncora
+        # A razão social que começa com "Estoque", sem outra pista no topo e sem o preço de venda da unidade: só o título
+        # de estoque completo impede que a quantidade vendida vire saldo e a venda suma.
+        razao_social = self.csv("ESTOQUE DE FABRICA CALCADOS LTDA\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                                "Codigo;Descricao;Qtde;Valor Total\n1;CAFE 500G;3;60,00\n2;LEITE 1L;10;50,00\n")
+        self.assertIsNotNone(self.lido(razao_social).df)
+        self.assertEqual(executar_como_o_worker([razao_social])["saude"]["faturamento_total"], 110.0)
+        # O título de verdade continua valendo: com a data no rótulo e depois do rótulo do título.
+        posicao = self.csv("Posicao de estoque em: 09/11/2026\nCodigo;Descricao;Saldo Atual;Custo Medio\n"
+                           "1;CAFE 500G;25;11,00\n")
+        tabela = self.lido(posicao).tabela
+        self.assertEqual((tabela["papel"], tabela["data"]), ("estoque", date(2026, 11, 9)))
+        precos = self.csv("Relatorio: Lista de Precos\nCodigo;Descricao;Preco de Venda\n1;CAFE 500G;20,00\n")
+        self.assertEqual(self.lido(precos).tabela["papel"], "precos")
+        # O relatório de compras com "Atualiza estoque atual: Sim" no topo continua sendo compras.
+        compras = self.csv("Relatorio de Compras por Item\nAtualiza estoque atual: Sim\n"
+                           "Fornecedor;Produto;Qtde Comprada;Valor Total\nALFA;CAFE 500G;10;100,00\n")
+        self.assertEqual(self.recusa("raio_x_dados", executar_como_o_worker, [compras]), MENSAGEM_DE_COMPRAS)
+
+    def test_estoque_com_preco_da_unidade_continua_estoque(self):
+        """A verificação do código final pôs uma guarda que recusava a tabela com título de estoque e o preço da unidade
+        (quantidade x preço = total, a conta da venda). O teste de mutação mostrou que ela não tinha caso próprio, e uma
+        sonda, que a posição de estoque e o inventário de verdade com o preço viravam venda, com o valor do estoque no
+        faturamento. A guarda saiu: com o título de estoque, a tabela é estoque."""
+        casos = {
+            "posição com o preço de custo e o de venda": (
+                "Posicao de Estoque\nCodigo;Descricao;Qtde;Preco Custo;Preco Venda\n"
+                "1;CAFE 500G;25;11,00;20,00\n2;LEITE 1L;9;3,00;5,00\n", [11.0, 3.0]),
+            "inventário com o preço unitário e o total": (
+                "Inventario de Estoque\nCodigo;Descricao;Quantidade;Preco Unitario;Valor Total\n"
+                "1;CAFE 500G;25;11,00;275,00\n2;LEITE 1L;9;3,00;27,00\n", [11.0, 3.0]),
+            "estoque atual com o preço": (
+                "Estoque Atual\nCodigo;Produto;Qtd;Preco\n1;CAFE 500G;25;20,00\n2;LEITE 1L;9;5,00\n", None),
+        }
+        for nome, (texto, custo) in casos.items():
+            with self.subTest(nome):
+                caminho = self.csv(texto)
+                lido = self.lido(caminho)
+                self.assertIsNone(lido.df)
+                self.assertEqual(lido.tabela["papel"], "estoque")
+                self.assertEqual(float(lido.tabela["produtos"]["estoque"].sum()), 34.0)
+                if custo is not None:
+                    self.assertEqual(list(lido.tabela["produtos"]["custo_unitario"].round(2)), custo)
+                # Sozinha no envio, a tabela recusa dizendo o que é, e nunca vira faturamento.
+                mensagem = self.recusa("raio_x_dados", executar_como_o_worker, [caminho])
+                self.assertIn("uma tabela auxiliar que só completa a venda item a item", mensagem)
+
+    def test_venda_sem_periodo_vale_pelas_datas(self):
+        """A verificação independente final: a venda item a item sem a linha do período no cabeçalho era absorvida pela
+        âncora mesmo com a data de cada venda fora do período dela, e a venda sumia do faturamento. Sem o período, ela
+        vale pelas datas das linhas, como valeria pelo período do cabeçalho."""
+        ancora = self.csv(IngestaoEmLoteTests.ANCORA)  # outubro de 2025, R$ 105
+        novembro = self.csv("Data;Nr. Doc.;Produto;Qtde;Valor Total\n03/11/2025;P2-0001;CAFE 500G;1;20,00\n"
+                            "04/11/2025;P2-0002;CAFE 500G;2;40,00\n03/11/2025;P2-0001;LEITE 1L;2;10,00\n"
+                            "20/11/2025;P2-0004;LEITE 1L;3;15,00\n")
+        self.assertEqual(executar_como_o_worker([ancora, novembro])["saude"]["faturamento_total"], 190.0)
+        # O lead pede a linha do período, como pede a esse relatório sozinho.
+        mensagem = self.recusa("avaliacao_sem_periodo", avaliar_como_o_worker, [ancora, novembro],
+                               hoje=date(2026, 11, 9))
+        self.assertTrue(mensagem.startswith("Arquivo 2: o período não está no cabeçalho"), mensagem)
+        # Com as datas dentro do período da âncora, a mesma venda sem o período continua absorvida: não dobra.
+        outubro = self.csv("Data;Nr. Doc.;Produto;Qtde;Valor Total\n"
+                           + IngestaoEmLoteTests.ANCORA.split("Valor Total\n", 1)[1])
+        self.assertEqual(executar_como_o_worker([ancora, outubro])["saude"]["faturamento_total"], 105.0)
+
+    def test_saldo_do_relatorio_por_produto_mais_recente(self):
+        """A verificação independente final: o saldo dos relatórios por produto vinha do último pela ordem dos arquivos,
+        e não do de período mais recente."""
+        ancora = self.csv("Relatorio de vendas item a item\nPeriodo: 01/09/2025 a 31/10/2025\n"
+                          "Data;Nr. Doc.;Produto;Qtde;Valor Total\n06/09/2025;P1-0001;CAFE 500G;1;20,00\n"
+                          "11/10/2025;P1-0002;CAFE 500G;2;40,00\n06/09/2025;P1-0001;LEITE 1L;2;10,00\n"
+                          "25/10/2025;P1-0004;LEITE 1L;3;15,00\n")
+        outubro = self.csv("Relatorio de vendas por produto\nPeriodo: 01/10/2025 a 31/10/2025\n"
+                           "Produto;Qtde;Valor Total;Estoque Atual\nCAFE 500G;2;40,00;100\nLEITE 1L;3;15,00;200\n")
+        setembro = self.csv("Relatorio de vendas por produto\nPeriodo: 01/09/2025 a 30/09/2025\n"
+                            "Produto;Qtde;Valor Total;Estoque Atual\nCAFE 500G;1;20,00;7\nLEITE 1L;2;10,00;9\n")
+        for ordem in ([ancora, outubro, setembro], [ancora, setembro, outubro]):
+            with self.subTest(ordem=[Path(caminho).name for caminho in ordem]):
+                _por_arquivo, resumos, _envolvidos = raio_x._ler_envio(ordem, cadastro=True, ate=None,
+                                                                       recusar_datas=False)
+                estoques = [resumo["_estoques"] for resumo in resumos
+                            if resumo.get("_estoques") is not None and len(resumo["_estoques"])]
+                self.assertEqual({produto: float(saldo) for produto, saldo in estoques[-1].items()},
+                                 {"CAFE 500G": 100.0, "LEITE 1L": 200.0})
+
+    def test_relatorio_com_lojas_e_ancora_sem_loja_avisa(self):
+        """A verificação independente final: sem a coluna da loja na âncora (a Opção 27 real não tem), o relatório por
+        produto com a loja de cada venda era absorvido em silêncio, e a venda das lojas que a âncora não tem ficava de
+        fora sem ninguém saber. Ele continua absorvido (a âncora pode ser a da rede toda), com aviso."""
+        ancora = self.csv(IngestaoEmLoteTests.ANCORA)
+        lojas = self.csv("Relatorio de vendas por produto\nPeriodo: 01/10/2025 a 31/10/2025\n"
+                         "Loja;Produto;Qtde;Valor Total\nLOJA A;CAFE 500G;3;60,00\nLOJA A;LEITE 1L;5;25,00\n"
+                         "LOJA B;CAFE 500G;4;80,00\nLOJA B;LEITE 1L;6;30,00\n")
+        resultado = executar_como_o_worker([ancora, lojas])
+        self.assertEqual(resultado["saude"]["faturamento_total"], 105.0)
+        self.assertIn("O arquivo 2 traz a loja de cada venda, e a venda item a item com a data de cada venda não traz",
+                      " ".join(resultado["avisos"]))
+        # Sem a coluna da loja no relatório, o aviso não aparece.
+        sem_loja = self.csv("Relatorio de vendas por produto\nPeriodo: 01/10/2025 a 31/10/2025\n"
+                            "Produto;Qtde;Valor Total\nCAFE 500G;3;60,00\nLEITE 1L;5;25,00\n")
+        self.assertNotIn("traz a loja de cada venda", " ".join(executar_como_o_worker([ancora, sem_loja])["avisos"]))
+
+    def test_filial_com_geral_no_nome_e_loja(self):
+        """A verificação independente final: "Geral" em qualquer lugar do nome da filial ("003 - LOJA GERAL") fazia a
+        tabela contar como o total, e não como loja. Só o valor que começa assim (depois do código) é o total."""
+        corpo = "Codigo;Descricao;Saldo Atual;Custo Medio\n1;CAFE 500G;25;11,00\n"
+        casos = {"003 - LOJA GERAL": "003 loja geral", "001 - ARMAZEM GERAL DO POVO": "001 armazem geral do povo",
+                 "Todas": None, "Todas as filiais": None, "Geral": None, "999 - CONSOLIDADO": None,
+                 "Total geral": None}
+        for valor, loja in casos.items():
+            with self.subTest(valor):
+                tabela = self.lido(self.csv(f"Posicao de Estoque\nFilial: {valor}\n{corpo}")).tabela
+                self.assertEqual(tabela["loja"], loja)
+
+    def test_relatorio_misto_com_titulo_de_estoque_continua_venda(self):
+        """A verificação independente final: o relatório da venda com o estoque, com título de estoque ("Posição de
+        Estoque e Giro" com "Estoque Atual;Qtde;Valor Total"; "Relatório de Estoque" com "Saídas por Produto" embaixo),
+        era lido como posição de estoque. A venda de outro mês sumia, e a do mês da âncora dava o custo errado. Ele
+        segue para a leitura de vendas, como antes desta rodada."""
+        ancora = self.csv(IngestaoEmLoteTests.ANCORA)  # outubro de 2025, R$ 105
+        casos = {
+            "posição e giro": ("Posicao de Estoque e Giro\nPeriodo: 01/11/2025 a 30/11/2025\n"
+                               "Codigo;Produto;Estoque Atual;Qtde;Valor Total;Giro\n1;CAFE 500G;10;3;60,00;0,30\n"
+                               "2;LEITE 1L;20;5;25,00;0,25\n"),
+            "estoque com saídas": ("Relatorio de Estoque\nSaidas por Produto\nPeriodo: 01/11/2025 a 30/11/2025\n"
+                                   "Codigo;Produto;Qtde;Valor Total\n1;CAFE 500G;3;60,00\n2;LEITE 1L;5;25,00\n"),
+        }
+        for nome, texto in casos.items():
+            with self.subTest(nome):
+                caminho = self.csv(texto)
+                self.assertIsNotNone(self.lido(caminho).df)
+                self.assertEqual(executar_como_o_worker([ancora, caminho])["saude"]["faturamento_total"], 190.0)
+        # A posição com o saldo e a quantidade na mesma coluna continua estoque (o saldo pelo título de reserva).
+        posicao = self.csv("Posicao de Estoque\nCodigo;Descricao;Qtde;Preco Custo;Preco Venda\n"
+                           "1;CAFE 500G;25;11,00;20,00\n")
+        self.assertEqual(self.lido(posicao).tabela["papel"], "estoque")
+
+    def test_estoque_a_preco_de_venda_nao_vira_custo(self):
+        """A verificação independente final: a posição de estoque valorizada a preço de venda ("Qtde;Preço Venda;Valor
+        Total") dava o custo pela divisão do valor pelo saldo, que é o preço de venda, e a margem saía zero. Aí o custo
+        fica de fora; com o título do valor a custo, ou sem o preço de venda na tabela, ele continua saindo da divisão."""
+        casos = {
+            "a preço de venda": ("Posicao de Estoque\nCodigo;Descricao;Qtde;Preco Venda;Valor Total\n"
+                                 "1;CAFE 500G;10;20,00;200,00\n2;LEITE 1L;30;5,00;150,00\n", None),
+            "a custo, com o preço de venda": ("Posicao de Estoque\nCodigo;Descricao;Qtde;Preco Venda;Custo Total\n"
+                                              "1;CAFE 500G;10;20,00;120,00\n2;LEITE 1L;30;5,00;90,00\n", [12.0, 3.0]),
+            "sem o preço de venda": ("Inventario de Estoque\nCodigo;Descricao;Quantidade;Preco Unitario;Valor Total\n"
+                                     "1;CAFE 500G;10;12,00;120,00\n2;LEITE 1L;30;3,00;90,00\n", [12.0, 3.0]),
+        }
+        for nome, (texto, custo) in casos.items():
+            with self.subTest(nome):
+                produtos = self.lido(self.csv(texto)).tabela["produtos"]
+                if custo is None:
+                    self.assertTrue(produtos["custo_unitario"].isna().all(), list(produtos["custo_unitario"]))
+                else:
+                    self.assertEqual(list(produtos["custo_unitario"].round(2)), custo)
+
+    def test_posicao_com_custo_unitario_e_valor_total_e_estoque(self):
+        """A verificação independente final: sem o título de estoque na primeira célula, a posição com o saldo, o custo
+        unitário e o valor total ("Saldo Atual;Custo Médio;Valor Total") era recusada com a trava de produto,
+        quantidade e valor de venda, e com a âncora recusava o envio inteiro: o "Valor Total" contava como o total da
+        venda. Ao lado do custo unitário, ele é o valor do estoque."""
+        posicao = self.csv("SUPERMERCADO FICTICIO LTDA\nPosicao de Estoque\n"
+                           "Codigo;Produto;Saldo Atual;Custo Medio;Valor Total\n1;CAFE 500G;10;12,00;120,00\n"
+                           "2;LEITE 1L;30;3,00;90,00\n")
+        tabela = self.lido(posicao).tabela
+        self.assertEqual((tabela["papel"], float(tabela["produtos"]["estoque"].sum())), ("estoque", 40.0))
+        self.assertEqual(executar_como_o_worker([self.csv(IngestaoEmLoteTests.ANCORA), posicao])["saude"]
+                         ["faturamento_total"], 105.0)
+        # Sem o custo unitário, "Produto;Valor Total;Estoque" continua recusado: é a venda sem a quantidade.
+        self.recusa("raio_x_dados", executar_como_o_worker,
+                    [self.csv("Codigo;Produto;Valor Total;Estoque\n1;CAFE 500G;70,00;4\n")])
+
+    def test_ancoras_cobrem_so_os_proprios_periodos(self):
+        """Achados da revisão de 11/2026: com duas âncoras, o mês entre elas não é coberto (o relatório por produto desse
+        mês soma, e o de leiaute ambíguo é recusado); e as linhas de saldo de uma âncora com o fim no futuro ficam na
+        data de hoje, sem recusar o envio nem desfazer as fatias."""
+        # Duas vendas do mesmo produto: com uma linha só, o arquivo não é venda item a item (não seria âncora).
+        dezembro = ("Relatorio de vendas item a item\nPeriodo: 01/12/2025 a 31/12/2025\n"
+                    "Data;Nr. Doc.;Produto;Qtde;Valor Total\n05/12/2025;P1-0010;CAFE 500G;1;20,00\n"
+                    "12/12/2025;P1-0011;CAFE 500G;1;20,00\n")
+        novembro = self.csv(_mensal(11, ["1;CAFE 500G;10;200,00;120,00;50"]))
+        ancoras = [self.csv(IngestaoEmLoteTests.ANCORA), self.csv(dezembro)]
+        self.assertTrue(raio_x._e_venda_item_a_item(raio_x._ler_arquivo_do_envio(ancoras[1], 1, True, auxiliar=True).df))
+        self.assertEqual(executar_como_o_worker(ancoras + [novembro])["saude"]["faturamento_total"], 345.0)
+        linhas, mesclas, formatos, _verdade = self.leiautes.relatorio_abaixo_do_custo()
+        de_novembro = [{coluna: (valor.replace("09/11/23 á 09/11/26", "01/11/25 á 30/11/25") if isinstance(valor, str)
+                                 else valor) for coluna, valor in linha.items()} for linha in linhas]
+        mensagem = self.recusa("raio_x_dados", executar_como_o_worker,
+                               ancoras + [self.xls("abaixo_nov", (de_novembro, mesclas, formatos))])
+        self.assertIn("Arquivo 3: o relatório tem dois títulos de coluna iguais", mensagem)
+        futuro = IngestaoEmLoteTests.ANCORA.replace("01/10/2025 a 31/10/2025", "01/10/2025 a 31/12/2026")
+        sozinha = avaliar_como_o_worker([self.csv(futuro)], hoje=self.HOJE)
+        lote = avaliar_como_o_worker([self.csv(futuro), self.csv(IngestaoEmLoteTests.POSICAO)], hoje=self.HOJE)
+        self.assertEqual(len(lote["raio_x"]["fatias"]), len(sozinha["raio_x"]["fatias"]))
+        self.assertEqual(lote["raio_x"]["saude"]["faturamento_total"], 105.0)
+        self.assertIn("na data de 09/11/2026", " ".join(lote["raio_x"]["avisos"]))
 
 
 # =============================================================================

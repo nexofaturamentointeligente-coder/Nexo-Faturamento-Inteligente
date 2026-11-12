@@ -220,7 +220,7 @@ Os relatórios reais passaram pelo processo isolado de verdade, no Windows. Só 
 
 ## 11. Testes
 
-`tests/test_indicadores.py` (125 testes) cobre:
+`tests/test_indicadores.py` (147 testes) cobre:
 - a leitura nova;
 - as cinco refatorações;
 - os dois modos, com os valores conferidos à mão em envios fictícios;
@@ -228,9 +228,10 @@ Os relatórios reais passaram pelo processo isolado de verdade, no Windows. Só 
 - os planos e o corte de histórico;
 - cada achado das quatro revisões independentes (seção 12), nas três rotas quando o achado é da leitura (análise mensal, Raio-X do cliente e lead);
 - a ingestão em lote (seção 13): a âncora com o relatório por produto, a posição de estoque, a lista de preços, o resumo por pedido e o relatório de compras, a outra loja e o outro período, a trava contra a duplicação e as réplicas dos leiautes reais do ERP;
+- a classificação prévia e os leiautes reais do lote (seção 13), nas réplicas `AUXILIARES` de `tests/leiautes_erp_support.py`: cada leiaute classificado antes da trava de vendas, o que cada um dá, o lote nas duas rotas, o envio com todos os relatórios da pasta, o saldo entre as tabelas de estoque, as regras sem a âncora e o relatório de vendas que continua recusado (sem a coluna da quantidade, ou ambíguo fora do período da âncora), e cada achado da quinta revisão e da verificação do código final (o filtro do topo, os relatórios corrompidos, as lojas, a data, o custo, as âncoras, o código como chave, o estoque com o preço da unidade, a venda sem a linha do período, o saldo do relatório mais recente, as lojas sem a loja na âncora, a filial com "Geral", o relatório misto com título de estoque, o estoque a preço de venda, o valor ao lado do custo unitário, o alinhamento e as guardas);
 - a gravação no lead, o expurgo e o downgrade.
 
-Na quarta revisão e na ingestão em lote, o teste de mutação passou a 103 alterações: as 32 desta rodada (20 novas e 12 com a âncora trocada pelo código novo) foram todas percebidas pelos testes; as outras 71 são as da rodada anterior, não rodadas de novo sobre o código final. Antes disso, um teste de mutação com 83 alterações de propósito no código final (as contas, a leitura, a recusa de compras, a loja em branco, o teto, a triagem por ano, o corte por plano, o expurgo e cada correção das três revisões) mostrou que os testes percebem 82. As que sobreviveram na primeira passada ganharam teste: os dias cobertos do item nunca vendido, o valor de filtro com mais de uma palavra, a rede de proteção do contrato e, na terceira revisão, a decisão por arquivo do número da venda (o relatório ordenado por produto, com a loja só na primeira linha). A única que sobrevive tira, quando o cabeçalho de vendas nem é achado, a exigência de "nada de venda nas primeiras linhas": só muda a mensagem de um relatório que já era recusado.
+Na quinta revisão, o revisor de testes rodou 20 mutações: 7 morreram e 13 sobreviveram, e cada uma ganhou teste. Depois das correções, um teste de mutação de 34 alterações rodou contra as duas classes do lote: as 20, com as âncoras do código novo, e 14 sobre as próprias correções. Morreram 29. Os testes reforçados mataram 4 das 5 vivas e uma alteração nova (a palavra de compra no título), e o total ficou em 34 de 35. A que sobrevive tira o título de compras numa outra linha do topo: ele só decide quando a primeira linha é título de estoque ou de preços e o título de compras vem embaixo, e a guarda da palavra de compra no próprio título cobre o caso comum. Depois da verificação do código final, 11 mutações desfizeram as 8 correções dela (duas de dois jeitos) e recolocaram a guarda que saiu, uma por vez: os testes perceberam 11 (seção 12). As oito correções da verificação independente final também: 8 de 8, e a passada final das 19 mutações das duas verificações sobre o código final deu 19 de 19. Na quarta revisão e na ingestão em lote, o teste de mutação passou a 103 alterações: as 32 desta rodada (20 novas e 12 com a âncora trocada pelo código novo) foram todas percebidas pelos testes; as outras 71 são as da rodada anterior, não rodadas de novo sobre o código final. Antes disso, um teste de mutação com 83 alterações de propósito no código final (as contas, a leitura, a recusa de compras, a loja em branco, o teto, a triagem por ano, o corte por plano, o expurgo e cada correção das três revisões) mostrou que os testes percebem 82. As que sobreviveram na primeira passada ganharam teste: os dias cobertos do item nunca vendido, o valor de filtro com mais de uma palavra, a rede de proteção do contrato e, na terceira revisão, a decisão por arquivo do número da venda (o relatório ordenado por produto, com a loja só na primeira linha). A única que sobrevive tira, quando o cabeçalho de vendas nem é achado, a exigência de "nada de venda nas primeiras linhas": só muda a mensagem de um relatório que já era recusado.
 
 Testes de outros arquivos que mudaram:
 - `tests/test_raio_x_regression.py` e `tests/test_cadastro_regression.py`: o nó novo é aprovado como acréscimo, conferido pelo contrato, e a versão sobe para 11.6. Nos conjuntos desses testes, nenhum valor antigo mudou. Nenhum deles é venda item a item de vários meses com a data de cada venda: esse caso muda de propósito (refatoração 4).
@@ -356,26 +357,168 @@ Uma verificação das correções da terceira revisão, em três frentes (leitur
 | Baixa | O travessão mudava a leitura de todos os números (antes do número, virava sinal), e o documento falava só do desconto | O travessão sozinho é a célula vazia; antes do número, fica como era em e468866 |
 | Baixa | AVALIACAO_DE_CENARIO.md descrevia a soma do estoque por loja da regra antiga | Texto da seção 2 atualizado |
 
+### Quinta revisão (a classificação prévia e os leiautes reais do lote)
+
+Uma revisão independente do lote com os leiautes reais, em três frentes: os leitores, as regras do envio e os testes, com teste de mutação. Cada achado passou por um verificador adversarial. Nenhum agente abriu os arquivos reais: só as réplicas e CSVs inventados.
+
+Dos 26 achados, 25 foram confirmados e corrigidos, cada um com um teste que falha sem a correção. O que foi derrubado: o aviso do papel diz "o saldo e o custo de cada produto" mesmo quando a âncora já traz os dois. A âncora fica com os dela, e nenhum número muda; os avisos de onde vieram o custo e o estoque não aparecem, mas o do papel aparece, porque descreve o tipo da tabela, e não o que ela deu. Reescrevê-lo é polimento, decisão do dono. Os testes estão em `LeiautesReaisDoLoteTests`.
+
+| Gravidade | Achado | Correção |
+|---|---|---|
+| Alta | Um filtro do topo ("Tabela de Preço: 1 - VAREJO", "Considerar estoque atual: Sim") ou o título genérico "Relação de Produtos" fazia um relatório de vendas virar lista de preços ou posição de estoque. A venda sumia do faturamento, ou a quantidade e o total viravam saldo e custo. Os três revisores acharam o mesmo defeito | Só o título do relatório decide, comparado pelo começo, e o parâmetro com dois-pontos nunca. O título de preços pede "preço", e a lista de preços não tem quantidade nem total. O título de compras e a palavra de compra no título decidem contra |
+| Média | O relatório de vendas sem a quantidade escapava da trava como resumo por documento ("Data;Nr. Pedido;Produto;Valor Total"), lista de preços ou resumo sem produto ("Vendas por Vendedor" com "Produto;Total") | O resumo por documento não tem a coluna do produto. A conferência do produto usa os títulos de reserva. A posição de estoque lida pelas colunas não tem coluna de venda |
+| Média | "Empresa:" acima de "Filial:" juntava duas filiais da mesma empresa. Com uma terceira tabela da loja A, o saldo da loja B sumia | A filial vem antes da empresa. As tabelas se agrupam por loja, e os saldos das lojas somam |
+| Média | A data rotulada ("Emitido em:", "Data:") não era lida, e um inventário antigo vencia a posição atual | A data rotulada, a sozinha na célula e a do título |
+| Média | O custo do estoque misturava a tabela que ficou fora do saldo | O custo vem das tabelas que deram o saldo |
+| Média | As linhas de saldo ficavam na data do fim do período, mesmo no futuro. A avaliação recusava o envio ("mês que ainda não começou"), ou a âncora deixava de ser fatiada. Já acontecia antes desta rodada | A data de hoje, quando o fim do período ainda não chegou |
+| Baixa | Com duas âncoras, o mês entre elas contava como coberto: o relatório por produto desse mês era absorvido, e o ambíguo, aceito | O período coberto é a união dos períodos das âncoras |
+| Baixa | A coluna opcional em branco na maior parte das linhas (o fornecedor, o NCM) desfazia o alinhamento, e a tabela entrava sem saldo, com o aviso de que tinha entrado | Vale a forma de linha que traz a coluna, mesmo rara. A tabela sem saldo não entra |
+| Baixa | O desconto em percentual gravado em fração (0,2 = 20%) saía 100 vezes menor | O desconto fica de fora |
+| Baixa | A tabela de estoque com título ou coluna fora do conjunto curto era lida como venda. Já acontecia antes | Os títulos "Relatório de Estoque" e "Estoque de Produtos" e os saldos "Qtde Atual" e "Disponível" |
+| Baixa | 13 mutações sobreviviam aos testes: o saldo entre as tabelas, os depósitos, a data, o ambíguo fora do período, a linha de parâmetros, a continuação do cabeçalho, as três guardas do alinhamento e o desconto acima de 100% | Um teste para cada uma |
+
+**A verificação do código final.** Depois das correções, um verificador adversarial, de novo só com réplicas e CSVs inventados, procurou o que ainda quebrava no código final e achou 9 quebras. Oito ficaram corrigidas, cada uma com teste:
+
+| Quebra | Correção |
+|---|---|
+| O relatório de vendas que não foi lido escapava da trava como tabela auxiliar quando o produto vinha em "Item", "Descrição" ou "Mercadoria" | As guardas conhecem os títulos curtos do produto |
+| O mesmo, com o valor em "Valor", "Vlr" ou "Valor R$" | O valor sem dizer de quê, numa coluna que a tabela auxiliar não leu, recusa a tabela |
+| "Estoque" sozinho no começo do título (a razão social, o módulo "Estoque - Curva ABC") fazia a venda virar posição de estoque | O título de estoque pede a posição, o saldo, o inventário ou o balanço, ou o estoque com o que ele é |
+| O nome da loja na célula ao lado do rótulo não era lido, e as tabelas de duas lojas não somavam | A loja na célula seguinte |
+| A tabela só com a empresa, ou com a filial "Todas", contava como loja e somava com a da filial: o estoque dobrava | A empresa e a filial consolidada não são loja |
+| Com a âncora com código, a tabela de estoque sem o código ficava de fora inteira | O código só é a chave quando toda tabela o traz |
+| Dois códigos com o mesmo nome davam o saldo de um só | Os saldos somam |
+| O relatório por produto com lojas da âncora e de fora era absorvido, e a venda das outras lojas sumia | É recusado, pedindo o relatório de cada loja separado ou a venda item a item de todas |
+
+A nona era o relatório de vendas com título de estoque e o preço de venda da unidade, lido como posição. A guarda que entrou para ela (o preço da unidade decide contra o título de estoque) sobreviveu ao teste de mutação: o título de estoque completo já barrava os casos do teste. Uma sonda com CSVs inventados mostrou o pior: a posição de estoque e o inventário de verdade com o preço da unidade ("Qtde;Preço Custo;Preço Venda", "Quantidade;Preço Unitário;Valor Total", "Qtd;Preço") viravam venda, com o valor do estoque no faturamento. A guarda saiu, e ficou o teste dessas tabelas (`test_estoque_com_preco_da_unidade_continua_estoque`). A mutação do título de estoque completo também sobrevivia, porque o modelo do teste trazia o preço de venda: o teste ganhou a razão social sem ele.
+
+O teste de mutação final desfez cada correção, uma por vez, e recolocou a guarda que saiu: 11 alterações (duas correções desfeitas de dois jeitos), 11 percebidas pelos testes.
+
+**A verificação independente final.** Depois disso, um revisor independente conferiu os Docs contra o código, rodando CSVs inventados no código final e no do commit anterior. O revisor da classificação e dois dos três verificadores pararam no meio, com o login expirado, e os achados foram reproduzidos à parte, nas duas cópias. Ele achou três textos errados, corrigidos acima: o limite da tabela sem o título na primeira célula (a posição de estoque com "Qtde" continua lida como venda, como antes), as regras de loja (só valem com a loja na âncora) e o achado derrubado da quinta revisão (o aviso aparece). Achou também quatro defeitos do código, todos de antes desta rodada (da ingestão em lote do commit anterior), corrigidos cada um com teste:
+
+| Defeito | Correção |
+|---|---|
+| A venda item a item sem a linha do período, com a data de cada venda fora do período da âncora, era absorvida, e a venda sumia do faturamento, nas duas rotas | Sem o período no cabeçalho, ela vale pelas datas das linhas: a de outro mês continua sendo venda (o lead pede a linha do período, como pede a ela sozinha) |
+| O saldo dos relatórios por produto vinha do último enviado, e não do de período mais recente | O do período mais recente |
+| Sem a loja na âncora, o relatório por produto com a loja de cada venda era absorvido em silêncio | Continua absorvido (a âncora pode ser a da rede toda), com aviso |
+| "Geral" em qualquer lugar do nome da filial ("003 - LOJA GERAL") fazia a tabela contar como o total, e não como loja | Só o valor que começa, depois do código, por "Todas", "Geral", "Total" ou "Consolidado" é o total |
+
+O revisor da classificação parou antes de devolver o resultado, mas deixou os roteiros. Rodados à parte nas duas cópias, eles mostraram três regressões desta rodada e um caso a mais (a última linha), corrigidos cada um com teste:
+
+| Defeito | Correção |
+|---|---|
+| O relatório da venda com o estoque, com título de estoque ("Posição de Estoque e Giro" com "Estoque Atual;Qtde;Valor Total"), era lido como posição de estoque: a venda de outro mês sumia, e a do mês da âncora dava o custo errado | Com título de estoque, a quantidade que não é a do saldo decide contra a tabela auxiliar |
+| "Relatório de Estoque" com "Saídas por Produto" na linha de baixo era lido como posição de estoque, com a quantidade vendida no saldo | A linha de texto do topo que fala de venda ou de saída decide contra a tabela auxiliar |
+| A posição de estoque a preço de venda ("Qtde;Preço Venda;Valor Total") dava o custo pela divisão do valor pelo saldo, e a margem saía zero | O valor a preço de venda não dá custo |
+| Sem o título de estoque na primeira célula, a posição "Saldo Atual;Custo Médio;Valor Total" era recusada com a trava de vendas, e com a âncora recusava o envio inteiro | Ao lado do custo unitário, o "Valor Total" é o valor do estoque |
+
+Um teste de mutação desfez cada uma das oito correções: os testes perceberam 8 de 8. No fim, as 19 mutações das duas verificações rodaram de novo, uma por vez, sobre o código final: os testes perceberam as 19.
+
 ## 13. Ingestão em lote: a âncora temporal e as tabelas auxiliares
 
-Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data de cada venda (a Opção 27 do ERP, "Vendas por Cliente Detalhada por Produto", com a "Data Ven."), o resumo por pedido ou documento, a posição de estoque a custo, o relatório de compras por nota e a lista de preços. A lógica fica no processo isolado (`raio_x._ler_envio_uma_vez` e `etl_processor.ler_tabela_auxiliar`); `raio_x_servico.processar_envio` já manda todos os arquivos juntos, e não mudou.
+Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data de cada venda (a Opção 27 do ERP, "Vendas por Cliente Detalhada por Produto", com a "Data Ven."), o resumo por pedido ou documento, a posição de estoque, o inventário, o relatório de compras por nota e a lista de preços. A lógica fica no processo isolado (`raio_x._ler_envio_uma_vez` e, no `etl_processor`, `ler_tabela_pelo_titulo` e `ler_tabela_auxiliar`); `raio_x_servico.processar_envio` já manda todos os arquivos juntos, e não mudou. A segunda rodada de 11/2026, feita com os arquivos reais desses tipos, acrescentou a classificação prévia e a leitura dos leiautes reais (abaixo).
 
-- **A âncora.** É a venda item a item com a data de cada venda (`raio_x._datas_validas`). Com ela no envio, os outros arquivos deixam de ser vendas e a completam, e a trava dos indicadores por venda (`requer_item_a_item`) cai: o modo é o analítico. Sem a âncora, nada muda: cada arquivo é um relatório de vendas, e a tabela auxiliar é recusada como antes.
+- **A classificação prévia.** Na leitura de cadastro (o Raio-X do cliente e o lead), o título do relatório decide antes da leitura de vendas. A posição de estoque, o inventário e a lista de preços são lidos como tabela auxiliar quando o **título do relatório** diz isso (`_papel_pelo_titulo`). O título é a primeira célula com letras do topo, comparada pelo começo (`_titulo_do_relatorio`). Também conta o valor depois de "Relatório:" na mesma célula, o trecho antes do separador ("Posição de estoque - Emitido em: ...") ou o título seguido de data ("Posição de estoque em: 09/11/2026"). Não decidem a favor da tabela auxiliar:
+  - **o parâmetro com dois-pontos**, como "Tabela de Preço: 1 - VAREJO" ou "Considerar estoque atual: Sim", comum em relatório de vendas, nunca é título;
+  - **o título de preços sem "preço"**: ele pede essa palavra, porque "Relação de Produtos" pode ser venda;
+  - **"Estoque" sozinho no começo do título**: a razão social ("ESTOQUE DE FÁBRICA CALÇADOS LTDA") e o módulo do ERP ("Estoque - Curva ABC de Produtos") começam assim. O título de estoque pede a posição, o saldo, o inventário ou o balanço, ou o estoque com o que ele é ("Estoque atual", "Estoque de produtos", "Relatório de estoque");
+  - **o título de vendas ou de compras no topo, a palavra de venda ou de compra no título e a coluna que só existe em vendas** ("Qtde Vendida", "Total Venda") decidem contra ela, e o arquivo segue para a leitura de vendas;
+  - **a linha de texto do topo que fala de venda ou de saída**, fora do título e dos parâmetros ("Saídas por Produto" embaixo de "Relatório de Estoque"), também: o relatório é do movimento, e a quantidade dele é a vendida;
+  - **com título de estoque, a quantidade que não é a do saldo** também ("Estoque Atual;Qtde;Valor Total"): é o relatório da venda com o estoque ("Posição de Estoque e Giro"). Fora isso, nenhuma coluna recusa a tabela com título de estoque: o preço da unidade e o total ("Qtde;Preço Venda", "Quantidade;Preço Unitário;Valor Total") são os da posição ou do inventário.
+
+  Depois, o arquivo que não é relatório de vendas por produto é reconhecido pelo que é:
+  - o resumo por pedido ou documento, pelas colunas;
+  - o relatório de compras, pela recusa de sempre;
+  - o resumo de vendas sem produto: o título "Giro de vendas por fornecedor", "por grupo", "por cliente" ou "por forma de pagamento", sem título de coluna de produto;
+  - o relatório de vendas de leiaute ambíguo (dois títulos iguais para um valor, ou o separador de colunas duvidoso).
+
+  **A tabela auxiliar nunca passa pela trava "não foi possível identificar produto, quantidade e valor de venda".** Ela vale só para o relatório de vendas por produto que não foi lido (sem uma das colunas) e para o arquivo que não é nada disso. Esse relatório também não escapa dela pelas colunas:
+  - o resumo por documento não tem a coluna do produto;
+  - a lista de preços não tem a quantidade nem o total da venda;
+  - a posição de estoque lida pelas colunas (sem o título) também não, a não ser o total ao lado do custo unitário ("Saldo Atual;Custo Médio;Valor Total"), que é o valor do estoque;
+  - o resumo sem produto não tem título de coluna de produto, contados os títulos de reserva ("Total", "Vlr. Total");
+  - o título de coluna do produto inclui os curtos ("Item", "Descrição", "Mercadoria"), e não o total nem o agrupamento ("Total Produtos", "Grupo de Produtos");
+  - o valor sem dizer de quê ("Valor", "Vlr", "Valor R$") numa coluna que a tabela auxiliar não leu é o total da venda: a lista de preços e a posição de estoque lida pelas colunas que o trazem são recusadas.
+- **A âncora.** É a venda item a item com a data de cada venda, com a linha do período no cabeçalho e toda data dentro dele (`raio_x._datas_validas`). Com ela no envio, os outros arquivos deixam de ser vendas e a completam, e a trava dos indicadores por venda (`requer_item_a_item`) cai: o modo é o analítico. O período coberto é a união dos períodos das âncoras (`raio_x._cobertura`). Com duas âncoras, o mês entre elas não é coberto: o relatório por produto desse mês continua sendo venda, e o de leiaute ambíguo é recusado.
 - **Os papéis.**
-  - O relatório de vendas por produto sem data por linha, dentro do período da âncora (ou sem período), dá o custo unitário do período (custo das vendas / quantidade com custo), o último saldo e o cadastro, e **não soma no faturamento**. O resumido do ERP conta o pedido e a nota em dobro (UNIFICACAO, seção 10): o custo unitário não muda com isso. O relatório de outra loja (com loja nomeada que a âncora não tem) ou de outro período continua sendo venda.
-  - A posição de estoque dá o saldo e o custo de cada produto; a lista de preços, o cadastro (o mix sobre os cadastrados).
-  - O resumo por pedido ou documento dá o desconto (na primeira linha de venda de cada pedido), o CPF/CNPJ do cliente e a hora, quando casa com ao menos 90% das vendas da âncora.
-  - O relatório de compras entra no envio, mas fica fora das contas: o resumo por nota não traz o produto (o saving continua pedindo o preço de compra por produto).
-- **O cruzamento.** É um left join, com a âncora como tabela primária. O produto casa pelo código quando a âncora e as tabelas o trazem (só letras e algarismos, sem os zeros à esquerda: "0700019" e "000007000.19" são o mesmo) e, sem ele, pelo nome normalizado, a chave de produto do motor inteiro: a Opção 27 real não tem a coluna de código. A venda casa pelo número (`numero_da_venda`, sem os zeros à esquerda de cada grupo: "P9-00001" e "P9-1"). O custo e o estoque só completam a âncora que não os traz; o desconto, o cliente e a hora, a âncora sem a coluna.
-- **As prioridades.** Custo: o do relatório por produto (do período), senão o da posição de estoque (ponderado pelo saldo), senão o da lista de preços. Saldo: o da posição de estoque (somado entre arquivos e linhas), senão o último do relatório por produto mais recente. O saldo entra como linhas sem venda (quantidade 0) na data do fim da âncora, como o relatório "vendas x estoque" lista o item parado; o custo do produto sem venda valoriza o saldo dele nos indicadores (o estoque parado, os encalhados).
-- **A trava contra a duplicação.** Depois do cruzamento, as linhas da âncora e o faturamento são os de antes, no centavo: se `abs(faturamento depois - faturamento da âncora) > 0,01`, ou a chave repetida do lado das tabelas multiplicaria as linhas, o envio é recusado com "Falha de Contenção de Dados: Duplicação de Faturamento Detectada".
-- **Os avisos.** O Raio-X diz o papel de cada arquivo auxiliar, de onde veio o custo ("as margens são estimadas": o custo médio do período aplicado às vendas do período inteiro), a data do estoque e o casamento do resumo por documento.
+  - O relatório de vendas que não é âncora (o por produto, sem data por linha, ou a venda item a item sem a linha do período), dentro do período da âncora, dá o custo unitário do período (custo das vendas / quantidade com custo), o último saldo e o cadastro, e **não soma no faturamento**. Sem a linha do período, a venda item a item vale pelas datas das linhas (`raio_x._periodo_das_datas`); o relatório sem período e sem data por linha é tomado como do período da âncora. O resumido do ERP conta o pedido e a nota em dobro (UNIFICACAO, seção 10): o custo unitário não muda com isso. O relatório de outro período continua sendo venda.
+  - As regras de loja só valem quando a âncora traz a loja de cada venda. Aí, o relatório só de outras lojas continua sendo venda, e o que traz lojas da âncora e lojas que ela não tem é recusado: somar duplicaria a venda das primeiras, e absorver perderia a das outras. Sem a loja na âncora (a Opção 27 real não traz), o relatório por produto do período é absorvido, de uma loja ou de várias: a âncora é tomada como a venda da rede toda, e o Raio-X avisa quando o relatório traz a loja de cada venda.
+  - A posição de estoque e o inventário dão o saldo e o custo de cada produto; a lista de preços, o cadastro (o mix sobre os cadastrados). O preço da lista não entra nas contas (ver os limites).
+  - O resumo por pedido ou documento dá o desconto (na primeira linha de venda de cada pedido), o CPF/CNPJ do cliente e a hora, quando casa com ao menos 90% das vendas da âncora. O desconto em percentual vira reais por valor × p / (100 − p), porque o valor do documento já vem líquido. O percentual de 100 ou mais fica de fora. Quando todo percentual vai até 1, ele pode estar em fração (o 20% gravado como 0,2): sem como saber, o desconto fica de fora, e o índice pede a coluna, em vez de sair 100 vezes menor.
+  - O relatório de compras, o resumo de vendas sem produto e o relatório de vendas de leiaute ambíguo do período da âncora entram no envio, mas ficam fora das contas, com aviso. O de leiaute ambíguo de fora do período da âncora é recusado, porque a venda dele faltaria.
+- **Sem a âncora.** Cada relatório de vendas soma, como antes.
+  - Com relatório de vendas no envio, a tabela auxiliar (posição de estoque, inventário, lista de preços, resumo por documento) e o resumo de vendas sem produto ficam fora das contas, com aviso: não há o que completar.
+  - O relatório de compras e o de leiaute ambíguo continuam recusados, pela decisão anterior.
+  - Sem relatório de vendas no envio, o primeiro arquivo auxiliar recusa o envio dizendo o que é ("o arquivo é uma posição de estoque, uma tabela auxiliar que só completa a venda item a item..."). O resumo de vendas sem produto recusa com a mensagem de sempre.
+- **O cruzamento.** É um left join, com a âncora como tabela primária.
+  - O produto casa pelo código quando a âncora e todas as tabelas o trazem (só letras e algarismos, sem os zeros à esquerda: "0700019" e "000007000.19" são o mesmo). Basta uma tabela sem o código para a chave ser o nome: pelo código, ela ficaria de fora inteira. Sem o código, casa pelo nome normalizado, a chave de produto do motor inteiro: a Opção 27 real não tem a coluna de código. Pelo código, dois códigos com o mesmo nome viram uma linha de saldo só, com os saldos somados, porque o motor lê o saldo pelo nome.
+  - A venda casa pelo número (`numero_da_venda`, sem os zeros à esquerda de cada grupo: "P9-00001" e "P9-1").
+  - O custo e o estoque só completam a âncora que não os traz; o desconto, o cliente e a hora, a âncora sem a coluna.
+- **As prioridades.**
+  - Custo: o do relatório por produto (do período), senão o das tabelas de estoque que deram o saldo do produto (ponderado pelo saldo), senão o da lista de preços. A tabela que ficou fora do saldo (o inventário antigo) só entra para o produto sem custo nas que valeram. O custo da tabela de estoque é o da coluna do custo, ou o valor do estoque dividido pelo saldo; o valor a preço de venda (o título dele diz venda, ou a tabela traz o preço de venda e o título do valor não diz custo) não dá custo: daria o preço de venda, e a margem zero.
+  - Saldo: o das tabelas de estoque (`raio_x._saldo_das_tabelas_de_estoque`), senão o último do relatório por produto de período mais recente (no empate, o último enviado; sem período, ele conta como o mais antigo). Dentro de uma tabela, as linhas do mesmo produto somam (os depósitos).
+  - **As tabelas se agrupam pela loja do topo.** A loja é a filial (ou a loja, a unidade), com o depósito junto. O nome vem na célula do rótulo ("Filial: 001 - LOJA A") ou na seguinte. A empresa não identifica a loja: é a mesma nas filiais, e a tabela só com ela pode ser a de uma filial ou o total de todas. A filial que começa, depois do código, por "Todas", "Geral", "Total" ou "Consolidado" também não; "003 - LOJA GERAL" é loja.
+    - Com duas lojas ou mais com nome, cada loja dá o saldo dela, e os saldos das lojas somam. A tabela sem a loja no topo só completa o produto que nenhuma loja traz.
+    - Com uma loja só, ou nenhuma com nome, as tabelas são da mesma loja, e somar dobraria o estoque: a posição de estoque e o inventário trazem o saldo dos mesmos produtos.
+  - **Dentro da loja vale a tabela de data mais recente.** A data é, nesta ordem: o fim do período do cabeçalho; a data rotulada ("Data:", "Emitido em:", "Posição em:"); a data sozinha na célula (a emissão); a data num texto do topo (o título, "Impresso por ... em ..."). A tabela sem data conta como a mais antiga, como o relatório sem período. No empate, a posição vem antes do inventário, e depois o primeiro arquivo. As outras só completam o produto que ela não traz, e o Raio-X avisa qual valeu.
+  - O saldo entra como linhas sem venda (quantidade 0), como o relatório "vendas x estoque" lista o item parado. A data delas é a do fim da âncora, ou a de hoje quando o fim do período ainda não chegou: um mês que ainda não começou faria a avaliação recusar o envio, ou o Raio-X deixar de fatiar a âncora. O custo do produto sem venda valoriza o saldo dele nos indicadores (o estoque parado, os encalhados).
+- **A trava contra a duplicação.** Depois do cruzamento, as linhas da âncora e o faturamento têm de ser os de antes, no centavo. Se `abs(faturamento depois - faturamento da âncora) > 0,01`, ou se a chave repetida do lado das tabelas multiplicaria as linhas, o envio é recusado com "Falha de Contenção de Dados: Duplicação de Faturamento Detectada".
+- **Os avisos.** O Raio-X diz:
+  - o papel de cada arquivo do envio que não somou: se completou a âncora ou se ficou fora das contas;
+  - de onde veio o custo ("as margens são estimadas");
+  - a data do estoque e a tabela de estoque que valeu;
+  - o casamento do resumo por documento;
+  - a loja de cada venda no relatório absorvido, quando a âncora não traz a loja.
+- **Desempenho.** O custo unitário dos produtos sem venda vai numa coluna das linhas acrescentadas (`_custo_auxiliar`), e não em `df.attrs`. O pandas 2 copia os attrs a cada operação, e com os milhares de produtos de uma posição de estoque real o lote levava três vezes mais.
 
-**Ensaio com os relatórios reais** (a Opção 27 e a Resumida por Produto, só agregados): o faturamento fica R$ 710.718,23, o da Opção 27 sozinha, no centavo; o ticket, as 10.808 vendas e os 2,816 itens por venda não mudam. Passam a sair a margem bruta (45,48%, contra 45,62% da Resumida sozinha), o CMV (R$ 349.614,39), o giro (anualizado 0,66, estoque a custo de R$ 176.226,80), o GMROI (1,65), os encalhados (R$ 104.203,53 a custo), a cobertura e o mix (904 vendidos de 912 cadastrados). O custo veio para 893 dos 904 produtos vendidos. As duas ordens dão o mesmo resultado, e o lead, que recusava a Resumida (o período passa de um ano para o outro), aceita o par. Cerca de 16 s, contra 10 s da Opção 27 sozinha.
+### Os leiautes reais (11/2026)
+
+Os arquivos reais do ERP são `.xls` (BIFF8), relatórios paginados exportados para planilha. Foram inspecionados pelo leitor do próprio motor, com as células de dado pessoal mascaradas.
+
+| Relatório (título no arquivo) | Estrutura | Colunas lidas | Papel |
+|---|---|---|---|
+| "Giro de vendas por cliente detalhada por produto" (a Opção 27) | Blocos por cliente; cabeçalho em duas linhas, repetido | Data, Nr. Doc., Produto, Qtde e Valor Total. "Ven." e "Valor Unit." ficam de fora | Âncora |
+| "Posição de estoque atual de produtos" | Filial no topo; blocos por grupo ("Grupo :"); cabeçalho em duas linhas, repetido; total de cada grupo | Código, Nome produto (título na coluna F, dado na D), Est. Atual (o saldo), Preço Custo (título na L, dado na M) e Valor Estoque (título na M, dado na N). Forn., Est. Mín. e Est. Máx. ficam de fora | Estoque |
+| "Inventário de Estoque" | "Período : dd/mm/aaaa"; cabeçalho de página repetido; o título da descrição com as letras separadas por espaço | Cód. (título na A, dado na B), Descrição do produto (título na E, dado na D), Custo Unitário (título na H, dado na J), Saldo de Estoque e Valor do Estoque. O NCM fica de fora | Estoque |
+| "Lista de preços" | Parâmetros no topo; blocos por grupo; o produto uma vez por grupo de preço | Cód. Prod. (título na A, dado na B), Nome e Preço (título na F, dado na G) | Preços (o cadastro) |
+| "Giro de vendas por Cliente / documento" | Blocos por vendedor; cabeçalho em duas linhas; subtotais e total | Nr. Doc. (título na C, dado na A), Valor (líquido) e Total Desc. % (o desconto em percentual). Data, Cliente, Acres., Frete e % Méd Comi. ficam de fora | Documentos |
+| "Posição das compras de produtos" | Resumo por nota; cabeçalho de página repetido | Data da Compra, Número NF, Série, Fornecedor, Vr Total Produtos e Valor Nf | Compras (fora das contas) |
+| "Giro de vendas por fornecedor", "por grupo de produtos", "por grupo de clientes", "por forma de pagamento" e "Por cliente - Ranking" | Resumos sem produto | — | Resumo de vendas sem produto (fora das contas) |
+| "Giro de vendas por Produto(s) Vendido(s) Abaixo do Pr. Custo" | Dois "Valor Unitário" (o de compra e o vendido) | — | Ambíguo (fora das contas no período da âncora) |
+| "Giro de Vendas por Produto" (a Resumida) | Cabeçalho em duas linhas | Codigo, Nome do produto, Qtde Vend, Total Venda, Total Custo e Estoque Atual | Relatório por produto (absorvido pela âncora) |
+
+Os leitores tratam o que esses arquivos têm:
+- O título em duas linhas ("Est." sobre "Atual", "Total" sobre "Desc. %"). Sem isso, o "Total" de "Total Desc. %" ficava com o valor do documento.
+- O título numa coluna e o dado em outra, alinhados pela ordem (`_alinhar_tabela_auxiliar`).
+- As linhas de parâmetro do topo, que nunca são título de coluna. O "Grupo Preço inicial: 1" sobre o "Produto inicial: ..." parecia um cabeçalho com o produto e o preço.
+- O título com as letras separadas (`_desespacar`).
+- Os títulos curtos ("Cód.", "Nome", "Valor"), pelos títulos de reserva.
+- "Posição das compras" como título de relatório de compras.
+- A coluna opcional em branco na maior parte das linhas (o fornecedor, o NCM): a forma de linha que a traz, mesmo rara, diz onde ela fica. A geometria e a prova de leitura continuam valendo. A tabela de estoque sem saldo nenhum lido não entra.
+
+**Ensaio com o lote real (11/2026, só agregados).** A Opção 27 que está agora na pasta é outra exportação: 20 clientes, 220 vendas, 418 linhas e R$ 15.872,67, de 01/01/2023 a 11/11/2026. A exportação anterior, da loja toda, dava R$ 710.718,23. O ensaio rodou com essa Opção 27 mais os cinco auxiliares (posição de estoque, inventário, lista de preços, resumo por documento e posição das compras), e também com os 13 arquivos da pasta juntos. Nos dois casos, as duas rotas (o Raio-X do cliente e o lead) aceitam o envio, e o faturamento fica R$ 15.872,67, o da Opção 27 sozinha, no centavo.
+- **Resumo por documento:** casa com 220 das 220 vendas e dá R$ 453,74 de desconto, o mesmo "Vr. desctos" do rodapé do relatório e a soma dos "Descontos" da Opção 27. O índice de descontos fica em 2,78%.
+- **Estoque:** a posição dá o saldo de 2.105 produtos, com 20.340,33 unidades, o "Total geral" do relatório. O inventário, da mesma data, traz os mesmos produtos e não soma.
+- **Lista de preços:** 3.995 linhas de 2.105 produtos, dois preços por produto.
+- **Custo:** com os cinco auxiliares, veio para 148 dos 189 produtos vendidos (o nome de 37 deles não está no cadastro atual). Com a Resumida por Produto junto, veio para 185.
+- **Representatividade:** a venda é de 20 clientes e o estoque é o da loja toda. Por isso o giro, a cobertura, o GMROI e os encalhados deste ensaio não dizem nada da loja: ele confere a leitura, não o diagnóstico.
+- **Tempo:** de 6 a 11 s por rota. Eram 33 s antes de o custo dos parados sair de `df.attrs`.
+- **Pela rota HTTP de verdade:** `POST /admin/leads` com os 13 arquivos, a Baia de Segurança e o processo isolado do ETL, no app de teste com SQLite descartável. A resposta é HTTP 303, o lead é gravado e a tela e o `diagnostico.json` abrem. O Raio-X do cliente, pela função de serviço da rota (`raio_x_servico.processar_envio`), dá o mesmo faturamento.
+- **Regressão:** com a Opção 27 sozinha, e com o par Opção 27 + Resumida por Produto, o resultado é idêntico ao do código anterior.
 
 **Limites.**
-- Os leiautes da posição de estoque, da lista de preços, do resumo por pedido e do relatório de compras por nota são os títulos comuns de ERP: nenhum arquivo real desses tipos foi recebido até 11/2026. O primeiro de cada um deve ser conferido.
-- A posição de estoque com "Qtde" e "Valor Total" (sem "Saldo" nem "Estoque" no título da coluna) é lida como relatório de vendas, e entra como relatório por produto: o saldo dela não é lido.
-- O custo do relatório por produto é o médio do período inteiro: a margem de cada mês é estimada com ele.
+- O preço da lista de preços não entra nas contas. O ERP lista o produto uma vez por grupo de preço, sem dizer de que grupo é cada linha, e usar esse preço como referência mudaria o vazamento do Raio-X (a venda abaixo do preço de referência). Fica para decisão do dono.
+- O NCM do inventário não entra no cadastro do lead. Os produtos vendidos que não estão no cadastro atual (37 no ensaio) virariam "sem NCM" (omissão no ERP) sem ser.
+- O grupo de produto dos blocos ("Grupo :") não vira categoria, pelo mesmo motivo e pela precedência das categorias, que o dono ainda decide.
+- O relatório de compras por nota fica fora das contas: não traz o produto, e o saving pede o preço de compra por produto.
+- O custo do relatório por produto é o médio do período inteiro: a margem de cada mês é estimada com ele. Sem esse relatório, o custo é o da posição de estoque, o de hoje.
 - A inteligência de estoque do lead (o capital em estoque por produto) só valoriza o produto que vendeu no ano; o parado sem venda fica sem o valor a custo lá.
 - No arquivo com duas lojas, o resumo por documento casa pelo número sem a loja.
+- A empresa no topo não identifica a loja. Duas tabelas de estoque só com a empresa, sem a filial, contam como da mesma loja e não somam: vale a mais recente, com aviso.
+- Só a primeira célula com letras do topo é o título. O relatório que começa por outra coisa (o nome da empresa, a emissão, a página, ou "Relatório:" numa célula e o título na seguinte) é classificado pelas colunas: a tabela com título de saldo próprio ("Saldo", "Estoque Atual") é lida como estoque, e a que traz o saldo e o total ("Estoque;Valor Total") é recusada pela trava. A posição de estoque com o saldo em "Qtde" (e "Valor Total" ou "Preço Venda") continua lida como relatório de vendas, como antes desta rodada: sozinha, o valor do estoque entra no faturamento do Raio-X do cliente (o lead recusa pela falta do período); com a âncora, ela é absorvida, e o saldo dela não é lido.
+- O relatório que cobre só parte do período da âncora (pelo período do cabeçalho ou, sem ele, pelas datas das linhas) não é absorvido: no Raio-X do cliente ele soma, e a parte comum conta duas vezes; o lead recusa (a sobreposição, ou a falta do período). É a regra de sempre dos períodos que se sobrepõem.
+- Sem a loja na âncora, a venda das lojas que ela não tem, num relatório por produto do período, não soma: o Raio-X avisa, e o cliente envia a venda item a item de todas as lojas.
+- O desconto em percentual gravado em fração (0,2 = 20%) fica de fora, e a lista de preços com "Valor Total" é recusada como relatório de vendas.
+- A posição de estoque com o valor a preço de venda num título de venda ("Total Venda", "Valor Total Venda") é tomada como relatório de vendas, porque esse título é o da venda. Com a quantidade ("Qtde;Custo Unit.;Total Custo;Preço Venda;Total Venda"), ela vira venda, e sozinha o valor do estoque a preço de venda entra no faturamento do Raio-X do cliente, como antes desta rodada. Sem a quantidade ("Saldo;Custo;Valor Total Custo;Valor Total Venda"), é recusada pela trava, também ao lado da âncora (o commit anterior a lia como estoque pelas colunas). Separar a valorização do estoque do total da venda pede regra nova, decisão do dono.
+- A coluna opcional em branco em todas as linhas (nenhuma linha a traz) ainda desfaz o alinhamento. A tabela é então lida pelas colunas ou recusada, nunca com o dado na coluna errada: a prova de leitura impede.
+- Os leiautes foram conferidos com uma exportação de cada tipo, de um ERP só. Outro ERP, ou outra versão do relatório, pode pedir títulos novos nos dicionários.
