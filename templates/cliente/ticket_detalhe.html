@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% import "_chat.html" as chat %}
+{# WhatsApp de atendimento com só o número do chamado (nunca o assunto nem dado da empresa). #}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 
 {% block title %}Chamado #{{ chamado.id_chamado }} — NEXO{% endblock %}
 {% block page_title %}Chamado #{{ chamado.id_chamado }}{% endblock %}
@@ -13,6 +15,9 @@
     </div>
     <div class="page-head-actions">
         {{ m.badge_chamado(chamado.status_chamado) }}
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.chamado|format(chamado.id_chamado), 'Falar pelo WhatsApp', contexto='sobre o chamado #' ~ chamado.id_chamado) }}
+        {%- endif %}
         <a href="{{ url_for('cliente.tickets') }}" class="btn-ghost"><i class="bi bi-arrow-left"></i> Voltar</a>
     </div>
 </div>

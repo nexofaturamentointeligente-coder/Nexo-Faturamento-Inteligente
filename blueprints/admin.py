@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 from blueprints.auth import corrigir_email_pelo_admin, limite_reautenticacao, trocar_senha_autenticada
 import configuracoes_conta
 from extensions import chave_limite_usuario, db, limiter
-from horario import agora_utc
+from horario import BRASILIA, agora_utc
 from models import (
     Analise, UploadRelatorio, Empresa, Plano, Segmento, Usuario, RelatorioAnalise,
     ChamadoSuporte, MensagemSuporte, GuiaTopico, ProdutoCurvaABC, Notificacao,
@@ -48,9 +48,11 @@ from origem_publica import url_publica
 from contract_policy import (
     contrato_da_vigencia, esquema_contratual_disponivel, motivo_bloqueio_nova_analise,
     obter_contrato_aplicavel,
-    obter_situacao_contratual, pode_consultar_analise, regime_contratual_ativo,
+    obter_situacao_contratual, pode_consultar_analise, pode_enviar_relatorio, regime_contratual_ativo,
 )
+from preferencias_usuario import ids_com_aviso_desligado
 import storage
+import whatsapp_service
 
 # Categorias de ticket (token persistido -> rótulo exibido) — espelha cliente.py.
 CATEGORIAS_TICKET = {
@@ -72,6 +74,81 @@ def admin_required(f):
             abort(403)
         return f(*args, **kwargs)
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Avisos por WhatsApp (whatsapp_service.py): sempre depois do commit, só com o telefone de
+# contato da empresa cadastrado e nunca mudando a resposta da rota. Os valores simples
+# (telefone, nomes, status) são lidos aqui, na requisição; a fila de fundo do notificador só
+# faz o HTTP, sem tocar no banco.
+# ---------------------------------------------------------------------------
+def _nome_da_empresa(empresa) -> str | None:
+    return (empresa.nome_fantasia or empresa.razao_social) if empresa is not None else None
+
+
+def _avisar_por_whatsapp(descricao: str, disparar) -> None:
+    """Roda um gatilho de WhatsApp sem deixar falha nenhuma (banco, dado, fila) subir: a operação
+    que o originou já está confirmada no banco."""
+    try:
+        disparar(whatsapp_service.notificador())
+    except Exception as erro:  # noqa: BLE001 - aviso auxiliar
+        db.session.rollback()
+        current_app.logger.warning("Aviso por WhatsApp %s não disparado (%s).", descricao, type(erro).__name__)
+
+
+def _whatsapp_chamado_atualizado(chamado) -> None:
+    """Chamado respondido ou com o status mudado pela equipe: avisa o telefone da empresa quando o
+    cliente que abriu o chamado tem acesso ao portal e não desligou os alertas de chamado (a mesma
+    regra do sininho)."""
+    def disparar(notificador):
+        empresa = chamado.empresa
+        telefone = empresa.telefone_contato if empresa is not None else None
+        cliente = chamado.usuario_cliente
+        if not telefone or not usuario_pode_acessar(cliente):
+            return
+        if cliente.id_usuario in ids_com_aviso_desligado("alerta_chamado", [cliente.id_usuario]):
+            return
+        notificador.notificar_atualizacao_ticket(telefone, cliente.nome, chamado.id_chamado,
+                                                 chamado.status_chamado)
+    _avisar_por_whatsapp("do chamado", disparar)
+
+
+def _whatsapp_relatorio_publicado(analise) -> None:
+    """Análise publicada que o cliente já pode abrir: o relatório pronto vai ao telefone da empresa,
+    cumprimentando a empresa (como a abertura do envio). A análise mensal não calcula potencial
+    recuperável, então a mensagem sai sem valor."""
+    def disparar(notificador):
+        empresa = analise.empresa
+        telefone = empresa.telefone_contato if empresa is not None else None
+        if telefone:
+            notificador.notificar_relatorio_pronto(telefone, _nome_da_empresa(empresa), None, None)
+    _avisar_por_whatsapp("da análise publicada", disparar)
+
+
+def _hoje_em_brasilia():
+    return agora_utc().astimezone(BRASILIA).date()
+
+
+def _whatsapp_abertura_do_envio(analise) -> None:
+    """Análise nova aguardando relatório: o envio do mês de referência abriu para a empresa (o
+    cliente só envia arquivo para análise aberta pelo admin). Só avisa quando a política deixa o
+    cliente enviar (empresa suspensa, só para período já pago) e quando o mês é o corrente, o
+    anterior ou um futuro: o lançamento retroativo de histórico, em que o próprio admin sobe os
+    arquivos, não manda ao cliente um "envie os arquivos" por mês antigo."""
+    def disparar(notificador):
+        hoje = _hoje_em_brasilia()
+        mes_anterior = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
+        if (analise.ano_referencia, analise.mes_referencia) < mes_anterior:
+            return
+        empresa = analise.empresa
+        telefone = empresa.telefone_contato if empresa is not None else None
+        if not telefone or not pode_enviar_relatorio(obter_situacao_contratual(empresa), analise):
+            return
+        quinzena = analise.quinzena_referencia if analise.tipo_analise == "QUINZENAL" else None
+        notificador.notificar_abertura_mensal(telefone, _nome_da_empresa(empresa),
+                                              f"{analise.ano_referencia:04d}-{analise.mes_referencia:02d}",
+                                              quinzena=int(quinzena) if quinzena is not None else None)
+    _avisar_por_whatsapp("da abertura do envio", disparar)
 
 
 @admin_bp.route("/dashboard")
@@ -375,6 +452,8 @@ def analise_nova():
             flash("Não foi possível criar a análise (dados inválidos ou duplicados). Revise e tente novamente.", "danger")
             return redirect(url_for("admin.analise_nova"))
 
+        # O envio do mês abriu para a empresa: aviso por WhatsApp depois do commit.
+        _whatsapp_abertura_do_envio(nova)
         flash(
             f"Análise #{nova.id_analise} criada para {empresa.nome_fantasia or empresa.razao_social}.",
             "success",
@@ -1369,6 +1448,8 @@ def analise_relatorio(id_analise):
             except Exception as e:  # noqa: BLE001 — efeito colateral nunca derruba o fluxo
                 db.session.rollback()
                 current_app.logger.warning("Falha ao notificar publicação da análise %s: %s", id_analise, type(e).__name__)
+            # O WhatsApp tem a própria proteção: uma falha no sininho ou no e-mail não o impede.
+            _whatsapp_relatorio_publicado(analise)
 
         msg_acao = {"rascunho": "Rascunho salvo.", "publicar": "Devolutiva publicada para o cliente.",
                     "despublicar": "Devolutiva despublicada (análise voltou a EM_ANALISE)."}[acao]
@@ -1650,6 +1731,7 @@ def ticket_detalhe(id_chamado):
                 aviso="alerta_chamado",
             )
             db.session.commit()
+            _whatsapp_chamado_atualizado(chamado)
             flash("Resposta enviada ao cliente.", "success")
 
         elif acao == "alterar_status":
@@ -1694,6 +1776,10 @@ def ticket_detalhe(id_chamado):
                 except Exception as erro:  # noqa: BLE001
                     current_app.logger.warning("Aviso por e-mail do chamado resolvido não preparado (%s).",
                                                type(erro).__name__)
+            # Qualquer mudança real de status (inclusive a reabertura) vai por WhatsApp; salvar o
+            # mesmo status de novo não avisa.
+            if novo != status_anterior:
+                _whatsapp_chamado_atualizado(chamado)
             flash("Status do chamado atualizado.", "success")
         else:
             flash("Ação inválida.", "danger")

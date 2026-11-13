@@ -54,6 +54,12 @@ O build versionado prepara pip 26.2.2 verificado por SHA256 antes da aplicação
 | `BREVO_API_KEY` | Sim | Chave **de API** do Brevo (`xkeysib-…`, não a chave SMTP) para envio de e-mails via HTTPS (Render Free bloqueia SMTP). Sem valor no painel, o envio fica desativado |
 | `MAIL_DEFAULT_SENDER` | Sim | E-mail remetente verificado no Brevo |
 | `PYTHON_VERSION` | Sim | `3.12.10` |
+| `EVOLUTION_API_URL` | Não | Evolution API, em `https`, para as mensagens automáticas por WhatsApp. Sem ela, a chave e a instância, os disparos ficam desligados (só aviso no log) |
+| `EVOLUTION_API_KEY` | Não | Chave global da Evolution API (segredo) |
+| `EVOLUTION_INSTANCE_NAME` | Não | Instância conectada ao WhatsApp da NEXO |
+| `WHATSAPP_EMPRESA_NUMERO` | Não | Número comercial com DDI (ex.: `5562999999999`) dos botões `wa.me`; vazio os esconde |
+
+Despertador do plano Free: um monitor externo chamando `GET /ping` a cada 10 a 14 minutos mantém o serviço acordado, sem login e sem consultar o banco. Antes, pese o limite de 750 horas por workspace e a pausa do Supabase Free, conforme a seção 4 de [WHATSAPP_EVOLUTION.md](WHATSAPP_EVOLUTION.md).
 
 Antes de liberar o serviço, autorize no Brevo as faixas de IP de saída do Render
 (*serviço → Connect → Outbound*) e confira *Admin → Diagnóstico de e-mail* e o

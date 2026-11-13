@@ -39,6 +39,9 @@ def ensure_test_environment():
         "NEXO_PUBLIC_URL": "https://nexo-test.example.invalid", "NEXO_TRUSTED_HOSTS": "",
         "ADMIN_EMAIL": "admin-test@example.invalid", "ADMIN_SENHA": "",
         "MAX_CONTENT_LENGTH_MB": "20",
+        # WhatsApp (whatsapp_service.py) desligado e sem botões wa.me: nenhum teste dispara de verdade.
+        "EVOLUTION_API_URL": "", "EVOLUTION_API_KEY": "", "EVOLUTION_INSTANCE_NAME": "",
+        "WHATSAPP_EMPRESA_NUMERO": "",
     })
     _ENV_READY = True
 
@@ -76,6 +79,9 @@ class DeployTestCase(unittest.TestCase):
                 "UPLOAD_FOLDER": self.work_dir / "uploads",
                 "TESTING": True, "MAIL_ATIVO": False,
                 "MAIL_SUPPRESS_SEND": True, "RATELIMIT_ENABLED": False,
+                # Mesmo com EVOLUTION_* no ambiente de quem roda a suíte (o config.py o lê na importação).
+                "EVOLUTION_API_URL": None, "EVOLUTION_API_KEY": None, "EVOLUTION_INSTANCE_NAME": None,
+                "WHATSAPP_EMPRESA_NUMERO": "",
             }.items():
                 config_stack.enter_context(patch.object(DevelopmentConfig, key, value, create=True))
             config_stack.enter_context(patch.object(

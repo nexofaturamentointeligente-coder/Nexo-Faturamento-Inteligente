@@ -58,6 +58,7 @@ from horario import agora_utc
 import inteligencia_estoque
 import leads_avaliacao
 from leads_avaliacao import RETENCAO_DIAS
+import whatsapp_service
 from models import BrainstormingDadosPdv, LeadAvaliacao
 import raio_x
 import triagem_cenario
@@ -554,6 +555,25 @@ def _avaliar(arquivos, *, contato=None, lead_id=None) -> LeadAvaliacao:
     return lead
 
 
+def _avisar_por_whatsapp(lead: LeadAvaliacao, formulario) -> None:
+    """Relatório pronto pelo WhatsApp do lead, quando cadastrado E quando o consultor confirmou que o
+    lead aceitou o aviso (caixa "aviso_whatsapp", desmarcada por padrão: a autorização de uso dos
+    relatórios não cobre o contato por WhatsApp). Depois do commit e fora da vaga de entrada, com a
+    fila de fundo do notificador fazendo o HTTP. O valor é o do KPI "Potencial recuperável" da tela do
+    lead (o total retroativo); o lead não tem acesso ao portal, então a mensagem convida para a
+    apresentação da equipe. Nada aqui muda a resposta da rota."""
+    if formulario.get("aviso_whatsapp") != "1":
+        return
+    try:
+        if lead.whatsapp:
+            whatsapp_service.notificador().notificar_relatorio_pronto(
+                lead.whatsapp, lead.nome_contato, lead.nome_loja, lead.vazamento_total_reais,
+                acesso_ao_portal=False)
+    except Exception as erro:  # noqa: BLE001 - aviso auxiliar: a avaliação já está gravada
+        db.session.rollback()
+        current_app.logger.warning("Aviso por WhatsApp do lead não disparado (%s).", type(erro).__name__)
+
+
 # =====================================================================
 # Rotas
 # =====================================================================
@@ -595,6 +615,7 @@ def avaliar():
             current_app.logger.warning("Avaliação de lead não gravada (%s).", type(erro).__name__)
             flash("Não foi possível gravar a avaliação. Tente novamente.", "danger")
             return render_template("admin/leads.html", **_contexto_lista(request.form)), 503
+    _avisar_por_whatsapp(lead, request.form)
     flash(f"Avaliação concluída: {lead.arquivos} relatório(s) de vendas.", "success")
     return redirect(url_for("leads.detalhe", lead_id=lead.id), 303)
 
@@ -678,6 +699,7 @@ def reenviar(lead_id):
             current_app.logger.warning("Reenvio de lead não gravado (%s).", type(erro).__name__)
             flash("Não foi possível gravar a avaliação. Tente novamente.", "danger")
             return redirect(url_for("leads.detalhe", lead_id=lead_id), 303)
+    _avisar_por_whatsapp(lead, request.form)
     flash(f"Avaliação refeita com {lead.arquivos} relatório(s) de vendas.", "success")
     if getattr(lead, "aviso_limiares", None):
         flash(lead.aviso_limiares, "warning")

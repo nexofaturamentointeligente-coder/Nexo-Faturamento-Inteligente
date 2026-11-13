@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% import "_auditoria.html" as audit %}
+{# WhatsApp comercial no card "Contato NEXO" e na faixa de renovação; sem número válido, como antes. #}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 
 {% block title %}Visão Geral — NEXO{% endblock %}
 {% block page_title %}Visão Geral{% endblock %}
@@ -24,7 +26,7 @@
     <i class="bi bi-calendar-event" aria-hidden="true"></i>
     <div>
         <strong>{% if aviso_renovacao.dias == 0 %}Seu contrato vence hoje.{% elif aviso_renovacao.dias == 1 %}Seu contrato vence amanhã.{% else %}Seu contrato vence em {{ aviso_renovacao.dias }} dias.{% endif %}</strong>
-        <p>Vigência até {{ aviso_renovacao.data_fim.strftime('%d/%m/%Y') }}. Fale com a equipe NEXO para renovar: <a href="{{ url_for('cliente.tickets') }}">abrir um chamado</a>. Você pode desligar este lembrete em <a href="{{ url_for('cliente.configuracoes') }}">Configurações</a>.</p>
+        <p>Vigência até {{ aviso_renovacao.data_fim.strftime('%d/%m/%Y') }}. Fale com a equipe NEXO para renovar: <a href="{{ url_for('cliente.tickets') }}">abrir um chamado</a>{% if wa %} ou {{ m.link_whatsapp(wa, m.whatsapp_textos.renovar, 'falar pelo WhatsApp', classe=none, icone=none) }}{% endif %}. Você pode desligar este lembrete em <a href="{{ url_for('cliente.configuracoes') }}">Configurações</a>.</p>
     </div>
 </div>
 {% endif %}
@@ -252,9 +254,12 @@
     <div class="contact-card-icon"><i class="bi bi-headset"></i></div>
     <div>
         <h2>Contato NEXO</h2>
-        <p>Para dúvidas sobre sua análise, envie um chamado pelo suporte do portal.</p>
+        <p>Para dúvidas sobre sua análise, envie um chamado pelo suporte do portal{% if wa %} ou fale com a equipe NEXO pelo WhatsApp{% endif %}.</p>
         <div class="contact-details">
             <a href="{{ url_for('cliente.tickets') }}"><i class="bi bi-headset" aria-hidden="true"></i> Abrir suporte</a>
+            {%- if wa %}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Atendimento pelo WhatsApp', classe=none) }}
+            {%- endif %}
         </div>
     </div>
 </div>

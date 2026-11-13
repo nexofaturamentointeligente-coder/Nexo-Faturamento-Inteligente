@@ -284,3 +284,40 @@
 {%- set cor, texto = estados.get(status, ('b-muted', 'não enviado')) -%}
 <span class="nexo-badge {{ cor }}" title="{{ nome }}: {{ texto }}">{{ label }}<span class="visually-hidden"> {{ nome }}: {{ texto }}</span></span>
 {%- endmacro -%}
+
+{# ---- WhatsApp comercial da NEXO: links passivos wa.me, sem JavaScript.
+   O número chega por argumento (config.WHATSAPP_EMPRESA_NUMERO, que a factory já deixa só
+   com dígitos e o DDI 55). Só vale texto ASCII de 12 ou 13 dígitos começando por 55: um número
+   sem o DDI viraria link para outro país (62... é a Indonésia). Vazio ou qualquer outra coisa
+   não desenha nada, e a tela mostra o que mostrava antes (COM-001).
+   Os textos pré-preenchidos nunca levam dado do cliente: nem nome, nem empresa, nem o
+   assunto do chamado (só o número dele). Cadastro e recuperação de senha seguem por e-mail. ---- #}
+{%- set whatsapp_textos = {
+    'contratar': 'Olá! Quero contratar um plano do NEXO Faturamento Inteligente.',
+    'contratar_plano': 'Olá! Quero contratar o plano %s do NEXO Faturamento Inteligente.',
+    'mudar_plano': 'Olá! Quero mudar o meu plano do NEXO Faturamento Inteligente.',
+    'renovar': 'Olá! Quero renovar o meu contrato do NEXO Faturamento Inteligente.',
+    'duvidas': 'Olá! Tenho dúvidas sobre o NEXO Faturamento Inteligente e quero falar com a equipe comercial.',
+    'suporte': 'Olá! Sou cliente do NEXO Faturamento Inteligente e preciso de atendimento.',
+    'chamado': 'Olá! Preciso de ajuda com o chamado #%s no NEXO Faturamento Inteligente.',
+} -%}
+
+{# ---- O número aceito para o wa.me, ou texto vazio: as telas usam o resultado no
+   {% if %} que troca o texto "canal ainda não publicado" pelo de contato. ---- #}
+{%- macro numero_whatsapp(numero) -%}
+{%- if numero is string and numero.isascii() and numero.isdigit() and numero.startswith('55') and numero|length in (12, 13) -%}{{ numero }}{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Link de contato pelo WhatsApp (abre em nova aba). O nome acessível começa pelo
+   rótulo visível; `contexto` (opcional) completa o nome só para leitores de tela, e
+   `descrito_por` aponta para o id do aviso que explica o contato.
+   icone: 'bi' (Bootstrap Icons, no portal), 'svg' (balão em SVG, na landing, que não
+   carrega o Bootstrap Icons) ou none. classe vazia: link de texto, sem classe. ---- #}
+{%- macro link_whatsapp(numero, texto, rotulo, classe='btn-ghost', icone='bi', descrito_por=none, contexto=none) -%}
+{%- set numero = numero_whatsapp(numero)|string -%}
+{%- if numero -%}
+<a{% if classe %} class="{{ classe }}"{% endif %} href="https://wa.me/{{ numero }}?text={{ texto|urlencode }}" target="_blank" rel="noopener noreferrer"{% if descrito_por %} aria-describedby="{{ descrito_por }}"{% endif %}>
+{%- if icone == 'bi' %}<i class="bi bi-whatsapp" aria-hidden="true"></i> {% elif icone == 'svg' %}<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 20.5 5.07 15A8 8 0 1 1 8 17.93Z"/></svg> {% endif -%}
+{{ rotulo }}<span class="visually-hidden">{% if contexto %} {{ contexto }}{% endif %} (abre o WhatsApp em nova aba)</span></a>
+{%- endif -%}
+{%- endmacro -%}

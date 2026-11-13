@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# WhatsApp comercial: sem número válido no config, o bloco "Atendimento comercial" fica como antes. #}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 {% block title %}Como obter acesso — NEXO{% endblock %}
 {% block page_title %}Como obter acesso{% endblock %}
 {% block content %}
@@ -18,7 +21,15 @@
     </ol>
     <div class="alert alert-secondary" role="note">
         <h2 style="font-size: 1rem;">Atendimento comercial</h2>
+        {%- if wa %}
+        <p>Fale com a equipe NEXO pelo WhatsApp para contratar um plano ou tirar dúvidas antes de começar.</p>
+        <div class="d-flex flex-wrap gap-2">
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar, 'Contratar pelo WhatsApp', classe='btn-nexo') }}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Tirar dúvidas pelo WhatsApp', classe='btn-ghost') }}
+        </div>
+        {%- else %}
         <p class="mb-0">O canal oficial de contratação ainda não foi publicado. Esta página será atualizada quando o atendimento estiver disponível.</p>
+        {%- endif %}
     </div>
     <p>Já recebeu seu acesso? Entre com as credenciais fornecidas pela equipe.</p>
     <div class="d-flex flex-column flex-sm-row gap-2 justify-content-center">

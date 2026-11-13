@@ -149,6 +149,11 @@ def create_app(config_name: str = None) -> Flask:
     # aparecem como WARNING nos logs do Render (emails.py).
     from emails import registrar_diagnostico_inicial
     registrar_diagnostico_inicial(app)
+    # WhatsApp (whatsapp_service.py): o número comercial dos botões wa.me fica só com
+    # dígitos e o DDI 55; inválido vira vazio (botões escondidos). O log de inicialização
+    # diz se os disparos ativos estão ligados e o que falta, sem segredo.
+    import whatsapp_service
+    whatsapp_service.configurar(app)
 
     @app.after_request
     def _proteger_resposta_token(resposta):
@@ -191,9 +196,10 @@ def create_app(config_name: str = None) -> Flask:
           2) Cookie órfão: aponta para um usuário que não existe mais no banco
              (ex.: banco resetado) → current_user vira anônimo, mas o resíduo
              _user_id é limpo da sessão.
-        Não toca em requisições de assets estáticos (sem custo por arquivo).
+        Não toca em requisições de assets estáticos (sem custo por arquivo) nem no
+        despertador /ping, que nunca consulta o banco, nem com cookie de sessão.
         """
-        if request.endpoint == "static":
+        if request.endpoint in ("static", "ping"):
             return
         autenticado = current_user.is_authenticated
         valida = False
@@ -242,9 +248,9 @@ def create_app(config_name: str = None) -> Flask:
         Força a troca de senha no primeiro acesso: um CLIENTE logado com
         primeiro_acesso=True é interceptado e mandado para /auth/primeiro-acesso,
         bloqueando dashboard, suporte, upload etc. até definir a nova senha.
-        Libera apenas: assets estáticos, a própria rota de troca e o logout.
+        Libera apenas: assets estáticos, a própria rota de troca, o logout e o /ping.
         """
-        if request.endpoint in ("static", "auth.primeiro_acesso", "auth.logout"):
+        if request.endpoint in ("static", "auth.primeiro_acesso", "auth.logout", "ping"):
             return
         if (
             current_user.is_authenticated
@@ -361,6 +367,20 @@ def create_app(config_name: str = None) -> Flask:
     @app.route("/healthz")
     def healthz():
         return {"status": "ok", "versao": versao_publicada}, 200
+
+    # Despertador do Render Free, que adormece o serviço depois de 15 min sem tráfego de
+    # entrada: um monitor externo (cron-job.org, UptimeRobot...) chama GET /ping ou
+    # /health a cada 10 a 14 min. Sem login e sem banco (os guardas de sessão, de
+    # primeiro acesso e de termos pulam este endpoint, mesmo com cookie), sem cache e
+    # sem limite de taxa: só "OK" em texto puro. O SELECT 1 que mantém o Supabase Free
+    # ativo continua no /healthz/db; o healthCheckPath do Render continua o /healthz.
+    @app.route("/ping")
+    @app.route("/health")
+    def ping():
+        resposta = make_response("OK", 200)
+        resposta.headers["Content-Type"] = "text/plain; charset=utf-8"
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
 
     # Health check do BANCO: faz um SELECT 1 no Postgres. Pensado para um
     # monitor externo (ex.: UptimeRobot a cada 5 min), que assim mantém o host

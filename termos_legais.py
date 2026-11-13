@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 # não mostra dado do portal, e o primeiro acesso vem antes do aceite.
 ENDPOINTS_LIBERADOS = frozenset({
     # como_aderir fica de fora: com sessão, ela é desenhada dentro do portal (base.html).
-    "static", "index", "healthz", "healthz_db",
+    # "ping" é o despertador /ping e /health: só "OK", sem banco.
+    "static", "index", "healthz", "healthz_db", "ping",
     "cliente.aceitar_termos", "cliente.configuracoes_aceitar_documento",
     "cliente.configuracoes_exportar_dados", "cliente.configuracoes_solicitar_exclusao",
 })

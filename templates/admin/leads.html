@@ -71,6 +71,11 @@
                 <input class="form-check-input" type="checkbox" id="leadAutorizacao" name="autorizacao" value="1" required>
                 <label class="form-check-label" for="leadAutorizacao">O lead autorizou o uso destes relatórios nesta avaliação.</label>
             </div>
+            <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="leadAvisoWhatsapp" name="aviso_whatsapp" value="1" aria-describedby="leadAvisoWhatsappDica"{% if formulario.get('aviso_whatsapp') == '1' %} checked{% endif %}>
+                <label class="form-check-label" for="leadAvisoWhatsapp">O lead aceitou receber pelo WhatsApp o aviso de que a avaliação ficou pronta.</label>
+                <p class="field-hint mt-1 mb-0" id="leadAvisoWhatsappDica">Opcional. Sem esta confirmação, nenhuma mensagem é enviada ao lead.</p>
+            </div>
             <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Avaliar</button>
         </form>
         <p class="field-hint mt-3 mb-0">Os arquivos são lidos num processo isolado e descartados em seguida, sem guardar nem o nome deles: o NEXO grava os totais por produto e ano, por {{ retencao_dias }} dias, e o resumo da avaliação. Com muitos meses, a leitura pode levar até dois minutos.</p>

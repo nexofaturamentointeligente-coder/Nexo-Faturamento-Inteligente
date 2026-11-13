@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# WhatsApp comercial ao lado do pedido de mudança; sem número válido, a tela fica como antes. #}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 
 {% block title %}{{ funcionalidade.nome }} — NEXO{% endblock %}
 {% block page_title %}{{ funcionalidade.nome }}{% endblock %}
@@ -21,6 +24,15 @@
         <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
             {% if url_upgrade %}
             <a href="{{ url_upgrade }}" class="btn-nexo"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> {{ ('Conhecer o plano ' ~ plano_necessario.nome) if plano_necessario else 'Falar com a equipe NEXO' }}</a>
+            {%- if wa %}
+            {%- if codigo == 'assinatura_inativa' %}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Atendimento pelo WhatsApp') }}
+            {%- elif plano_necessario %}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.mudar_plano, 'Mudar de plano pelo WhatsApp') }}
+            {%- else %}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Tirar dúvidas pelo WhatsApp') }}
+            {%- endif %}
+            {%- endif %}
             {% endif %}
             <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-speedometer2" aria-hidden="true"></i> Visão Geral</a>
         </div>

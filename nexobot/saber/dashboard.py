@@ -214,9 +214,10 @@ REGISTROS = (
         titulo="O que é o card Contato NEXO no fim da Visão Geral?",
         categoria="Visão Geral do painel",
         resumo=(
-            "É um lembrete de que dúvidas sobre a análise podem ser tratadas com a equipe NEXO pelo canal "
-            "externo informado no onboarding. Dentro do portal, o canal oficial é a página Suporte, onde você "
-            "abre chamados e acompanha respostas."
+            "É um lembrete de que dúvidas sobre a análise podem ser tratadas com a equipe NEXO. Dentro do portal, "
+            "o canal oficial é a página Suporte, onde você abre chamados e acompanha respostas. Quando a equipe "
+            "publica o WhatsApp comercial, o card mostra também o link Atendimento pelo WhatsApp, que abre a "
+            "conversa com uma mensagem pronta; sem ele, use o canal externo informado no onboarding."
         ),
         perguntas=(
             "Qual é o WhatsApp da NEXO?", "Qual é o e-mail de contato?", "Como falo pelo card de contato?",

@@ -1,3 +1,6 @@
+{#- WhatsApp comercial (_macros.html): sem número válido no config, a página sai como antes. -#}
+{%- import "_macros.html" as m -%}
+{%- set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) -%}
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -388,7 +391,11 @@
           <li><span aria-hidden="true">✓</span><span>Parecer objetivo</span></li>
           <li><span aria-hidden="true">✓</span><span>Indicadores principais</span></li>
         </ul>
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('BRONZE'), 'Contrate Agora', classe='btn-nexo btn-nexo-secondary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano BRONZE') }}
+        {%- else %}
         <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
+        {%- endif %}
       </article>
       <article class="plan prata">
         <h3 class="plan-name">PRATA</h3>
@@ -401,7 +408,11 @@
           <li><span aria-hidden="true">✓</span><span>Parecer completo</span></li>
           <li><span aria-hidden="true">✓</span><span>Pontos positivos, alertas e recomendações</span></li>
         </ul>
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('PRATA'), 'Contrate Agora', classe='btn-nexo btn-nexo-secondary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano PRATA') }}
+        {%- else %}
         <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
+        {%- endif %}
       </article>
       <article class="plan ouro featured">
         <span class="plan-flag">Mais completo</span>
@@ -416,11 +427,19 @@
           <li><span aria-hidden="true">✓</span><span>Parecer aprofundado</span></li>
           <li><span aria-hidden="true">✓</span><span>Recomendações mais detalhadas</span></li>
         </ul>
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('OURO'), 'Contrate Agora', classe='btn-nexo btn-nexo-primary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano OURO') }}
+        {%- else %}
         <button type="button" class="btn-nexo btn-nexo-primary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
+        {%- endif %}
       </article>
     </div>
     <div class="plan-availability text-center mt-4" id="contratacao">
+      {%- if wa %}
+      <p class="commercial-note" id="contratacao-status">Contrate pelo WhatsApp: a equipe NEXO responde e combina o início com você.</p>
+      {%- else %}
       <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta página. Os canais oficiais serão divulgados aqui.</p>
+      {%- endif %}
       <a href="{{ url_for('como_aderir') }}" class="text-link">Como obter acesso ao NEXO <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h16M13 5l7 7-7 7"/></svg></a>
     </div>
   </div>
@@ -431,10 +450,18 @@
       <h2 id="final-cta-title">Pronto para transformar seu negócio?<br/><span class="accent">Deixe a NEXO fazer parte disso!</span></h2>
       <p>Organize seus relatórios, entenda os indicadores e encontre novas possibilidades para suas decisões de compras e vendas.</p>
       <div class="cta-buttons">
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Falar com a equipe NEXO', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg', descrito_por='contact-availability') }}
+        {%- else %}
         <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="contact-availability">Falar com a equipe NEXO</button>
+        {%- endif %}
         <a href="{{ url_for('como_aderir') }}" class="btn-nexo btn-nexo-secondary btn-nexo-lg">Como obter acesso</a>
       </div>
+      {%- if wa %}
+      <p id="contact-availability" class="commercial-note mt-3">Atendimento comercial pelo WhatsApp: tire dúvidas sobre os planos e a contratação com a equipe NEXO.</p>
+      {%- else %}
       <p id="contact-availability" class="commercial-note mt-3">Nosso canal oficial de atendimento será divulgado nesta página.</p>
+      {%- endif %}
     </div>
   </div>
 </section>
@@ -466,8 +493,16 @@
       </div>
       <div class="footer-col">
         <h3>Contatos</h3>
+        {%- if wa %}
+        <p>Dúvidas sobre os planos ou a contratação? Fale com a equipe NEXO pelo WhatsApp.</p>
+        <ul>
+          <li>{{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Fale conosco no WhatsApp', classe=none, icone=none) }}</li>
+          <li><a href="{{ url_for('como_aderir') }}">Entenda como obter acesso</a></li>
+        </ul>
+        {%- else %}
         <p>Os canais oficiais de atendimento serão divulgados nesta página.</p>
         <a href="{{ url_for('como_aderir') }}">Entenda como obter acesso</a>
+        {%- endif %}
       </div>
     </div>
     <div class="footer-bottom">

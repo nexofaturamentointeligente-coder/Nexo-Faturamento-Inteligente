@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
+{# WhatsApp de atendimento ao lado do "Novo chamado"; sem número válido, a tela fica como antes. #}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 
 {% block title %}Suporte — NEXO{% endblock %}
 {% block page_title %}Suporte{% endblock %}
@@ -12,6 +14,9 @@
     </div>
     <div class="page-head-actions">
         <button type="button" class="btn-nexo" data-toggle-novo><i class="bi bi-plus-lg"></i> Novo chamado</button>
+        {%- if wa %}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Atendimento pelo WhatsApp') }}
+        {%- endif %}
     </div>
 </div>
 

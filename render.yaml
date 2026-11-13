@@ -45,3 +45,14 @@ services:
       # para entregabilidade, troque por um endereço de domínio próprio.
       - key: MAIL_DEFAULT_SENDER
         value: NEXO - Faturamento Inteligente <nexofaturamentointeligente@gmail.com>
+      # WhatsApp pela Evolution API, opcional (Docs/WHATSAPP_EVOLUTION.md). Sem a URL
+      # (https), a chave e a instância, os disparos ficam desligados: só aviso no log.
+      - key: EVOLUTION_API_URL
+        sync: false
+      - key: EVOLUTION_API_KEY
+        sync: false
+      - key: EVOLUTION_INSTANCE_NAME
+        sync: false
+      # Número comercial com DDI (ex.: 5562999999999) dos botões wa.me; vazio os esconde.
+      - key: WHATSAPP_EMPRESA_NUMERO
+        sync: false

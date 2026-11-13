@@ -34,6 +34,7 @@ from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
 import raio_x
 import raio_x_servico
+import whatsapp_service
 
 onboarding_bp = Blueprint("onboarding", __name__)
 
@@ -125,9 +126,10 @@ def _json_raio_x(contexto: dict) -> dict:
     }
 
 
-def _executar_raio_x() -> int:
+def _executar_raio_x() -> tuple[int, tuple | None]:
     """Lê os relatórios, confere de novo a assinatura e grava o resultado. Devolve quantos
-    arquivos foram lidos. Erros de entrada saem como ETLInputError, com mensagem segura."""
+    arquivos foram lidos e o aviso de WhatsApp a disparar depois da vaga de entrada (ou None).
+    Erros de entrada saem como ETLInputError, com mensagem segura."""
     # Até 2 minutos no processo isolado: a transação de leitura da requisição termina antes,
     # sem segurar conexão do pooler; a gravação abre outra, curta, depois.
     db.session.rollback()
@@ -139,9 +141,36 @@ def _executar_raio_x() -> int:
                             "gravado. Fale com a equipe NEXO pelo Suporte.")
     prata = entitlements.catalogo().nivel("PRATA")
     recomendacao = raio_x.recomendar(resultado, prata.limite_historico_meses if prata is not None else None)
-    raio_x_servico.salvar(empresa.id_empresa, current_user.id_usuario, resultado, recomendacao, nomes)
+    linha = raio_x_servico.salvar(empresa.id_empresa, current_user.id_usuario, resultado, recomendacao, nomes)
     db.session.commit()
-    return len(nomes)
+    return len(nomes), _aviso_de_raio_x_pronto(empresa, linha)
+
+
+def _aviso_de_raio_x_pronto(empresa, linha) -> tuple | None:
+    """Os valores do aviso de relatório pronto: o telefone de contato da empresa, quem enviou, a
+    empresa e o potencial recuperável que a tela mostra (o plano não o esconde). Lidos logo depois
+    do commit; None sem telefone cadastrado. Uma falha aqui nunca derruba o Raio-X já gravado."""
+    try:
+        telefone = empresa.telefone_contato
+        if not telefone:
+            return None
+        return (telefone, current_user.nome, empresa.nome_fantasia or empresa.razao_social,
+                linha.valor_recuperavel)
+    except Exception as erro:  # noqa: BLE001 - aviso auxiliar
+        db.session.rollback()
+        current_app.logger.warning("Aviso por WhatsApp do Raio-X não preparado (%s).", type(erro).__name__)
+        return None
+
+
+def _disparar_aviso_de_raio_x(aviso) -> None:
+    """Fora da vaga de entrada: o notificador só entrega o POST à fila de fundo. Nenhuma falha aqui
+    (nem ao montar o notificador) muda a resposta do Raio-X já gravado."""
+    if not aviso:
+        return
+    try:
+        whatsapp_service.notificador().notificar_relatorio_pronto(*aviso)
+    except Exception as erro:  # noqa: BLE001 - aviso auxiliar
+        current_app.logger.warning("Aviso por WhatsApp do Raio-X não disparado (%s).", type(erro).__name__)
 
 
 # =====================================================================
@@ -161,12 +190,13 @@ def diagnostico():
 @limite_raio_x
 @requer_funcionalidade("raio_x_entrada")
 def diagnostico_enviar():
+    aviso = None
     with vaga_de_entrada() as livre:
         if not livre:
             flash(MENSAGEM_OCUPADO, "warning")
             return redirect(url_for("onboarding.diagnostico"), 303)
         try:
-            quantidade = _executar_raio_x()
+            quantidade, aviso = _executar_raio_x()
         except ETLInputError as erro:
             db.session.rollback()
             if erro.code == CODIGO_OCUPADO:
@@ -179,6 +209,7 @@ def diagnostico_enviar():
             flash("Não foi possível gravar o Raio-X. Tente novamente.", "danger")
         else:
             flash(f"Raio-X concluído com {quantidade} relatório(s) de vendas.", "success")
+    _disparar_aviso_de_raio_x(aviso)
     return redirect(url_for("onboarding.diagnostico"), 303)
 
 
@@ -234,11 +265,12 @@ def api_diagnostico():
 @limite_raio_x
 @requer_funcionalidade("raio_x_entrada")
 def api_diagnostico_enviar():
+    aviso = None
     with vaga_de_entrada() as livre:
         if not livre:
             return _ocupado_json()
         try:
-            _executar_raio_x()
+            _, aviso = _executar_raio_x()
         except ETLInputError as erro:
             db.session.rollback()
             if erro.code == CODIGO_OCUPADO:
@@ -248,6 +280,7 @@ def api_diagnostico_enviar():
             db.session.rollback()
             current_app.logger.warning("Raio-X não gravado (%s).", type(erro).__name__)
             return _erro_json("Não foi possível gravar o Raio-X. Tente novamente.", 503)
+    _disparar_aviso_de_raio_x(aviso)
     return jsonify(_json_raio_x(_contexto_raio_x())), 201
 
 

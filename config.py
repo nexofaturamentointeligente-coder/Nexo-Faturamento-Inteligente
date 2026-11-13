@@ -306,6 +306,20 @@ class Config:
     HF_API_TOKEN = os.environ.get("HF_API_TOKEN") or None
     HF_MODEL = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
+    # === WhatsApp (Evolution API) — whatsapp_service.py ===
+    # Disparos ativos ao cliente (relatório pronto, abertura do envio do mês, chamado
+    # atualizado) por uma API REST compatível com a Evolution API. Sem a URL (https;
+    # http só em localhost), a chave e a instância, o envio fica DESLIGADO: cada gatilho
+    # só registra um aviso no log, sem travar o fluxo. Cadastro inicial e recuperação
+    # de senha continuam só por e-mail.
+    EVOLUTION_API_URL = _env_texto("EVOLUTION_API_URL")
+    EVOLUTION_API_KEY = _env_texto("EVOLUTION_API_KEY")
+    EVOLUTION_INSTANCE_NAME = _env_texto("EVOLUTION_INSTANCE_NAME")
+    # Número comercial da NEXO com DDI (ex.: 5562999999999), dos botões wa.me das
+    # telas. A factory o normaliza (só dígitos, com o 55); vazio ou inválido esconde
+    # os botões, e as telas mostram os textos de sempre.
+    WHATSAPP_EMPRESA_NUMERO = _env_texto("WHATSAPP_EMPRESA_NUMERO") or ""
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
