@@ -147,6 +147,16 @@ class AIDevolutivaSecurityTests(unittest.TestCase):
         self.assertEqual({k: resultado[k] for k in esperado}, esperado, motivo)
         return resultado
 
+    def test_texto_de_reserva_escreve_o_percentual_do_lider_com_virgula(self):
+        """Auditoria matemática de 11/2026: o percentual do líder da curva ABC sai com vírgula, como o valor em reais do
+        mesmo parágrafo e o número que vai para a IA (curva_abc_lider_percentual)."""
+        contexto = {"pressao_estoque": -10.0, "referencia": "10/2025", "empresa": "Loja Ficticia",
+                    "faturamento_total": 1234.5, "total_comprado": 1000.0, "abc_classe_a_qtd": 3,
+                    "abc_classe_a_perc": 80.0, "abc_lider_nome": "{{PRODUTO_LIDER_ABC}}", "abc_lider_perc": 42.5}
+        resumo = ai_devolutiva._gerar_fallback(contexto)["resumo_executivo"]
+        self.assertIn("(42,50% do total)", resumo)
+        self.assertNotIn("42.50", resumo)
+
     def test_adversarial_corpus_falls_back_to_the_local_generator(self):
         base = {"resumo_executivo": RESUMO_OK, "conclusao_estrategica": CONCLUSAO_OK}
         casos = {

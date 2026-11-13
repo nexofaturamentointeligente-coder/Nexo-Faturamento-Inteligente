@@ -63,7 +63,7 @@ from etl_processor import (
     ETLLeiauteAmbiguo, ETLRelatorioDeCompras, ETLValidationError, _converter_serie_monetaria,
     _extrair_periodo_base, _ler_bruto, _nome_exibivel, _normalizar_produto, _reais as _brl, _vendas_do_bruto,
     data_da_linha, ler_tabela_auxiliar, ler_tabela_pelo_titulo, normalizar_categoria, normalizar_codigo_do_produto,
-    normalizar_ncm, normalizar_numero_do_documento, resumo_de_vendas_sem_produto,
+    normalizar_ncm, normalizar_numero_do_documento, papel_anunciado_pelo_titulo, resumo_de_vendas_sem_produto,
 )
 
 # 11.4: saneamento de 11/2026 (rodapés, quantidades, títulos de reserva, codificação e os campos de
@@ -230,8 +230,9 @@ def _ler_arquivo_do_envio(caminho: str, numero: int, cadastro: bool, *, auxiliar
         recusa = ETLInputError("raio_x_dados", f"{rotulo}: {erro.orientacao}")
         if auxiliar:
             papel = "compras" if isinstance(erro, ETLRelatorioDeCompras) else "ambiguo"
-            return _LidoDoEnvio(None, None, periodo, rotulo, {"papel": papel, "produtos": None, "documentos": None},
-                                recusa)
+            tabela = {"papel": papel, "produtos": None, "documentos": None,
+                      "pelo_titulo": bool(getattr(erro, "pelo_titulo", False))}
+            return _LidoDoEnvio(None, None, periodo, rotulo, tabela, recusa)
         raise recusa from None
     except ETLValidationError as erro:
         if erro.code != "data":
@@ -245,13 +246,38 @@ def _ler_arquivo_do_envio(caminho: str, numero: int, cadastro: bool, *, auxiliar
                 tabela = None
             if tabela is None and resumo_de_vendas_sem_produto(bruto):
                 tabela = {"papel": "resumo_de_vendas", "produtos": None, "documentos": None}
+            if tabela is None:
+                # Nada leu o arquivo. Com o título de uma tabela auxiliar (a posição de estoque só com os valores), ele
+                # é recusado dizendo o que falta, e o lote com venda o deixa fora das contas. Sem esse título, é o
+                # relatório de vendas que não foi lido: o lote só o deixa fora das contas com o período dentro do da
+                # âncora, que já traz a venda dele (_ler_envio_uma_vez); senão, a recusa de sempre.
+                anunciado = papel_anunciado_pelo_titulo(bruto)
+                if anunciado is not None:
+                    rotulo_do_aviso, texto_da_recusa = _ILEGIVEL[anunciado]
+                    tabela = {"papel": "ilegivel", "rotulo": rotulo_do_aviso, "produtos": None, "documentos": None}
+                    recusa = ETLInputError("raio_x_dados", texto_da_recusa.format(rotulo=rotulo))
+                else:
+                    tabela = {"papel": "nao_reconhecido", "produtos": None, "documentos": None}
+                return _LidoDoEnvio(None, None, periodo, rotulo, tabela, recusa)
         if tabela is None:
             raise recusa from None
         if tabela["papel"] != "resumo_de_vendas":
             recusa = _recusa_da_tabela(rotulo, tabela)
         return _LidoDoEnvio(None, None, periodo, rotulo, tabela, recusa)
+    _marcar_devolucoes_sem_situacao(df)
     _fechar_centavos(df)
     return _LidoDoEnvio(df, bruto.attrs.get("format"), periodo, rotulo, None, None)
+
+
+def _marcar_devolucoes_sem_situacao(df: pd.DataFrame) -> None:
+    """Sem a coluna de situação, a linha com quantidade e valor negativos é a devolução (ou a troca): ela entra nas
+    devoluções, no CMV líquido e no faturamento líquido de devolução, em vez de sumir das contas (auditoria matemática
+    de 11/2026). Com a coluna, vale o que ela diz (etl_processor)."""
+    if df.empty or "_devolucao" in df.columns:
+        return
+    negativas = (df["quantidade"] < 0) & (df["valor_venda"] < 0)
+    if negativas.any():
+        df["_devolucao"] = negativas.to_numpy(bool)
 
 
 def _vendas_analisadas(df: pd.DataFrame) -> pd.Series:
@@ -669,11 +695,17 @@ def _cadastro_do_arquivo(df, venda, produtos, resumo, custo_linha, bonificadas, 
         resumo["_nomes_estoque"] = (df.loc[informado, "produto"].groupby(df.loc[informado, "_prod_norm"]).last()
                                     .map(_nome_exibivel).to_dict())
     # Bonificação e devolução por produto, inclusive de produto sem venda no arquivo: as mesmas máscaras
-    # dos totais do resumo (custo_bonificacoes, custo_devolucoes e devolucoes_com_custo).
+    # dos totais do resumo (custo_bonificacoes, custo_devolucoes e devolucoes_com_custo). O valor e a quantidade de
+    # toda devolução vão também para as curvas ABC líquidas dos indicadores (indicadores_executivos.calcular).
+    devolvidas = (df["_devolucao"].astype(bool) if "_devolucao" in df.columns
+                  else pd.Series(False, index=df.index))
+    quantidade = pd.to_numeric(df["quantidade"], errors="coerce").fillna(0.0)
     ajustes = pd.DataFrame({
         "custo_bonificacoes": custo_linha.where(bonificadas, 0.0),
         "custo_devolucoes": custo_linha.where(devolvidas_com_custo, 0.0),
         "devolucoes_com_custo": valor.abs().round(2).where(devolvidas_com_custo, 0.0),
+        "devolucoes": valor.abs().round(2).where(devolvidas, 0.0),
+        "quantidade_devolvida": quantidade.abs().where(devolvidas, 0.0),
     }).groupby(df["_prod_norm"]).sum()
     resumo["_ajustes"] = ajustes[(ajustes != 0).any(axis=1)]
 
@@ -866,8 +898,9 @@ def _ler_envio(caminhos: list, *, cadastro: bool = False, ate=None, recusar_data
 # recusado com _FALHA_DE_CONTENCAO. O custo e o estoque só completam a âncora que não os traz, e o desconto, o cliente
 # e a hora, a âncora sem a coluna. Sem a âncora no envio, cada relatório de vendas soma, como antes; a tabela
 # auxiliar e o resumo de vendas sem produto ficam fora das contas quando o envio tem relatório de vendas, e recusam o
-# envio quando não tem (a tabela auxiliar com a recusa dela, nunca com a de produto, quantidade e valor de venda); o
-# relatório de compras e o de leiaute ambíguo continuam recusados, como antes.
+# envio quando não tem (a tabela auxiliar com a recusa dela, nunca com a de produto, quantidade e valor de venda). O
+# relatório de compras pelo título também fica fora das contas (diretriz de 11/2026, "jogue tudo e processe"); o de
+# compras só pelas colunas e o de leiaute ambíguo continuam recusados, como antes.
 _FALHA_DE_CONTENCAO = "Falha de Contenção de Dados: Duplicação de Faturamento Detectada"
 # O resumo por documento só vale quando casa com quase toda a venda da âncora.
 _CASAMENTO_MINIMO_DOS_DOCUMENTOS = 0.9
@@ -884,6 +917,22 @@ _PAPEIS_DO_LOTE = {
                         "entrou no envio, mas fica fora das contas",
     "ambiguo": "é um relatório de vendas de leiaute ambíguo (dois títulos de coluna iguais para um valor, ou o "
                "separador duvidoso), do período da venda item a item: entrou no envio, mas fica fora das contas",
+    "ilegivel": "tem o título de {rotulo}: entrou no envio, mas fica fora das contas",
+    "nao_reconhecido": "não foi reconhecido como relatório de vendas por produto (não foi possível identificar "
+                       "produto, quantidade e valor de venda) nem como tabela auxiliar, e o período dele está no da "
+                       "venda item a item com a data de cada venda, que já traz a venda dele: entrou no envio, mas fica "
+                       "fora das contas",
+}
+# O arquivo com o título de uma tabela auxiliar que não pôde ser lido como ela: o rótulo do aviso do lote e a recusa.
+_ILEGIVEL = {
+    "estoque": ("posição de estoque, mas não foi possível ler o saldo de cada produto (a coluna da quantidade em "
+                "estoque)",
+                "{rotulo}: o arquivo tem o título de posição de estoque ou de inventário, mas não foi possível ler o "
+                "saldo de cada produto: falta a coluna do saldo (a quantidade em estoque), ou ela vem misturada com a "
+                "venda. Envie a posição de estoque com o produto e o saldo."),
+    "precos": ("lista de preços, mas não foi possível ler o preço de cada produto",
+               "{rotulo}: o arquivo tem o título de lista de preços, mas não foi possível ler o preço de cada produto. "
+               "Envie a lista com o produto e o preço."),
 }
 _PAPEIS_QUE_COMPLETAM = frozenset({"vendas", "estoque", "precos", "documentos"})
 # Sem a âncora, com relatório de vendas no envio, a tabela auxiliar fica fora das contas.
@@ -905,6 +954,42 @@ def _aviso_do_papel(numero: int, tabela: dict, *, com_ancora: bool) -> str:
     else:
         texto = _TABELA_FORA_SEM_ANCORA.format(artigo=tabela["artigo"], rotulo=tabela["rotulo"])
     return f"O arquivo {numero + 1} {texto}."
+
+
+# A venda item a item que, num período longo, vendeu uma parte pequena dos produtos com saldo no estoque enviado (o da
+# loja inteira) parece filtrada, por poucos clientes ou por um vendedor (diretriz de 11/2026): o giro, a cobertura, o
+# GMROI e os encalhados comparariam a venda parcial com o estoque inteiro.
+_PREFIXO_DA_AMOSTRA_PARCIAL = "Amostra parcial:"
+_AMOSTRA_PARCIAL_FRACAO = 0.15
+# Em um ano ou mais, a loja inteira vende bem mais do que isso do que tem em estoque: o limite sobe para 30%. No lote
+# real de 11/2026, a venda de 20 clientes em 1.411 dias vendeu 113 dos 636 produtos com saldo (17,8%).
+_AMOSTRA_PARCIAL_FRACAO_ANUAL = 0.30
+_AMOSTRA_PARCIAL_DIAS = 90
+_AMOSTRA_PARCIAL_DIAS_ANUAL = 365
+_AMOSTRA_PARCIAL_MINIMO_DE_PRODUTOS = 20
+
+
+def _aviso_de_amostra_parcial(saldos: pd.Series, chaves_vendidas: pd.Series, periodo, numero: str):
+    """O aviso de que a venda é parcial diante do estoque inteiro, ou None: com 20 produtos ou mais com saldo positivo
+    nas tabelas de estoque, a âncora de 90 dias ou mais vendeu menos de 15% deles (a de um ano ou mais, menos de 30%)."""
+    com_saldo = set(saldos[saldos > 0].index)
+    if periodo is None or len(com_saldo) < _AMOSTRA_PARCIAL_MINIMO_DE_PRODUTOS:
+        return None
+    dias = (periodo[1] - periodo[0]).days + 1
+    if dias < _AMOSTRA_PARCIAL_DIAS:
+        return None
+    vendidos = len(com_saldo & set(chaves_vendidas.dropna()))
+    limite = _AMOSTRA_PARCIAL_FRACAO_ANUAL if dias >= _AMOSTRA_PARCIAL_DIAS_ANUAL else _AMOSTRA_PARCIAL_FRACAO
+    if vendidos >= limite * len(com_saldo):
+        return None
+    def milhar(numero_inteiro: int) -> str:
+        return f"{numero_inteiro:,}".replace(",", ".")
+
+    return (f"{_PREFIXO_DA_AMOSTRA_PARCIAL} a venda do arquivo {numero} tem {milhar(vendidos)} dos "
+            f"{milhar(len(com_saldo))} produtos com saldo no estoque enviado ({vendidos / len(com_saldo):.0%}), em "
+            f"{milhar(dias)} dias. Ela parece filtrada (por "
+            "cliente, vendedor ou loja), e o estoque é o da loja inteira: o giro, a cobertura, o GMROI, a ruptura e os "
+            "encalhados comparam essa venda parcial com o estoque inteiro e não representam a loja.")
 
 
 def _aviso_do_saldo(fonte: dict):
@@ -1195,6 +1280,9 @@ def _completar_ancora(df: pd.DataFrame, tabelas: list, periodo, rotulo: str, ate
                 aviso_do_saldo = _aviso_do_saldo(combinados.attrs.get("fonte_do_saldo") or {})
                 if aviso_do_saldo:
                     avisos.append(aviso_do_saldo)
+                aviso_da_amostra = _aviso_de_amostra_parcial(saldos, chave_da_linha[vendidos], periodo, numero)
+                if aviso_da_amostra:
+                    avisos.append(aviso_da_amostra)
             if catalogo:
                 avisos.append(f"{len(catalogo)} produto(s) das tabelas auxiliares sem venda nem saldo entraram no "
                               "cadastro (o mix).")
@@ -1211,21 +1299,34 @@ def _completar_ancora(df: pd.DataFrame, tabelas: list, periodo, rotulo: str, ate
         if "_auxiliar" in df.columns:
             venda &= ~df["_auxiliar"].astype(bool)
         casou = numeros.isin(todos.index)
-        taxa = float(casou[venda].mean()) if venda.any() else 0.0
+        # O casamento é medido pelo valor das vendas, e não pelas linhas: com 90% das linhas casadas, a venda grande
+        # sem documento deixaria o desconto desconhecido de quase todo o faturamento (auditoria matemática de 11/2026).
+        valor_da_venda = df["valor_venda"].where(venda, 0.0).abs()
+        total_da_venda = float(valor_da_venda.sum())
+        taxa = float(valor_da_venda[casou].sum()) / total_da_venda if total_da_venda > 0 else 0.0
         if taxa >= _CASAMENTO_MINIMO_DOS_DOCUMENTOS:
+            vieram = []
             if "_desconto" not in df.columns and "desconto" in todos.columns:
                 primeiras = set(numeros[venda & casou].drop_duplicates().index)
                 valores = numeros.map(todos["desconto"])
                 df["_desconto"] = [f"{valores[i]:.2f}".replace(".", ",") if i in primeiras and pd.notna(valores[i])
                                    else "" for i in df.index]
-            for coluna in ("cliente", "hora"):
+                vieram.append("o desconto")
+            for coluna, nome in (("cliente", "o cliente"), ("hora", "a hora")):
                 if "_" + coluna not in df.columns and coluna in todos.columns:
                     df["_" + coluna] = numeros.map(todos[coluna])
-            avisos.append(f"O resumo por documento casou com {taxa:.0%} das vendas do arquivo {numero}: o desconto, o "
-                          "cliente e a hora vieram dele.")
+                    vieram.append(nome)
+            if not vieram:
+                texto = "ele não trouxe nada que a venda já não tivesse"
+            elif len(vieram) == 1:
+                texto = f"{vieram[0]} veio dele"
+            else:
+                texto = f"{', '.join(vieram[:-1])} e {vieram[-1]} vieram dele"
+            avisos.append(f"O resumo por documento casou com {taxa:.0%} do valor das vendas do arquivo {numero}: "
+                          f"{texto}.")
         else:
-            avisos.append(f"O resumo por documento casou com só {taxa:.0%} das vendas do arquivo {numero} (o mínimo é "
-                          f"{_CASAMENTO_MINIMO_DOS_DOCUMENTOS:.0%}): ficou fora.")
+            avisos.append(f"O resumo por documento casou com só {taxa:.0%} do valor das vendas do arquivo {numero} (o "
+                          f"mínimo é {_CASAMENTO_MINIMO_DOS_DOCUMENTOS:.0%}): ficou fora.")
     df.attrs = atributos
     _conferir_contencao(df, linhas, faturamento)
     return df, avisos
@@ -1363,6 +1464,10 @@ def _ler_envio_uma_vez(caminhos: list, *, cadastro: bool, ate, recusar_datas: bo
             periodo = lido.periodo
             if lido.tabela["papel"] == "ambiguo" and not _coberto(periodo, intervalos):
                 raise lido.recusa
+            # O arquivo que nada leu, sem o título de tabela auxiliar, só fica fora das contas com o período dentro do
+            # da âncora: sem período, ou de outro período, a venda dele poderia faltar, e a recusa de sempre vale.
+            if lido.tabela["papel"] == "nao_reconhecido" and (periodo is None or not _coberto(periodo, intervalos)):
+                raise lido.recusa
         # O relatório por produto leva o fim do período, para o saldo vir do mais recente (_combinar_auxiliares).
         papeis = sorted([(numero, {**de_vendas[numero][1],
                                    "data": de_vendas[numero][0][1] if de_vendas[numero][0] else None})
@@ -1375,11 +1480,14 @@ def _ler_envio_uma_vez(caminhos: list, *, cadastro: bool, ate, recusar_datas: bo
             if numero in avisos_das_lojas:
                 avisos_do_lote.append(avisos_das_lojas[numero])
     elif auxiliares:
-        # Sem a âncora: a tabela auxiliar e o resumo de vendas sem produto ficam fora das contas quando o envio tem
-        # relatório de vendas, e recusam o envio (pela ordem dos arquivos) quando não tem; o relatório de compras e o
-        # de leiaute ambíguo continuam recusados, como antes.
+        # Sem a âncora: a tabela auxiliar, o resumo de vendas sem produto, o arquivo com título de tabela auxiliar que
+        # não foi lido e o relatório de compras pelo título ficam fora das contas quando o envio tem relatório de
+        # vendas, e recusam o envio (pela ordem dos arquivos) quando não tem. O relatório de compras só pelas colunas, o
+        # de leiaute ambíguo e o arquivo que nada leu continuam recusados: a venda deles poderia faltar.
         for _numero, lido in auxiliares:
-            if lido.tabela["papel"] in ("compras", "ambiguo") or not envolvidos_por_arquivo:
+            papel = lido.tabela["papel"]
+            if (not envolvidos_por_arquivo or papel in ("ambiguo", "nao_reconhecido")
+                    or (papel == "compras" and not lido.tabela.get("pelo_titulo"))):
                 raise lido.recusa
         avisos_do_lote = [_aviso_do_papel(numero, lido.tabela, com_ancora=False) for numero, lido in auxiliares]
     for numero, lido, item_a_item in ancoras:
@@ -1391,6 +1499,10 @@ def _ler_envio_uma_vez(caminhos: list, *, cadastro: bool, ate, recusar_datas: bo
         if (avisos_do_lote or avisos) and len(resumos) > antes:
             resumos[antes]["_avisos_do_lote"] = avisos_do_lote + avisos
             avisos_do_lote = []
+        # A amostra parcial diante do estoque inteiro marca os indicadores de estoque (indicadores_executivos.calcular).
+        if any(aviso.startswith(_PREFIXO_DA_AMOSTRA_PARCIAL) for aviso in avisos):
+            for resumo in resumos[antes:]:
+                resumo["_amostra_parcial"] = True
     _renumerar(resumos, partes)
     if not partes:
         raise ETLInputError("raio_x_sem_vendas", _SEM_VENDAS)

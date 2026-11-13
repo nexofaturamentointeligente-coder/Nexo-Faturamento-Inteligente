@@ -1,6 +1,6 @@
 # Indicadores executivos do NEXO (21) e as cinco refatorações do motor
 
-Este documento descreve a expansão do motor ETL pedida em 11/2026: 21 indicadores executivos, dois modos de leitura (analítico e acumulado) e cinco refatorações. Versões das regras: Raio-X `raio-x-2026-11.6`, triagem do lead `triagem-2026-11.4` e indicadores `indicadores-2026-11.1`. A migração nova é a `c5f8a1d3e7b9`, sobre a `9b3e5d7f1a28`.
+Este documento descreve a expansão do motor ETL pedida em 11/2026: 21 indicadores executivos, dois modos de leitura (analítico e acumulado) e cinco refatorações. Versões das regras: Raio-X `raio-x-2026-11.6`, triagem do lead `triagem-2026-11.4` e indicadores `indicadores-2026-11.2` (era a 11.1 até a auditoria matemática de 11/2026, seção 14). A migração nova é a `c5f8a1d3e7b9`, sobre a `9b3e5d7f1a28`.
 
 ## 1. Onde os indicadores ficam
 
@@ -8,7 +8,7 @@ O resultado do Raio-X ganhou o nó `indicadores_executivos`. O Raio-X do cliente
 
 ```
 "indicadores_executivos": {
-  "versao": "indicadores-2026-11.1",
+  "versao": "indicadores-2026-11.2",
   "modo": "analitico" | "acumulado",
   "parametros": {"margem_minima": 0.15, "dias_encalhe": 60, "aliquota_impostos": null, "limite_lista": 50},
   "indicadores": { 21 chaves fixas, cada uma com "status" e os valores }
@@ -52,25 +52,25 @@ Cada indicador traz `status`. Quando falta coluna ou dado, o indicador não sai:
 | # | Chave | Definição | Precisa de | Plano (funcionalidade) |
 |---|---|---|---|---|
 | 1 | `faturamento` | Venda analisada (quantidade e valor maiores que zero, fora devolução), a mesma de `saude.faturamento_total`, fechada no centavo com o total do relatório; traz também as devoluções | — | todos |
-| 2 | `ticket_medio` | Faturamento / vendas distintas (o número da venda dentro do arquivo e, com duas lojas ou mais no arquivo, dentro da loja: cada loja e cada arquivo numeram as suas; a linha com a loja em branco logo abaixo do mesmo número é da loja do cupom) | modo analítico e número da venda | todos |
-| 3 | `margem` | Bruta: venda com custo − custo, em R$ e em % da venda com custo, sem o custo a confirmar. Líquida: `requer_parametro` | custo | `margem_bruta` |
-| 4 | `giro_estoque` | CMV / estoque atual a custo médio; anualizado = giro × 365 / dias cobertos (`dias_do_periodo`: os dias que algum relatório cobre, sem o mês que nenhum cobre) | custo e estoque | `diagnostico_cmv` |
+| 2 | `ticket_medio` | Faturamento / vendas distintas (o número da venda dentro do arquivo e, com duas lojas ou mais no arquivo, dentro da loja: cada loja e cada arquivo numeram as suas; a linha com a loja em branco logo abaixo do mesmo número é da loja do cupom). Com a data de cada venda, a venda é o número naquela data: a numeração que recomeça (por dia, caixa ou série) não junta vendas de dias diferentes | modo analítico e número da venda | todos |
+| 3 | `margem` | Bruta, a clássica: (receita líquida − CMV) / receita líquida, em R$ e em fração, nunca sobre o custo (isso é o markup). A receita é a venda com custo, já líquida do desconto da linha, menos as devoluções com custo; o CMV, o custo dessas vendas menos o custo das devoluções. Sem o custo a confirmar. Traz também a venda com custo bruta, as devoluções e o custo delas. Líquida (de impostos): `requer_parametro` | custo | `margem_bruta` |
+| 4 | `giro_estoque` | Do período: CMV (líquido de devolução) / estoque atual a custo médio. Anualizado: o CMV dos relatórios com a coluna de custo e com período × 365 / os dias que eles cobrem (`dias_do_periodo`), sobre o mesmo estoque. O CMV de parte do ano não é anualizado pelo ano inteiro, e o relatório sem período, sem dias, não entra | custo e estoque | `diagnostico_cmv` |
 | 5 | `mix` | Produtos vendidos; % sobre os cadastrados quando o relatório lista também o item sem venda (o "vendas x estoque") | — | todos |
-| 6 | `itens_por_venda` | Unidades / vendas distintas (e linhas / vendas) | modo analítico e número da venda | todos |
+| 6 | `itens_por_venda` | PPA: unidades / vendas distintas (e linhas / vendas). Com quantidade fracionada (o granel em kg ou litro), `quantidade_fracionada` avisa que a soma não é de peças, e `linhas_por_venda` é a leitura em itens | modo analítico e número da venda | todos |
 | 7 | `recompra` | Clientes com mais de uma venda / clientes identificados por CPF ou CNPJ válido (também o CNPJ alfanumérico de 2026) | modo analítico e CPF/CNPJ em todo relatório | `curva_abc_clientes` |
 | 8 | `saving` | Sempre `requer_relatorio_de_compras` | relatório de compras | `diagnostico_cmv` |
 | 9 | `evolucao_custo` | Custo unitário de cada produto no primeiro e no último mês com custo; altas e quedas de 5% ou mais e a variação ponderada pela quantidade do último mês | custo e dois meses | `alerta_precificacao` |
-| 10 | `cmv` | Custo das vendas sem o custo a confirmar; o custo dele sai à parte (`custo_a_confirmar`). Sem custo plausível nenhum, `sem_dados` | custo | `diagnostico_cmv` |
-| 11 | `curva_abc_faturamento` | 80/15/5 pelo faturamento, a regra da análise mensal (`_classificar_curva_abc`: A até 80% do acumulado, B até 95%, líder sempre A) | — | `curva_abc_vendas` |
-| 12 | `curva_abc_volume` | A mesma curva pela quantidade | — | `curva_abc_vendas` |
-| 13 | `curva_abc_lucro` | A mesma curva pela margem bruta positiva; a margem negativa e o custo a confirmar ficam fora da curva | custo | `margem_bruta` |
+| 10 | `cmv` | Custo das vendas menos o custo das devoluções (a mercadoria volta ao estoque), sem o custo a confirmar; o custo dele sai à parte (`custo_a_confirmar`), e o custo das vendas e o das devoluções também. A bonificação fica fora (é o CMV líquido da auditoria que a soma). Sem custo plausível nenhum, `sem_dados` | custo | `diagnostico_cmv` |
+| 11 | `curva_abc_faturamento` | 80/15/5 pelo faturamento líquido de devolução de cada produto (a base, 100%, é a soma dos positivos), a regra da análise mensal (`_classificar_curva_abc`: A até 80% do acumulado, B até 95%, C até 100%, líder sempre A; no empate, a ordem do nome). A participação de cada item e de cada classe sai do valor: os empatados têm a mesma | — | `curva_abc_vendas` |
+| 12 | `curva_abc_volume` | A mesma curva pela quantidade líquida de devolução | — | `curva_abc_vendas` |
+| 13 | `curva_abc_lucro` | A mesma curva pela margem bruta positiva, líquida de devolução; a margem negativa ou zero e o custo a confirmar ficam fora da curva | custo | `margem_bruta` |
 | 14 | `margem_negativa` | Sem o custo a confirmar, duas leituras: `itens`, `perda` e `lista` pelo produto no envio inteiro (custo acima da venda somando os meses, em centavos); `por_mes`, `matriz` (produto x mês com `impacto_q4`, refatoração 5), `perda_q4` e `perda_nos_meses` mês a mês. O produto negativo num mês e positivo no envio entra só na segunda | custo | `auditoria_abaixo_custo` (as contagens, todos) |
 | 15 | `margem_abaixo_minimo` | Produtos com margem de 0% até abaixo de 15% (a negativa é o 14) | custo | `margem_bruta` |
-| 16 | `indice_descontos` | Desconto / (faturamento + desconto), supondo o valor da linha já líquido do desconto; o desconto em percentual ou absurdo dá `sem_dados` | coluna de desconto em reais | todos |
+| 16 | `indice_descontos` | Desconto / (faturamento + desconto), com o valor da linha já líquido do desconto: o desconto nunca sai duas vezes. Com o total bruto e o "Valor Líquido" no relatório, a venda é o líquido. O desconto em percentual ou absurdo, ou sobre o valor derivado do preço unitário (sem a coluna do total), dá `sem_dados` | coluna de desconto em reais | todos |
 | 17 | `ruptura` | Produtos com venda no período e último estoque informado ≤ 0 | estoque | `produtos_parados_ruptura` |
 | 18 | `encalhados` | Estoque > 0 e mais de 60 dias cobertos por relatório sem venda até o fim do envio; valor a custo médio. A lista vai do mais parado para o menos (e não pelo valor, que o Bronze não vê) | estoque e período | `produtos_parados_ruptura` (o valor a custo, `diagnostico_cmv`) |
-| 19 | `cobertura_estoque` | Estoque / venda média diária (quantidade / dias cobertos): mediana, faixas (até 15, 16 a 60, 61 a 180, acima de 180 dias) e lista | estoque e período | `produtos_parados_ruptura` |
-| 20 | `gmroi` | Margem bruta / estoque médio a custo: a média das fotos do estoque (uma por relatório, cada uma com o último saldo de todo produto até ali), quando toda foto traz todo produto com estoque e custo do estado final; senão (o relatório que só lista quem vendeu, o arquivo fatiado), o estoque final. `base` diz qual valeu | custo e estoque | `margem_bruta` (o estoque médio a custo, `diagnostico_cmv`) |
+| 19 | `cobertura_estoque` | Por produto, em unidades: estoque / venda média diária (a quantidade dos relatórios com período / os dias cobertos), que é o estoque a custo / o CMV médio diário do produto (o custo unitário se cancela): mediana, faixas (até 15, 16 a 60, 61 a 180, acima de 180 dias) e lista. Agregada da loja (`dias_agregado`): estoque a custo / (CMV / dias), na base do giro, o mesmo que 365 / giro anualizado. `itens_com_estoque_sem_venda` conta o item parado, que fica fora da mediana | estoque e período | `produtos_parados_ruptura` |
+| 20 | `gmroi` | Margem bruta (a do indicador 3) / estoque médio a custo: a média das fotos do estoque (uma por relatório, cada uma com o último saldo de todo produto até ali), quando toda foto traz todo produto com estoque e custo do estado final; senão (o relatório que só lista quem vendeu, o arquivo fatiado), o estoque final. `base` diz qual valeu. `valor` é o do período; `anualizado`, a margem dos relatórios com custo e com período × 365 / os dias deles, sobre o mesmo estoque: o GMROI clássico, comparável entre envios de tamanhos diferentes | custo e estoque | `margem_bruta` (o estoque médio a custo, `diagnostico_cmv`) |
 | 21 | `mapa_calor` | Analítico com data: faturamento e vendas por dia da semana (0 = segunda) e hora. Senão, faturamento por produto e mês (os 20 maiores), com todo mês coberto, também o sem venda, e `impacto_q4` nos meses 10, 11 e 12 | data por linha ou relatórios mensais | todos |
 
 Mais regras:
@@ -79,6 +79,8 @@ Mais regras:
 - **Data da venda.** A coluna de data só vale para os indicadores (última venda, mapa por dia da semana, recompra por dia) na venda item a item com toda data legível, dentro do período e em mês que já começou (`raio_x._datas_validas`). Num resumo por produto, "Data" é o cadastro ou a última compra, e não entra.
 - **Listas.** Têm no máximo 50 itens, com nome e código do produto.
 - **Meses.** Só contam os relatórios mensais (início e fim no mesmo mês). O arquivo de venda item a item com a data de cada venda vira relatórios mensais (refatoração 4).
+- **Devolução.** A linha devolvida (pela coluna de situação; sem ela, a linha com quantidade e valor negativos) fica fora da venda e conta à parte. O faturamento (indicador 1) é a venda, com as devoluções ao lado; a margem, o CMV, o GMROI e as curvas ABC são líquidos de devolução.
+- **Anualização.** O giro e o GMROI anualizados usam a mesma base no CMV (ou na margem) e nos dias: os relatórios com a coluna de custo e com período, e os dias que eles cobrem. A cobertura usa a quantidade dos relatórios com período, sobre os dias cobertos.
 
 ## 4. Leitura nova (só no modo de cadastro: o Raio-X do cliente e o lead; a análise mensal só muda no travessão sozinho)
 
@@ -220,7 +222,8 @@ Os relatórios reais passaram pelo processo isolado de verdade, no Windows. Só 
 
 ## 11. Testes
 
-`tests/test_indicadores.py` (147 testes) cobre:
+`tests/test_indicadores.py` (163 testes) cobre:
+- o gabarito de Administração (`GabaritoAdministrativoTests`, seção 14): os 21 indicadores de um envio pequeno contra as contas feitas à mão, e uma prova para cada ajuste da auditoria matemática;
 - a leitura nova;
 - as cinco refatorações;
 - os dois modos, com os valores conferidos à mão em envios fictícios;
@@ -418,7 +421,7 @@ Um teste de mutação desfez cada uma das oito correções: os testes perceberam
 
 Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data de cada venda (a Opção 27 do ERP, "Vendas por Cliente Detalhada por Produto", com a "Data Ven."), o resumo por pedido ou documento, a posição de estoque, o inventário, o relatório de compras por nota e a lista de preços. A lógica fica no processo isolado (`raio_x._ler_envio_uma_vez` e, no `etl_processor`, `ler_tabela_pelo_titulo` e `ler_tabela_auxiliar`); `raio_x_servico.processar_envio` já manda todos os arquivos juntos, e não mudou. A segunda rodada de 11/2026, feita com os arquivos reais desses tipos, acrescentou a classificação prévia e a leitura dos leiautes reais (abaixo).
 
-- **A classificação prévia.** Na leitura de cadastro (o Raio-X do cliente e o lead), o título do relatório decide antes da leitura de vendas. A posição de estoque, o inventário e a lista de preços são lidos como tabela auxiliar quando o **título do relatório** diz isso (`_papel_pelo_titulo`). O título é a primeira célula com letras do topo, comparada pelo começo (`_titulo_do_relatorio`). Também conta o valor depois de "Relatório:" na mesma célula, o trecho antes do separador ("Posição de estoque - Emitido em: ...") ou o título seguido de data ("Posição de estoque em: 09/11/2026"). Não decidem a favor da tabela auxiliar:
+- **A classificação prévia.** Na leitura de cadastro (o Raio-X do cliente e o lead), o título do relatório decide antes da leitura de vendas. A posição de estoque, o inventário e a lista de preços são lidos como tabela auxiliar quando o **título do relatório** diz isso (`_papel_pelo_titulo`). O título é o primeiro texto do topo que é título de tabela auxiliar, comparado pelo começo (`_titulo_do_relatorio`); sem nenhum, a primeira célula com letras. Contam a célula sem rótulo, o valor depois de "Relatório:" (na mesma célula ou na seguinte), o trecho antes do separador ("Posição de estoque - Emitido em: ...") e o título seguido de data ("Posição de estoque em: 09/11/2026"). O cabeçalho da empresa e da emissão em cima ("Empresa:", "Filial:", "Período:", a página) é pulado, e o primeiro parâmetro do relatório encerra a busca (seção 14). Não decidem a favor da tabela auxiliar:
   - **o parâmetro com dois-pontos**, como "Tabela de Preço: 1 - VAREJO" ou "Considerar estoque atual: Sim", comum em relatório de vendas, nunca é título;
   - **o título de preços sem "preço"**: ele pede essa palavra, porque "Relação de Produtos" pode ser venda;
   - **"Estoque" sozinho no começo do título**: a razão social ("ESTOQUE DE FÁBRICA CALÇADOS LTDA") e o módulo do ERP ("Estoque - Curva ABC de Produtos") começam assim. O título de estoque pede a posição, o saldo, o inventário ou o balanço, ou o estoque com o que ele é ("Estoque atual", "Estoque de produtos", "Relatório de estoque");
@@ -432,7 +435,7 @@ Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data d
   - o resumo de vendas sem produto: o título "Giro de vendas por fornecedor", "por grupo", "por cliente" ou "por forma de pagamento", sem título de coluna de produto;
   - o relatório de vendas de leiaute ambíguo (dois títulos iguais para um valor, ou o separador de colunas duvidoso).
 
-  **A tabela auxiliar nunca passa pela trava "não foi possível identificar produto, quantidade e valor de venda".** Ela vale só para o relatório de vendas por produto que não foi lido (sem uma das colunas) e para o arquivo que não é nada disso. Esse relatório também não escapa dela pelas colunas:
+  **A tabela auxiliar nunca passa pela trava "não foi possível identificar produto, quantidade e valor de venda".** Ela vale só para o relatório de vendas por produto que não foi lido (sem uma das colunas) e para o arquivo que não é nada disso. Com a âncora, o arquivo que nada leu e cujo período está no dela fica fora das contas, com aviso: a venda dele já está na âncora. Sem período, de outro período ou sem a âncora, a trava continua. O arquivo com título de tabela auxiliar que não pôde ser lido como ela é recusado dizendo o que falta, e o envio com venda o deixa fora das contas (seção 14). Esse relatório também não escapa dela pelas colunas:
   - o resumo por documento não tem a coluna do produto;
   - a lista de preços não tem a quantidade nem o total da venda;
   - a posição de estoque lida pelas colunas (sem o título) também não, a não ser o total ao lado do custo unitário ("Saldo Atual;Custo Médio;Valor Total"), que é o valor do estoque;
@@ -448,7 +451,7 @@ Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data d
   - O relatório de compras, o resumo de vendas sem produto e o relatório de vendas de leiaute ambíguo do período da âncora entram no envio, mas ficam fora das contas, com aviso. O de leiaute ambíguo de fora do período da âncora é recusado, porque a venda dele faltaria.
 - **Sem a âncora.** Cada relatório de vendas soma, como antes.
   - Com relatório de vendas no envio, a tabela auxiliar (posição de estoque, inventário, lista de preços, resumo por documento) e o resumo de vendas sem produto ficam fora das contas, com aviso: não há o que completar.
-  - O relatório de compras e o de leiaute ambíguo continuam recusados, pela decisão anterior.
+  - O relatório de compras pelo título (o resumo por nota) também fica fora das contas, com aviso (diretriz de 11/2026, "jogue tudo e processe"). O de compras só pelas colunas e o de leiaute ambíguo continuam recusados, porque a venda deles poderia faltar.
   - Sem relatório de vendas no envio, o primeiro arquivo auxiliar recusa o envio dizendo o que é ("o arquivo é uma posição de estoque, uma tabela auxiliar que só completa a venda item a item..."). O resumo de vendas sem produto recusa com a mensagem de sempre.
 - **O cruzamento.** É um left join, com a âncora como tabela primária.
   - O produto casa pelo código quando a âncora e todas as tabelas o trazem (só letras e algarismos, sem os zeros à esquerda: "0700019" e "000007000.19" são o mesmo). Basta uma tabela sem o código para a chave ser o nome: pelo código, ela ficaria de fora inteira. Sem o código, casa pelo nome normalizado, a chave de produto do motor inteiro: a Opção 27 real não tem a coluna de código. Pelo código, dois códigos com o mesmo nome viram uma linha de saldo só, com os saldos somados, porque o motor lê o saldo pelo nome.
@@ -468,7 +471,8 @@ Pedido de 11/2026: o cliente envia, de uma vez, a venda item a item com a data d
   - de onde veio o custo ("as margens são estimadas");
   - a data do estoque e a tabela de estoque que valeu;
   - o casamento do resumo por documento;
-  - a loja de cada venda no relatório absorvido, quando a âncora não traz a loja.
+  - a loja de cada venda no relatório absorvido, quando a âncora não traz a loja;
+  - a amostra parcial: a venda item a item de 90 dias ou mais que vendeu menos de 15% dos produtos com saldo no estoque enviado (de um ano ou mais, menos de 30%; seção 14).
 - **Desempenho.** O custo unitário dos produtos sem venda vai numa coluna das linhas acrescentadas (`_custo_auxiliar`), e não em `df.attrs`. O pandas 2 copia os attrs a cada operação, e com os milhares de produtos de uma posição de estoque real o lote levava três vezes mais.
 
 ### Os leiautes reais (11/2026)
@@ -515,10 +519,66 @@ Os leitores tratam o que esses arquivos têm:
 - A inteligência de estoque do lead (o capital em estoque por produto) só valoriza o produto que vendeu no ano; o parado sem venda fica sem o valor a custo lá.
 - No arquivo com duas lojas, o resumo por documento casa pelo número sem a loja.
 - A empresa no topo não identifica a loja. Duas tabelas de estoque só com a empresa, sem a filial, contam como da mesma loja e não somam: vale a mais recente, com aviso.
-- Só a primeira célula com letras do topo é o título. O relatório que começa por outra coisa (o nome da empresa, a emissão, a página, ou "Relatório:" numa célula e o título na seguinte) é classificado pelas colunas: a tabela com título de saldo próprio ("Saldo", "Estoque Atual") é lida como estoque, e a que traz o saldo e o total ("Estoque;Valor Total") é recusada pela trava. A posição de estoque com o saldo em "Qtde" (e "Valor Total" ou "Preço Venda") continua lida como relatório de vendas, como antes desta rodada: sozinha, o valor do estoque entra no faturamento do Raio-X do cliente (o lead recusa pela falta do período); com a âncora, ela é absorvida, e o saldo dela não é lido.
+- O título é o primeiro texto do topo que é título de tabela auxiliar: o cabeçalho da empresa e da emissão em cima (o nome da empresa, "Empresa:", "Filial:", "Período:", a emissão, a página, ou "Relatório:" com o título na célula seguinte) não o esconde (seção 14). O primeiro parâmetro do relatório ("Tabela de Preço: ...") encerra a busca. Sem título de tabela auxiliar no topo, a planilha é classificada pelas colunas: a tabela com título de saldo próprio ("Saldo", "Estoque Atual") é lida como estoque, e a que traz o saldo e o total ("Estoque;Valor Total") é recusada pela trava. A planilha com "Qtde" e "Valor Total" (ou "Preço Venda") sem título de estoque nenhum continua lida como relatório de vendas, como antes: sem título, ela é uma venda sem a coluna da data.
 - O relatório que cobre só parte do período da âncora (pelo período do cabeçalho ou, sem ele, pelas datas das linhas) não é absorvido: no Raio-X do cliente ele soma, e a parte comum conta duas vezes; o lead recusa (a sobreposição, ou a falta do período). É a regra de sempre dos períodos que se sobrepõem.
 - Sem a loja na âncora, a venda das lojas que ela não tem, num relatório por produto do período, não soma: o Raio-X avisa, e o cliente envia a venda item a item de todas as lojas.
 - O desconto em percentual gravado em fração (0,2 = 20%) fica de fora, e a lista de preços com "Valor Total" é recusada como relatório de vendas.
-- A posição de estoque com o valor a preço de venda num título de venda ("Total Venda", "Valor Total Venda") é tomada como relatório de vendas, porque esse título é o da venda. Com a quantidade ("Qtde;Custo Unit.;Total Custo;Preço Venda;Total Venda"), ela vira venda, e sozinha o valor do estoque a preço de venda entra no faturamento do Raio-X do cliente, como antes desta rodada. Sem a quantidade ("Saldo;Custo;Valor Total Custo;Valor Total Venda"), é recusada pela trava, também ao lado da âncora (o commit anterior a lia como estoque pelas colunas). Separar a valorização do estoque do total da venda pede regra nova, decisão do dono.
+- A posição de estoque valorizada com "Total Venda" ou "Valor Total Venda" ao lado do saldo ("Qtde", "Est. Atual", "Saldo") é lida como estoque, e o total a preço de venda não vira custo nem faturamento (seção 14). Só com os valores, sem o saldo, ela não é lida: com venda no envio, fica fora das contas com o aviso do que falta; sozinha, é recusada dizendo isso.
 - A coluna opcional em branco em todas as linhas (nenhuma linha a traz) ainda desfaz o alinhamento. A tabela é então lida pelas colunas ou recusada, nunca com o dado na coluna errada: a prova de leitura impede.
 - Os leiautes foram conferidos com uma exportação de cada tipo, de um ERP só. Outro ERP, ou outra versão do relatório, pode pedir títulos novos nos dicionários.
+
+## 14. Auditoria matemática e pontas soltas (11/2026)
+
+Diretriz de 11/2026 ("fechamento de pontas soltas e rigor matemático administrativo"): o cliente envia de uma vez todos os relatórios do ERP (até 36 meses), sem escolher arquivo, e os 21 indicadores e os textos da devolutiva conferem com as fórmulas clássicas de Administração Financeira e de varejo.
+
+### As regras de ingestão fechadas
+
+- **Posição de estoque valorizada com "Total Venda".** Com o saldo ("Qtde", "Est. Atual", "Saldo"), o total a preço de venda ao lado não decide contra o estoque (`etl_processor._coluna_so_da_venda`): a tabela é lida como estoque, e esse total não vira custo (`_valor_a_preco_de_venda`) nem faturamento. Só com os valores, sem o saldo, ela não é lida: com venda no envio, fica fora das contas com o aviso "tem o título de posição de estoque, mas não foi possível ler o saldo de cada produto"; sozinha, é recusada dizendo isso (`papel_anunciado_pelo_titulo`).
+- **Posição sob o nome da empresa.** O título é o primeiro texto do topo que é título de tabela auxiliar (`_candidatos_a_titulo`). O nome da empresa, os rótulos "Empresa:", "Filial:", "Período:", a emissão e a página em cima não o escondem, e "Relatório:" com o título na célula seguinte também vale. A empresa nunca vira a filial (a loja vem só do rótulo da filial, seção 13), e o saldo em "Qtde" é lido pelo título de estoque.
+- **Jogue tudo e processe.** Nenhum arquivo auxiliar derruba o lote. Com venda no envio, ficam fora das contas, cada um com o aviso do que é: a tabela auxiliar, o resumo de vendas sem produto, o relatório de compras pelo título e o arquivo com título de tabela auxiliar que não foi lido. Com a âncora, o arquivo que nada leu e cujo período está no dela também fica fora: a venda dele já está na âncora. Continuam recusados, porque a venda deles poderia faltar: o relatório de compras só pelas colunas, o de leiaute ambíguo fora do período da âncora e o arquivo que nada leu sem a âncora, sem período ou de outro período. A trava contra a duplicação do faturamento (diferença ≤ R$ 0,01) não mudou.
+- **Amostra parcial diante do estoque inteiro.** Com o estoque das tabelas auxiliares (o da loja inteira), a venda item a item de 90 dias ou mais que vendeu menos de 15% dos produtos com saldo positivo (de um ano ou mais, menos de 30%; com 20 produtos ou mais) ganha o aviso "Amostra parcial: ...". O giro, a cobertura, o GMROI, a ruptura e os encalhados ganham `amostra_parcial: true` (`raio_x._aviso_de_amostra_parcial`). No lote real (a Opção 27 de 20 clientes contra o estoque da loja toda), a venda tem 113 dos 636 produtos com saldo (17,8%) em 1.411 dias, e o aviso aparece: em um ano ou mais, a loja inteira vende bem mais de 30% do que tem em estoque. Os dois limites são decisão do dono. A tela do lead ainda não mostra os indicadores: lá, a marca fica no JSON gravado.
+
+### As fórmulas auditadas
+
+Três auditores independentes conferiram cada indicador no código, com cenários calculados à mão rodados no próprio motor (só CSVs inventados); cada discrepância foi reproduzida à parte antes da correção.
+
+| Fórmula pedida | No motor | Resultado |
+|---|---|---|
+| Margem bruta = (receita líquida − CMV) / receita líquida, nunca sobre o CMV | Sobre a venda com custo; o markup (preço / custo − 1) só existe na auditoria de preço do lead, separado | Confirmada a divisão pela receita. Ajuste: a receita e o CMV são líquidos de devolução (antes, brutos) |
+| Cobertura (dias) = estoque a custo / CMV médio diário | Por produto, em unidades (o custo unitário se cancela: é a mesma conta) | Confirmada por produto. Ajustes: a agregada da loja (`dias_agregado`); a contagem do item com estoque e sem venda; a venda média diária sem o relatório sem período |
+| Giro = CMV anualizado / estoque a custo, com os dias exatos | Giro × 365 / dias cobertos | Confirmada a fórmula. Ajuste: o CMV anualizado é o dos relatórios com custo e com período, sobre os dias deles. Antes, o CMV de meio ano era anualizado pelo ano inteiro, e o do relatório sem período, sem os dias dele |
+| GMROI = lucro bruto anualizado / estoque a custo | Margem do período / estoque médio | Ajuste: `anualizado` (a margem × 365 / dias, na base do giro); `valor` continua o do período. O `percentual` em pontos saiu: era o único campo de razão fora da fração |
+| Desconto sem dupla subtração | Índice = desconto / (faturamento líquido + desconto); o desconto nunca sai do valor da linha | Confirmado com a Opção 27 (o "Valor Total" já líquido) e com o resumo por documento (o percentual vira reais por valor × p / (100 − p)). Ajustes: com o total bruto e o "Valor Líquido" no relatório, a venda é o líquido (o bruto dobrava o desconto no índice); sobre o valor derivado do preço unitário, o índice sai `sem_dados`; o casamento do resumo por documento é medido pelo valor das vendas, e não pelas linhas |
+| Encalhados = Σ saldo × custo unitário, com saldo > 0 e sem venda há mais de 60 dias, sem saldo negativo nem item sem custo | O mesmo | Confirmada: o item sem custo conta à parte (`itens_sem_custo`), sem valor |
+| Curva ABC tripla, com A até 80%, B até 95% e C até 100%, sem a devolução distorcer a base | A regra da análise mensal | Confirmados a ordem e os cortes. Ajustes: as três curvas pelo valor líquido de devolução (a base, 100%, é a soma dos positivos); a participação de cada item sai do valor (os empatados ficam com a mesma) |
+| Ticket médio = faturamento / vendas únicas; PPA = unidades / vendas únicas | O mesmo | Confirmadas. Ajustes: com a data de cada venda, a venda é o número naquela data (a numeração que recomeça não junta vendas); o PPA avisa a quantidade fracionada (o granel em kg não é peça) |
+| Recompra = clientes com mais de uma compra / clientes identificados | O mesmo, pelo CPF ou CNPJ válido | Confirmada |
+| Devolução | Só com a coluna de situação | Ajuste: sem a coluna de situação, a linha com quantidade e valor negativos é a devolução (antes, sumia do faturamento líquido de devolução e do CMV líquido) |
+| O texto e o JSON batem com o cálculo | Os percentuais em fração, formatados nas telas pelo `pct` | Ajustes: o percentual do líder da curva ABC no texto de reserva da devolutiva sai com vírgula; o GMROI sem o campo em pontos |
+
+### Os testes do gabarito
+
+`GabaritoAdministrativoTests` (em `tests/test_indicadores.py`) usa um envio de três meses (01/08 a 31/10/2025) com número da venda, CPF, desconto, custo, estoque, uma devolução e um produto listado sem venda. Os 21 indicadores são conferidos contra as contas feitas à mão, escritas nos comentários. Por exemplo: margem (140 − 92) / 140 = 34,29%; giro anualizado 92 × 365 / 92 / 700,67 = 0,5209; GMROI anualizado 48 × 365 / 92 / 700,67 = 0,2718; cobertura agregada 700,7 dias = 365 / giro anualizado.
+
+Há também uma prova para cada ajuste:
+- a mesma loja em 3 e em 12 meses dá o mesmo GMROI anualizado;
+- o semestre sem custo não entra na anualização;
+- o relatório sem período fica fora dela;
+- o "Valor Líquido" vale sobre o total bruto;
+- o desconto sobre o valor derivado sai `sem_dados`;
+- a venda é o número naquela data;
+- o granel aparece no PPA;
+- o casamento do resumo por documento é medido pelo valor;
+- o percentual do texto da devolutiva sai com vírgula.
+
+O teste de mutação desfez cada regra e cada ajuste desta diretiva, um por vez: os testes perceberam 25 de 25.
+
+### Decisões e limites
+
+- **Empate na curva ABC.** O empate continua desempatado pela ordem do nome, como na análise mensal. Com 20 mil itens iguais, agrupar os empatados poria todos na classe A. Agrupar é uma convenção possível, decisão do dono.
+- **Duas margens com o mesmo nome.** A margem bruta do indicador 3 tira o custo a confirmar (erro de cadastro). A da auditoria do Raio-X e a "margem bruta estimada" do lead somam todo produto. No envio com custo a confirmar, os números diferem. Alinhar as duas pede decisão do dono (as telas mostram a da auditoria).
+- **Bonificação.** Fica fora do CMV do indicador. É o CMV líquido da auditoria que a soma.
+- **Indicador protegido sem número.** O plano que não libera a funcionalidade vê "protegido" também no indicador que não saiu (o saving, a recompra sem CPF). Mostrar só o status de falta pede decisão do dono (seção 6).
+- **Estoque parado do lead.** O lead guarda o saldo do último ano em que o produto vendeu, e não o último saldo do envio: o produto que parou de vender e foi zerado depois ainda aparece com o saldo antigo. Corrigir pede uma coluna nova no contrato das linhas do lead.
+- **Desconto em percentual todo até 1%.** Pode estar em fração: fica de fora, e o índice pede a coluna.
+- **Sobreposição parcial.** O relatório que cobre só parte do período da âncora soma no Raio-X do cliente (seção 13).

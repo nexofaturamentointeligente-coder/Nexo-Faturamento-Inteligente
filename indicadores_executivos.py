@@ -51,7 +51,7 @@ import pandas as pd
 
 from etl_processor import _classificar_curva_abc, _converter_serie_monetaria, data_da_linha
 
-VERSAO = "indicadores-2026-11.1"
+VERSAO = "indicadores-2026-11.2"
 CHAVES = (
     "faturamento", "ticket_medio", "margem", "giro_estoque", "mix", "itens_por_venda", "recompra", "saving",
     "evolucao_custo", "cmv", "curva_abc_faturamento", "curva_abc_volume", "curva_abc_lucro", "margem_negativa",
@@ -280,9 +280,12 @@ def resumo_das_linhas(df: pd.DataFrame, venda: pd.Series, faturamento: pd.Series
         "_documentos": None, "_clientes": None,
         "_linhas_com_cliente": 0, "_tem_coluna_cliente": "_cliente" in df.columns, "_desconto": None,
         "_calor": None, "_hora_disponivel": False, "_ultima_venda": None, "_tem_data": False,
+        "_quantidade_fracionada": False,
     }
     if linhas.empty:
         return saida
+    # A quantidade a granel (kg, litro) não é peça: o PPA soma a quantidade, e o nó avisa que houve fração.
+    saida["_quantidade_fracionada"] = bool(((linhas["quantidade"] % 1).abs() > 1e-9).any())
     documentos = None
     if "_documento" in df.columns:
         numeros = linhas["_documento"].map(numero_da_venda)
@@ -309,6 +312,11 @@ def resumo_das_linhas(df: pd.DataFrame, venda: pd.Series, faturamento: pd.Series
             datas = convertidas
             saida["_tem_data"] = True
             saida["_ultima_venda"] = datas.groupby(linhas["_prod_norm"]).max()
+    if documentos is not None and datas is not None:
+        # Com a data de cada venda, a venda é o número naquela data: a numeração que recomeça (por dia, por caixa ou
+        # por série, sem a série na coluna) não junta vendas de dias diferentes (auditoria matemática de 11/2026).
+        documentos = datas.map(lambda dia: dia.isoformat()) + "#" + documentos.astype(str)
+        saida["_documentos"] = frozenset(documentos)
     if datas is not None:
         if "_hora" in df.columns:
             horas = linhas["_hora"].map(hora_da_celula)
@@ -338,7 +346,11 @@ def resumo_das_linhas(df: pd.DataFrame, venda: pd.Series, faturamento: pd.Series
                 clientes[cliente].add(transacao)
         saida["_clientes"] = dict(clientes)
         saida["_linhas_com_cliente"] = sum(1 for cliente in identificados if cliente is not None)
-    if "_desconto" in df.columns:
+    if "_desconto" in df.columns and "valor_venda" not in (df.attrs.get("cabecalhos") or {}):
+        # Sem a coluna do total, o valor da linha é quantidade x preço unitário: com o preço de tabela, o desconto já
+        # está fora do valor e somaria duas vezes; com o preço praticado, não. Sem como saber, o índice não sai.
+        saida["_desconto_sobre_valor_derivado"] = True
+    elif "_desconto" in df.columns:
         # Desconto que não é valor em reais ("10%") ou absurdo derruba só este indicador (sem_dados), e não o Raio-X.
         qualidade = Counter()
         descontos = _converter_serie_monetaria(linhas["_desconto"], qualidade, csv).fillna(0.0).abs().round(2)
@@ -425,6 +437,48 @@ def _dias_cobertos_depois(intervalos: list, dia) -> int:
     return total
 
 
+_COLUNAS_DAS_DEVOLUCOES = ("devolucoes", "quantidade_devolvida", "devolucoes_com_custo", "custo_devolucoes")
+
+
+def _devolucoes_por_produto(resumos: list) -> pd.DataFrame:
+    """As devoluções de cada produto no envio, somadas entre os relatórios (raio_x._resumir, resumo["_ajustes"]): o
+    valor e a quantidade de toda devolução, e o valor e o custo das devoluções com custo."""
+    tabelas = [r["_ajustes"] for r in resumos if r.get("_ajustes") is not None and not r["_ajustes"].empty]
+    if not tabelas:
+        return pd.DataFrame(columns=list(_COLUNAS_DAS_DEVOLUCOES), dtype=float)
+    soma = pd.concat(tabelas).groupby(level=0).sum()
+    for coluna in _COLUNAS_DAS_DEVOLUCOES:
+        if coluna not in soma.columns:
+            soma[coluna] = 0.0
+    return soma[list(_COLUNAS_DAS_DEVOLUCOES)]
+
+
+def _base_anual(por_arquivo: pd.DataFrame, resumos: list, plausiveis: pd.DataFrame, fim_ref):
+    """A base da anualização do giro e do GMROI: o CMV e a margem líquidos de devolução dos relatórios com a coluna de
+    custo E com período, e os dias que eles cobrem (auditoria matemática de 11/2026: o CMV de parte do ano não é
+    anualizado pelos dias do ano inteiro, e o relatório sem período, sem dias, não entra no numerador). Sem nenhum
+    relatório assim, None. {"dias", "cmv", "margem"}."""
+    if fim_ref is None:
+        return None
+    base = [r for r in resumos if r.get("tem_custo") and r.get("inicio") is not None]
+    dias = _dias(_intervalos_cobertos(base, fim_ref)) if base else 0
+    if not dias:
+        return None
+    indices = {r["indice"] for r in base}
+    produtos = list(plausiveis.index)
+    parte = por_arquivo[por_arquivo["arquivo"].isin(indices) & por_arquivo["produto"].isin(set(produtos))]
+    custo, com_custo = float(parte["custo_total"].sum()), float(parte["faturamento_com_custo"].sum())
+    custo_devolvido = devolvido = 0.0
+    for resumo in base:
+        tabela = resumo.get("_ajustes")
+        if tabela is not None and not tabela.empty:
+            do_relatorio = tabela.reindex(produtos).fillna(0.0)
+            custo_devolvido += float(do_relatorio["custo_devolucoes"].sum())
+            devolvido += float(do_relatorio["devolucoes_com_custo"].sum())
+    cmv = custo - custo_devolvido
+    return {"dias": dias, "cmv": cmv, "margem": (com_custo - devolvido) - cmv}
+
+
 def _custo_unitario(plausiveis: pd.DataFrame) -> pd.Series:
     """Custo médio por unidade de cada produto com custo (custo / quantidade com custo)."""
     base = plausiveis[(plausiveis["custo_total"] > 0) & (plausiveis["quantidade_com_custo"] > 0)]
@@ -467,57 +521,90 @@ def _ticket(produtos, transacoes) -> dict:
             "transacoes": len(transacoes)}
 
 
-def _itens_por_venda(produtos, transacoes) -> dict:
+def _itens_por_venda(produtos, transacoes, fracionada: bool = False) -> dict:
+    """PPA: unidades vendidas / vendas distintas. Com quantidade fracionada (o granel em kg ou litro),
+    `quantidade_fracionada` avisa que a soma não é de peças, e linhas_por_venda é a leitura em itens."""
     if not transacoes:
-        return {"status": "requer_item_a_item", "valor": None, "linhas_por_venda": None, "transacoes": None}
+        return {"status": "requer_item_a_item", "valor": None, "linhas_por_venda": None, "transacoes": None,
+                "quantidade_fracionada": None}
     return {"status": "calculado", "valor": _razao(produtos["quantidade"].sum(), len(transacoes), 3),
-            "linhas_por_venda": _razao(produtos["linhas"].sum(), len(transacoes), 3), "transacoes": len(transacoes)}
+            "linhas_por_venda": _razao(produtos["linhas"].sum(), len(transacoes), 3), "transacoes": len(transacoes),
+            "quantidade_fracionada": fracionada}
 
 
-def _margem(plausiveis, a_confirmar_itens) -> dict:
+def _devolucoes_dos_plausiveis(plausiveis, devolucoes) -> tuple[float, float]:
+    """(valor, custo) das devoluções com custo dos produtos plausíveis (o custo a confirmar fica de fora)."""
+    das = devolucoes.reindex(plausiveis.index).fillna(0.0)
+    return float(das["devolucoes_com_custo"].sum()), float(das["custo_devolucoes"].sum())
+
+
+def _margem(plausiveis, a_confirmar_itens, devolucoes) -> dict:
+    """Margem bruta clássica: (receita líquida − CMV) / receita líquida, nunca sobre o custo (isso é o markup). A
+    receita é a venda com custo, já líquida do desconto na linha, menos as devoluções com custo; o CMV é o custo dessas
+    vendas menos o custo das devoluções, que voltam ao estoque. O custo a confirmar fica fora (aparece só na contagem).
+    A líquida de impostos pede a alíquota (requer_parametro)."""
     com_custo = float(plausiveis["faturamento_com_custo"].sum())
     custo = float(plausiveis["custo_total"].sum())
+    devolvido, custo_devolvido = _devolucoes_dos_plausiveis(plausiveis, devolucoes)
+    receita, cmv = com_custo - devolvido, custo - custo_devolvido
     base = {"liquida_status": "requer_parametro", "liquida_valor": None, "liquida_percentual": None,
             "aliquota_impostos": None, "itens_custo_a_confirmar": a_confirmar_itens}
+    vazio = {"bruta_valor": None, "bruta_percentual": None, "faturamento_com_custo": None,
+             "receita_liquida_com_custo": None, "devolucoes_com_custo": None, "custo_das_devolucoes": None}
     if custo <= 0:
-        return {"status": "requer_custo", "bruta_valor": None, "bruta_percentual": None,
-                "faturamento_com_custo": None, **base}
-    return {"status": "calculado", "bruta_valor": _dinheiro(com_custo - custo),
-            "bruta_percentual": _fracao(com_custo - custo, com_custo), "faturamento_com_custo": _dinheiro(com_custo),
-            **base}
+        return {"status": "requer_custo", **vazio, **base}
+    if receita <= 0:
+        return {"status": "sem_dados", **vazio, **base}
+    return {"status": "calculado", "bruta_valor": _dinheiro(receita - cmv),
+            "bruta_percentual": _fracao(receita - cmv, receita), "faturamento_com_custo": _dinheiro(com_custo),
+            "receita_liquida_com_custo": _dinheiro(receita), "devolucoes_com_custo": _dinheiro(devolvido),
+            "custo_das_devolucoes": _dinheiro(custo_devolvido), **base}
 
 
-def _cmv(plausiveis, implausiveis) -> dict:
+def _cmv(plausiveis, implausiveis, devolucoes) -> dict:
+    """CMV: o custo das vendas menos o custo das devoluções (a mercadoria volta ao estoque), sem o custo a confirmar,
+    que sai à parte."""
     custo = float(plausiveis["custo_total"].sum())
+    _devolvido, custo_devolvido = _devolucoes_dos_plausiveis(plausiveis, devolucoes)
     fora = float(implausiveis["custo_total"].sum())
     if custo <= 0:
         # Sem custo plausível, o CMV não sai (calcular troca por sem_dados quando a coluna existe); o custo dos
         # itens a confirmar continua à parte.
-        return {"status": "requer_custo", "valor": None, "custo_a_confirmar": _dinheiro(fora) if fora > 0 else None,
+        return {"status": "requer_custo", "valor": None, "custo_das_vendas": None, "custo_das_devolucoes": None,
+                "custo_a_confirmar": _dinheiro(fora) if fora > 0 else None,
                 "itens_custo_a_confirmar": int(implausiveis.shape[0])}
-    return {"status": "calculado", "valor": _dinheiro(custo), "custo_a_confirmar": _dinheiro(fora),
+    return {"status": "calculado", "valor": _dinheiro(custo - custo_devolvido), "custo_das_vendas": _dinheiro(custo),
+            "custo_das_devolucoes": _dinheiro(custo_devolvido), "custo_a_confirmar": _dinheiro(fora),
             "itens_custo_a_confirmar": int(implausiveis.shape[0])}
 
 
-def _giro(plausiveis, custo_unitario, estoques, dias) -> dict:
-    """CMV / estoque atual a custo; anualizado pelos dias cobertos por relatório (`dias`)."""
+def _estoque_a_custo(estoques, custo_unitario) -> tuple[float, int]:
+    """(Σ saldo positivo × custo unitário médio dos produtos com custo, produtos com saldo e sem custo)."""
+    positivos = estoques[estoques > 0]
+    com_custo = positivos.index.intersection(custo_unitario.index)
+    return float((positivos[com_custo] * custo_unitario[com_custo]).sum()), int(len(positivos) - len(com_custo))
+
+
+def _giro(plausiveis, custo_unitario, estoques, devolucoes, base_anual) -> dict:
+    """Giro do período: CMV / estoque atual a custo. Anualizado: o CMV dos relatórios com custo e com período ×
+    365 / os dias deles, sobre o mesmo estoque (_base_anual)."""
+    dias = base_anual["dias"] if base_anual else None
     vazio = {"valor": None, "anualizado": None, "cmv": None, "estoque_a_custo": None, "dias_do_periodo": dias,
              "itens_com_estoque_sem_custo": None}
     if estoques is None:
         return {"status": "requer_estoque", **vazio}
-    cmv = float(plausiveis["custo_total"].sum())
-    if cmv <= 0:
+    _devolvido, custo_devolvido = _devolucoes_dos_plausiveis(plausiveis, devolucoes)
+    cmv = float(plausiveis["custo_total"].sum()) - custo_devolvido
+    if float(plausiveis["custo_total"].sum()) <= 0 or cmv <= 0:
         return {"status": "requer_custo", **vazio}
-    positivos = estoques[estoques > 0]
-    com_custo = positivos.index.intersection(custo_unitario.index)
-    estoque_a_custo = float((positivos[com_custo] * custo_unitario[com_custo]).sum())
+    estoque_a_custo, sem_custo = _estoque_a_custo(estoques, custo_unitario)
     if estoque_a_custo <= 0:
         return {"status": "sem_dados", **vazio}
-    giro = cmv / estoque_a_custo
-    return {"status": "calculado", "valor": round(giro, 4),
-            "anualizado": round(giro * 365 / dias, 4) if dias else None, "cmv": _dinheiro(cmv),
-            "estoque_a_custo": _dinheiro(estoque_a_custo), "dias_do_periodo": dias,
-            "itens_com_estoque_sem_custo": int(len(positivos) - len(com_custo))}
+    anualizado = (round(base_anual["cmv"] * 365 / base_anual["dias"] / estoque_a_custo, 4)
+                  if base_anual and base_anual["cmv"] > 0 else None)
+    return {"status": "calculado", "valor": round(cmv / estoque_a_custo, 4), "anualizado": anualizado,
+            "cmv": _dinheiro(cmv), "estoque_a_custo": _dinheiro(estoque_a_custo), "dias_do_periodo": dias,
+            "itens_com_estoque_sem_custo": sem_custo}
 
 
 def _mix(produtos, resumos) -> dict:
@@ -617,16 +704,17 @@ def _curva(produtos, valores: pd.Series, base: str, fora: int = 0) -> dict:
     soma_da_classe: dict = defaultdict(float)
     for linha in curva["produtos"]:
         soma_da_classe[linha["classe"]] += float(positivos[linha["nome"]])
+    total_positivo = float(positivos.sum())
     classes = [{"classe": linha["classe"], "itens": linha["qtd_produtos"],
                 "valor": (_quantidade(soma_da_classe[linha["classe"]]) if base == "quantidade"
                           else _dinheiro(soma_da_classe[linha["classe"]])),
-                "participacao": round(linha["perc_faturamento"] / 100, 4)} for linha in curva["resumo"]]
+                "participacao": round(soma_da_classe[linha["classe"]] / total_positivo, 4)} for linha in curva["resumo"]]
     itens = []
     for linha in curva["produtos"][:LIMITE_LISTA]:
         valor = linha["faturamento"]
         itens.append({**_item(produtos, linha["nome"]), "classe": linha["classe"],
                       "valor": _quantidade(valor) if base == "quantidade" else _dinheiro(valor),
-                      "participacao": round(linha["perc_individual"] / 100, 4),
+                      "participacao": round(float(positivos[linha["nome"]]) / total_positivo, 4),
                       "acumulado": round(linha["perc_acumulado"] / 100, 4)})
     total = float(positivos.sum())
     return {"status": "calculado", "base": base, "total": _quantidade(total) if base == "quantidade" else _dinheiro(total),
@@ -706,8 +794,10 @@ def _margem_abaixo_minimo(produtos, plausiveis) -> dict:
 
 
 def _descontos(resumos) -> dict:
+    """Desconto / (faturamento líquido + desconto): o valor da linha já é líquido do desconto (a Opção 27 e o "Valor
+    Líquido", que a leitura prefere ao total bruto), então o desconto nunca sai duas vezes do faturamento."""
     vazio = {"valor": None, "descontos": None, "faturamento_bruto": None}
-    if any(r.get("_desconto_invalido") for r in resumos):
+    if any(r.get("_desconto_invalido") or r.get("_desconto_sobre_valor_derivado") for r in resumos):
         # A coluna existe, mas traz percentual ("10%") ou valor absurdo: o índice não sai.
         return {"status": "sem_dados", **vazio}
     com_coluna = [r for r in resumos if r.get("_desconto") is not None]
@@ -796,14 +886,21 @@ def _encalhados(produtos, por_arquivo, resumos, estoques, nomes_estoque, custo_u
             "base_dos_dias": "data_da_venda" if exata else "fim_do_relatorio", "lista": lista}
 
 
-def _cobertura(produtos, estoques, dias) -> dict:
-    vazio = {"itens": None, "mediana_dias": None, "dias_do_periodo": dias, "faixas": None, "lista": None}
+def _cobertura(produtos, estoques, dias, quantidade_com_periodo) -> dict:
+    """Por produto, em unidades: estoque / venda média diária (a quantidade dos relatórios com período / os dias que eles
+    cobrem); como o custo unitário é o mesmo nos dois lados, é o estoque a custo / o CMV médio diário do produto. A
+    agregada da loja (dias_agregado: estoque a custo / CMV médio diário) sai em calcular, na base do giro."""
+    vazio = {"itens": None, "mediana_dias": None, "dias_agregado": None, "dias_do_periodo": dias, "faixas": None,
+             "lista": None, "itens_com_estoque_sem_venda": None}
     if estoques is None:
         return {"status": "requer_estoque", **vazio}
     if not dias:
         return {"status": "requer_periodo", **vazio}
     comuns = estoques.index.intersection(produtos.index)
-    base = pd.DataFrame({"estoque": estoques[comuns], "quantidade": produtos.loc[comuns, "quantidade"]})
+    vendida = quantidade_com_periodo.reindex(comuns).fillna(0.0)
+    base = pd.DataFrame({"estoque": estoques[comuns], "quantidade": vendida})
+    sem_venda = int(((estoques > 0) & ~estoques.index.isin(base.index[base["quantidade"] > 0])).sum())
+    vazio["itens_com_estoque_sem_venda"] = sem_venda
     base = base[(base["estoque"] > 0) & (base["quantidade"] > 0)]
     if base.empty:
         return {"status": "sem_dados", **vazio}
@@ -821,20 +918,25 @@ def _cobertura(produtos, estoques, dias) -> dict:
               "venda_media_diaria": round(float(base.at[produto, "vmd"]), 4), "dias": round(float(base.at[produto, "dias"]), 1)}
              for produto in ordem]
     return {"status": "calculado", "itens": int(base.shape[0]), "mediana_dias": round(float(base["dias"].median()), 1),
-            "dias_do_periodo": dias, "faixas": faixas, "lista": lista}
+            "dias_agregado": None, "dias_do_periodo": dias, "faixas": faixas, "lista": lista,
+            "itens_com_estoque_sem_venda": sem_venda}
 
 
-def _gmroi(plausiveis, custo_unitario, fotos) -> dict:
-    """Margem bruta / estoque médio a custo: a média das fotos do estoque (_estoque_do_envio) quando cada foto
-    traz todo produto com estoque e custo do estado final; senão (relatório que só lista quem vendeu, arquivo
-    fatiado), o estoque final, com `base` dizendo qual valeu."""
-    vazio = {"valor": None, "percentual": None, "margem_bruta": None, "estoque_medio_a_custo": None, "base": None,
-             "fotos_de_estoque": None}
+def _gmroi(plausiveis, custo_unitario, fotos, devolucoes, base_anual) -> dict:
+    """GMROI: margem bruta (líquida de devolução, a do indicador 3) / estoque médio a custo: a média das fotos do
+    estoque (_estoque_do_envio) quando cada foto traz todo produto com estoque e custo do estado final; senão
+    (relatório que só lista quem vendeu, arquivo fatiado), o estoque final, com `base` dizendo qual valeu. `valor` é
+    o do período; `anualizado`, a margem dos relatórios com custo e com período × 365 / os dias deles, sobre o
+    mesmo estoque (_base_anual): é o GMROI clássico, comparável entre envios de tamanhos diferentes."""
+    dias = base_anual["dias"] if base_anual else None
+    vazio = {"valor": None, "anualizado": None, "margem_bruta": None, "estoque_medio_a_custo": None, "base": None,
+             "fotos_de_estoque": None, "dias_do_periodo": dias}
     if not fotos:
         return {"status": "requer_estoque", **vazio}
-    com_custo = float(plausiveis["faturamento_com_custo"].sum())
-    custo = float(plausiveis["custo_total"].sum())
-    if custo <= 0:
+    devolvido, custo_devolvido = _devolucoes_dos_plausiveis(plausiveis, devolucoes)
+    com_custo = float(plausiveis["faturamento_com_custo"].sum()) - devolvido
+    custo = float(plausiveis["custo_total"].sum()) - custo_devolvido
+    if float(plausiveis["custo_total"].sum()) <= 0:
         return {"status": "requer_custo", **vazio}
 
     def a_custo(foto):
@@ -848,10 +950,11 @@ def _gmroi(plausiveis, custo_unitario, fotos) -> dict:
     medio = sum(valores) / len(valores)
     if medio <= 0:
         return {"status": "sem_dados", **vazio, "fotos_de_estoque": len(fotos)}
-    razao = (com_custo - custo) / medio
-    return {"status": "calculado", "valor": round(razao, 4), "percentual": round(razao * 100, 2),
+    anualizado = round(base_anual["margem"] * 365 / base_anual["dias"] / medio, 4) if base_anual else None
+    return {"status": "calculado", "valor": round((com_custo - custo) / medio, 4), "anualizado": anualizado,
             "margem_bruta": _dinheiro(com_custo - custo), "estoque_medio_a_custo": _dinheiro(medio),
-            "base": "estoque_medio" if completas else "estoque_final", "fotos_de_estoque": len(fotos)}
+            "base": "estoque_medio" if completas else "estoque_final", "fotos_de_estoque": len(fotos),
+            "dias_do_periodo": dias}
 
 
 def _mapa_calor(produtos, por_arquivo, resumos, modo) -> dict:
@@ -913,21 +1016,35 @@ def calcular(produtos: pd.DataFrame, a_confirmar: pd.Series, por_arquivo: pd.Dat
         custo_unitario = custo_unitario.combine_first(extra[~extra.index.isin(produtos.index)])
     estoques, nomes_estoque, fotos = _estoque_do_envio(resumos)
     transacoes = _transacoes(resumos, modo)
-    margem_por_produto = plausiveis["faturamento_com_custo"] - plausiveis["custo_total"]
+    # As devoluções de cada produto (líquido de devolução: a margem, o CMV, o GMROI e as curvas ABC) e a base da
+    # anualização (o CMV e a margem dos relatórios com custo e com período, sobre os dias deles).
+    devolucoes = _devolucoes_por_produto(resumos)
+    base_anual = _base_anual(por_arquivo, resumos, plausiveis, fim_ref)
+    com_periodo = {r["indice"] for r in resumos if r.get("inicio") is not None}
+    quantidade_com_periodo = (por_arquivo[por_arquivo["arquivo"].isin(com_periodo)].groupby("produto")["quantidade"]
+                              .sum() if com_periodo else pd.Series(dtype=float))
+    das_vendidas = devolucoes.reindex(produtos.index).fillna(0.0)
+    faturamento_liquido = produtos["faturamento"] - das_vendidas["devolucoes"]
+    quantidade_liquida = produtos["quantidade"] - das_vendidas["quantidade_devolvida"]
+    das_plausiveis = devolucoes.reindex(plausiveis.index).fillna(0.0)
+    margem_por_produto = ((plausiveis["faturamento_com_custo"] - das_plausiveis["devolucoes_com_custo"])
+                          - (plausiveis["custo_total"] - das_plausiveis["custo_devolucoes"]))
     margem_por_produto = margem_por_produto[plausiveis["custo_total"] > 0]
+    fracionada = any(r.get("_quantidade_fracionada") for r in resumos)
     indicadores = {
         "faturamento": _faturamento(produtos, resumos),
         "ticket_medio": _ticket(produtos, transacoes),
-        "margem": _margem(plausiveis, int(implausiveis.shape[0])),
-        "giro_estoque": _giro(plausiveis, custo_unitario, estoques, dias),
+        "margem": _margem(plausiveis, int(implausiveis.shape[0]), devolucoes),
+        "giro_estoque": _giro(plausiveis, custo_unitario, estoques, devolucoes, base_anual),
         "mix": _mix(produtos, resumos),
-        "itens_por_venda": _itens_por_venda(produtos, transacoes),
+        "itens_por_venda": _itens_por_venda(produtos, transacoes, fracionada),
         "recompra": _recompra(resumos, modo),
         "saving": {"status": "requer_relatorio_de_compras", "valor": None},
         "evolucao_custo": _evolucao_custo(produtos, por_arquivo, resumos, a_confirmar_idx),
-        "cmv": _cmv(plausiveis, implausiveis),
-        "curva_abc_faturamento": _curva(produtos, produtos["faturamento"], "faturamento"),
-        "curva_abc_volume": _curva(produtos, produtos["quantidade"], "quantidade"),
+        "cmv": _cmv(plausiveis, implausiveis, devolucoes),
+        # As curvas pelo valor líquido de devolução de cada produto: a base (100%) é a soma dos positivos.
+        "curva_abc_faturamento": _curva(produtos, faturamento_liquido, "faturamento"),
+        "curva_abc_volume": _curva(produtos, quantidade_liquida, "quantidade"),
         "curva_abc_lucro": (_curva(produtos, margem_por_produto, "margem_bruta", fora=int(implausiveis.shape[0]))
                             if not margem_por_produto.empty else
                             {"status": "requer_custo", "base": "margem_bruta", "total": None, "classes": None,
@@ -938,10 +1055,17 @@ def calcular(produtos: pd.DataFrame, a_confirmar: pd.Series, por_arquivo: pd.Dat
         "ruptura": _ruptura(produtos, estoques),
         "encalhados": _encalhados(produtos, por_arquivo, resumos, estoques, nomes_estoque, custo_unitario, inicio,
                                   fim_ref, intervalos),
-        "cobertura_estoque": _cobertura(produtos, estoques, dias),
-        "gmroi": _gmroi(plausiveis, custo_unitario, fotos),
+        "cobertura_estoque": _cobertura(produtos, estoques, dias, quantidade_com_periodo),
+        "gmroi": _gmroi(plausiveis, custo_unitario, fotos, devolucoes, base_anual),
         "mapa_calor": _mapa_calor(produtos, por_arquivo, resumos, modo),
     }
+    # A cobertura agregada da loja, na base do giro: estoque a custo / (CMV / dias), o mesmo que 365 / giro anualizado.
+    giro = indicadores["giro_estoque"]
+    if (indicadores["cobertura_estoque"].get("status") == "calculado" and giro.get("status") == "calculado"
+            and base_anual and base_anual["cmv"] > 0):
+        estoque_a_custo, _sem_custo = _estoque_a_custo(estoques, custo_unitario)
+        indicadores["cobertura_estoque"]["dias_agregado"] = round(estoque_a_custo * base_anual["dias"]
+                                                                  / base_anual["cmv"], 1)
     # "requer_custo" é a falta da coluna de custo; com a coluna em algum relatório, mas sem custo que entre na
     # conta (coluna em branco, ou custo só no item a confirmar), o indicador sai "sem_dados".
     if any(r.get("tem_custo") for r in resumos):
@@ -953,6 +1077,11 @@ def calcular(produtos: pd.DataFrame, a_confirmar: pd.Series, por_arquivo: pd.Dat
     if estoques is not None and _estoques_sobrepostos(resumos):
         for chave in _INDICADORES_DE_ESTOQUE:
             indicadores[chave] = {**{campo: None for campo in indicadores[chave]}, "status": "sem_dados"}
+    # A venda parcial diante do estoque inteiro (raio_x._aviso_de_amostra_parcial): os indicadores de estoque saem,
+    # marcados, porque comparam a venda de uma parte dos clientes com o estoque da loja inteira.
+    if any(r.get("_amostra_parcial") for r in resumos):
+        for chave in _INDICADORES_DE_ESTOQUE:
+            indicadores[chave]["amostra_parcial"] = True
     # Um indicador com número fora do que o contrato aceita (uma célula absurda numa coluna acessória) sai
     # "sem_dados", em vez de derrubar o nó inteiro, e com ele o Raio-X ou o lead.
     for chave, valor in list(indicadores.items()):

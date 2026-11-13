@@ -330,7 +330,7 @@ def _gerar_fallback(c: dict) -> dict:
            "O sinal positivo indica compras acima das vendas — capital em estoque a observar. ")
         + f"Pela Curva ABC, {c['abc_classe_a_qtd']} produto(s) da Classe A concentram "
         f"~{c['abc_classe_a_perc']:.0f}% da receita"
-        + (f", liderados por {c['abc_lider_nome']} ({c['abc_lider_perc']:.2f}% do total)."
+        + (f", liderados por {c['abc_lider_nome']} ({format(c['abc_lider_perc'], '.2f').replace('.', ',')}% do total)."
            if c["abc_lider_nome"] else ".")
     )
     conclusao = (

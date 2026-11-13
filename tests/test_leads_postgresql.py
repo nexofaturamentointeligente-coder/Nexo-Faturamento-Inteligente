@@ -535,6 +535,7 @@ class _ClusterDosLeads(_PrivateCluster):
 
     def _etapa_indicadores(self):
         from flask_migrate import downgrade, upgrade
+        import indicadores_executivos
         import leads_avaliacao
 
         self.stage = "indicadores executivos gravados pelo serviço e apagados pela função de expurgo"
@@ -544,7 +545,7 @@ class _ClusterDosLeads(_PrivateCluster):
             indicadores = json.loads(bruto)
         except (TypeError, ValueError):
             indicadores = None
-        gravado = (isinstance(indicadores, dict) and indicadores.get("versao") == "indicadores-2026-11.1"
+        gravado = (isinstance(indicadores, dict) and indicadores.get("versao") == indicadores_executivos.VERSAO
                    and len(indicadores.get("indicadores") or {}) == 21)
         # O envio passa dos 30 dias: a função do banco apaga as linhas e, com elas, os indicadores (nome de produto).
         self._executar("UPDATE brainstorming_dados_pdv SET criado_em = criado_em - INTERVAL '31 days' "
