@@ -705,7 +705,8 @@ class RaioXPortalTests(_PlanosCase):
                          (2, "PRATA", Decimal("30.0"), Decimal("63.08")))
         self.assertEqual((linha.periodo_inicio, linha.periodo_fim), (date(2026, 1, 1), date(2026, 2, 28)))
         html = self.cliente_http.get(PAGINA).get_data(as_text=True)
-        self.assertIn("Potencial recuperável identificado", html)
+        # O valor recuperável da recomendação, com o rótulo simples de 14/11/2026.
+        self.assertIn("Dinheiro recuperável (estimativa)", html)
         self.assertIn("R$</small> 30,00", html)
         self.assertIn("Conhecer o plano Prata", html)
         self.assertIn("dado-protegido", html)
@@ -743,8 +744,9 @@ class RaioXPortalTests(_PlanosCase):
         self._mudar_plano("PRATA")
         self._enviar_raio_x(("jan.csv", MotorRaioXTests.CUSTO_ABSURDO))
         texto = self.cliente_http.get(AUDITORIA).get_data(as_text=True)
-        self.assertIn("Fora desta perda: 1 item(ns) com custo a confirmar (R$ 39.500,00)", texto)
-        self.assertIn("Custo a confirmar:", texto)
+        # Etapa 1 (14/11/2026): os itens de custo a confirmar ficam nos alertas de cadastro, num card fechado.
+        self.assertIn("Alertas de cadastro: 1 item com custo distorcido ignorado na conta", texto)
+        self.assertIn('<details class="nexo-card mb-4 alertas-cadastro" id="alertasCadastro">', texto)
         self.assertIn('id="tabelaCustoAConfirmar"', texto)
         self.assertIn("Item Generico", texto)
         bloco = self.cliente_http.get(API_AUDITORIA).get_json()["auditoria"]["custo_a_confirmar"]
@@ -773,7 +775,7 @@ class RaioXPortalTests(_PlanosCase):
         self.db.session.commit()
         pagina = self.cliente_http.get(AUDITORIA)
         self.assertEqual(pagina.status_code, 200)
-        self.assertNotIn("Líquida, com bonificações e devoluções", pagina.get_data(as_text=True))
+        self.assertNotIn("Contando bonificações e devoluções", pagina.get_data(as_text=True))
         corpo = self.cliente_http.get(API_AUDITORIA)
         self.assertEqual(corpo.status_code, 200)
         self.assertIsNone(corpo.get_json()["auditoria"]["cmv_liquido"])
@@ -810,7 +812,8 @@ class RaioXPortalTests(_PlanosCase):
         indicadores = resultado["indicadores_executivos"]["indicadores"]
         self.assertEqual(indicadores["faturamento"]["valor"], 40.0)
         self.assertEqual(indicadores["margem"], {"status": "protegido", "funcionalidade": "margem_bruta"})
-        self.assertIn("1 arquivo(s) de vendas", self.cliente_http.get(PAGINA).get_data(as_text=True))
+        # O cabeçalho conta os arquivos enviados (um só, fatiado em dois meses), não os meses.
+        self.assertIn("1 arquivo enviado", self.cliente_http.get(PAGINA).get_data(as_text=True))
 
     def test_envio_em_xls_e_em_planilha_xml_como_o_erp_exporta(self):
         from tests import leiautes_erp_support as leiautes
@@ -919,7 +922,7 @@ class RaioXPortalTests(_PlanosCase):
         self._novo_cliente("outra-empresa@example.invalid", id_empresa=self.outra_empresa_id)
         outra, _ = self._entrar("outra-empresa@example.invalid")
         self.assertEqual(outra.get(API).status_code, 404)
-        self.assertNotIn("Potencial recuperável identificado", outra.get(PAGINA).get_data(as_text=True))
+        self.assertNotIn("Dinheiro recuperável (estimativa)", outra.get(PAGINA).get_data(as_text=True))
 
     def test_novo_envio_substitui_o_anterior(self):
         self._enviar_raio_x(("jan.csv", JANEIRO))

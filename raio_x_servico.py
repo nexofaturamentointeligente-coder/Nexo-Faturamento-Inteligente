@@ -17,6 +17,7 @@ from decimal import Decimal
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -259,6 +260,70 @@ def mostra_todas_as_fatias(fatias: list, limite_meses: int | None) -> bool:
                                 for fatia in fatias)
 
 
+def _centavos(valor) -> int | None:
+    """Reais (float gravado pelo worker, já em centavos) em centavos inteiros; None se não houver número (o
+    json.loads aceita NaN e Infinity num JSON editado à mão, que o worker nunca grava)."""
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor):
+        return None
+    try:
+        return int((Decimal(str(valor)) * 100).to_integral_value())
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _itens_a_confirmar(bloco) -> int:
+    """Quantos itens de custo a confirmar o bloco gravado traz (0 sem o bloco, com lixo ou sem item)."""
+    itens = bloco.get("itens") if isinstance(bloco, dict) else None
+    return itens if isinstance(itens, int) and not isinstance(itens, bool) and itens > 0 else 0
+
+
+def margem_sem_custo_a_confirmar(auditoria: dict) -> dict:
+    """A margem bruta do envio sem os itens de custo a confirmar (custo a partir de raio_x.RAZAO_CUSTO_IMPLAUSIVEL
+    vezes a venda: erro de cadastro, não prejuízo), pedida pelo dono em 14/11/2026 para o card "Margem bruta
+    estimada" da Auditoria de custos. Sai das duas parcelas a venda com custo e o custo desses itens
+    (auditoria.custo_a_confirmar, gravado desde a raio-x-2026-11.5), em centavos inteiros, como o worker.
+
+    Devolve {"valor", "percentual", "base", "itens_fora"}: base é a venda com custo que sobra; itens_fora, quantos
+    itens saíram. Sem custo informado, valor, percentual e base são None. Sem o bloco (Raio-X gravado até a 11.4)
+    ou sem item a confirmar, é a margem de sempre. Quando todo o custo informado é de itens a confirmar, não sobra
+    custo confiável: valor e percentual None."""
+    custo, venda = _centavos(auditoria.get("custo_total")), _centavos(auditoria.get("faturamento_com_custo"))
+    bloco = auditoria.get("custo_a_confirmar")
+    itens = _itens_a_confirmar(bloco)
+    if not custo or custo <= 0 or venda is None:
+        return {"valor": None, "percentual": None, "base": None, "itens_fora": itens}
+    if itens:
+        custo_fora, venda_fora = _centavos(bloco.get("custo_total")), _centavos(bloco.get("faturamento_com_custo"))
+        if custo_fora is None or venda_fora is None:
+            return {"valor": None, "percentual": None, "base": None, "itens_fora": itens}
+        custo, venda = custo - custo_fora, venda - venda_fora
+    if custo <= 0 or venda <= 0:
+        return {"valor": None, "percentual": None, "base": round(max(venda, 0) / 100, 2), "itens_fora": itens}
+    margem = venda - custo
+    return {"valor": round(margem / 100, 2), "percentual": round(margem / venda, 4), "base": round(venda / 100, 2),
+            "itens_fora": itens}
+
+
+def custo_sem_custo_a_confirmar(auditoria: dict) -> float | None:
+    """O custo das vendas (custo_total) sem o dos itens de custo a confirmar, pedido pelo dono em 14/11/2026 (Etapa 1)
+    para o card "Custo dos produtos vendidos" da Auditoria de custos: o custo das mesmas vendas da "Sobra bruta nas
+    vendas" (margem_sem_custo_a_confirmar). Em centavos inteiros, como o worker.
+
+    None sem número gravado, ou com item a confirmar e o bloco sem o custo. Sem o bloco (Raio-X gravado até a 11.4)
+    ou sem item a confirmar, é o custo de sempre. Nunca negativo: se todo o custo informado é de itens a confirmar,
+    sobra zero."""
+    custo = _centavos(auditoria.get("custo_total"))
+    if custo is None:
+        return None
+    bloco = auditoria.get("custo_a_confirmar")
+    if _itens_a_confirmar(bloco):
+        fora = _centavos(bloco.get("custo_total"))
+        if fora is None:
+            return None
+        custo = max(custo - fora, 0)
+    return round(custo / 100, 2)
+
+
 def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
     """Cópia do resultado sem o que o plano não libera (valores trocados por None)."""
     resultado = copy.deepcopy(dados)
@@ -272,6 +337,9 @@ def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
             for campo in ("custo_total", "margem_valor", "margem_percentual"):
                 fatia[campo] = None
     auditoria = resultado["auditoria"]
+    # Margem e custo sem os itens de custo a confirmar (14/11/2026), calculados antes de o plano esconder o custo.
+    limpa = margem_sem_custo_a_confirmar(auditoria)
+    custo_limpo = custo_sem_custo_a_confirmar(auditoria)
     # Raio-X gravado antes do saneamento de 11/2026 (raio-x-2026-11.3) não tem os campos líquidos:
     # eles entram como nulos, a mesma forma do que o plano não libera, e a tela e a API não quebram.
     for campo in CAMPOS_MARGEM_LIQUIDA + CAMPOS_CMV_LIQUIDO:
@@ -302,6 +370,24 @@ def visao(dados: dict, liberadas: frozenset, limite_meses: int | None) -> dict:
             a_confirmar["lista"] = None
         if "diagnostico_cmv" not in liberadas:
             a_confirmar["custo_total"] = a_confirmar["faturamento_com_custo"] = None
+    # Os campos "sem_a_confirmar": o card da margem e a contagem de margem negativa sem os itens de custo a
+    # confirmar. A margem limpa e a venda com custo que sobra pedem a funcionalidade da margem, a mesma que libera o
+    # indicador 3 (indicadores_executivos, FUNCIONALIDADE_DO_INDICADOR["margem"]), que já traz essa margem e essa
+    # venda sem os itens a confirmar; sem item a confirmar, são a margem e a venda com custo de sempre. A venda com
+    # custo sozinha também sai com o diagnóstico de CMV, que já mostra o custo e a venda dos itens a confirmar.
+    cmv = "diagnostico_cmv" in liberadas
+    auditoria["margem_sem_a_confirmar_valor"] = limpa["valor"] if margem else None
+    auditoria["margem_sem_a_confirmar_percentual"] = limpa["percentual"] if margem else None
+    auditoria["faturamento_com_custo_sem_a_confirmar"] = limpa["base"] if (margem or cmv or not limpa["itens_fora"]) \
+        else None
+    # O custo das vendas sem os itens a confirmar (card "Custo dos produtos vendidos", Etapa 1 de 14/11/2026) é do
+    # diagnóstico de CMV, como o custo total e o custo do bloco, de que ele é a diferença.
+    auditoria["custo_total_sem_a_confirmar"] = custo_limpo if cmv else None
+    # Todo item a confirmar tem margem negativa (custo de 3 vezes a venda ou mais): a contagem limpa é a diferença.
+    negativos = auditoria.get("itens_margem_negativa")
+    auditoria["itens_margem_negativa_sem_a_confirmar"] = (
+        max(0, negativos - limpa["itens_fora"]) if isinstance(negativos, int) and not isinstance(negativos, bool)
+        else None)
 
     corte = _corte_historico(resultado["fatias"], limite_meses)
     visiveis, ocultas = [], []

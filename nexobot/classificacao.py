@@ -161,10 +161,15 @@ _DADOS = re.compile(
 _DEFINICAO = re.compile(r"\b(?:significa|significado|quer dizer|definicao|conceito|o que eh|calculad[oa]|como eh)\b")
 # "O NEXO calcula lucro?": pergunta sobre o produto, não pedido de valores.
 _PRODUTO_CALCULA = re.compile(
-    r"\b(?:o |a )?(?:nexo|sistema|portal|plataforma|ferramenta|voces|voce|vc) (?:calcula|calculam|mostra|mostram|"
-    r"informa|informam|gera|geram|fornece|fornecem|apresenta|apresentam|exibe|exibem|tem|possui|da|entrega|"
-    r"entregam|mede|medem|considera|trabalha com|usa|utiliza)\b"
+    r"\b(?:o |a )?(?:nexo|sistema|portal|plataforma|ferramenta|voces|voce|vc|auditoria de custos?) "
+    r"(?:calcula|calculam|mostra|mostram|informa|informam|gera|geram|fornece|fornecem|apresenta|apresentam|"
+    r"exibe|exibem|tem|possui|da|entrega|entregam|mede|medem|considera|trabalha com|usa|utiliza)\b"
 )
+# "O que mostra a Auditoria de custos?", "Quais números a Auditoria de custos mostra?": pergunta sobre a tela e
+# os números que ela traz (nexo.indicadores.auditoria_de_custos), não pedido de valores. O nome da tela sai do texto
+# antes de procurar o pedido de valores, e não o pedido inteiro: "Me mostra o lucro bruto da auditoria de custos"
+# continua pedindo valores (lucro), que o bot não vê.
+_TELA_DA_AUDITORIA = re.compile(r"\bauditoria de custos?\b|\btabela de lucro bruto\b")
 # Pedido de ACESSO à administração (recusa) — perguntas sobre ela vão ao conhecimento.
 _ACESSO_ADMIN = re.compile(
     r"\b(?:acess\w*|entrar|entro|entra|entrei|entre (?:na|no|em|nas|nos|la)|abr\w*|lev\w*|direcion\w*|redirecion\w*|"
@@ -523,8 +528,8 @@ def analisar_oracao(oracao: Oracao) -> Oracao:
 
     # Pedido de valores ("me mostra o faturamento") não é ordem de navegação.
     # Comparar termos ou perguntar o que o NEXO calcula é dúvida, não pedido de dados.
-    pede_dados = bool(_DADOS.search(texto)) and not _DEFINICAO.search(texto) and not _COMPARA.search(texto) \
-        and not _PRODUTO_CALCULA.search(texto)
+    pede_dados = bool(_DADOS.search(_TELA_DA_AUDITORIA.sub(" ", texto))) and not _DEFINICAO.search(texto) \
+        and not _COMPARA.search(texto) and not _PRODUTO_CALCULA.search(texto)
     if pede_dados and not _NEGACAO.search(texto):
         oracao.tipo = "dados"
         return oracao

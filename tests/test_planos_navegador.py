@@ -115,7 +115,7 @@ class PlanosNavegadorTests(NavegadorCase):
         self.assertEqual(len(envios), 1)
         self.assertEqual(json.loads(pagina.evaluate("() => sessionStorage.getItem('botao')")),
                          [True, "Lendo os relatórios…"])
-        self.assertIn("Raio-X concluído com 2 relatório(s)", pagina.content())
+        self.assertIn("Raio-X concluído com 2 arquivos.", pagina.content())
 
 
 if __name__ == "__main__":

@@ -664,7 +664,7 @@ class RaioXEntradaTests(_PortalCase):
         self.ao_disparar = self._raio_x_confirmados
         resposta = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO), ("fev.csv", FEVEREIRO))
         self.assertEqual((resposta.status_code, resposta.headers["Location"]), (303, PAGINA_RAIO_X))
-        self.assertIn("Raio-X concluído com 2 relatório(s) de vendas.", self._flashes(self.cliente_http))
+        self.assertIn("Raio-X concluído com 2 arquivos.", self._flashes(self.cliente_http))
         linha = self._raio_x_gravado()
         self.assertGreater(linha.valor_recuperavel, 0)
         pedido = self._mensagem(NUMERO_EMPRESA)
@@ -737,7 +737,7 @@ class RaioXEntradaTests(_PortalCase):
         with self._avisos(whatsapp_service.logger) as registro:
             pagina = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO))
             self.assertEqual(pagina.status_code, 303)
-            self.assertIn("Raio-X concluído com 1 relatório(s) de vendas.", self._flashes(self.cliente_http))
+            self.assertIn("Raio-X concluído com 1 arquivo.", self._flashes(self.cliente_http))
             api = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO), ("fev.csv", FEVEREIRO), api=True)
         self.assertEqual(api.status_code, 201)
         self.assertEqual(self._raio_x_gravado().arquivos, 2)
@@ -757,7 +757,7 @@ class RaioXEntradaTests(_PortalCase):
         resposta = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO))
         self.assertEqual(self._raio_x_confirmados(), 1)
         self.assertEqual(resposta.status_code, 303)
-        self.assertIn("Raio-X concluído com 1 relatório(s) de vendas.", self._flashes(self.cliente_http))
+        self.assertIn("Raio-X concluído com 1 arquivo.", self._flashes(self.cliente_http))
 
 
 class NotificadorDesligadoTests(_PortalCase):

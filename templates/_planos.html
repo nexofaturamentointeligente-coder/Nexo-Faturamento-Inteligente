@@ -12,6 +12,7 @@
                       sugerido pelo Raio-X, com os motivos.
    =================================================================== #}
 {% import "_macros.html" as m %}
+{% import "_raio_x.html" as rx %}
 
 {# ---- Fração (0,1234) em porcentagem pt-BR: "12,3%"; None vira "—". ---- #}
 {%- macro pct(fracao) -%}
@@ -61,15 +62,16 @@
 {%- endmacro -%}
 
 {# ---- Recomendação de plano. `recomendacao` vem de blueprints/onboarding.py
-   (plano, motivos, upgrade, url); `recuperavel`, do resultado do Raio-X. ---- #}
-{%- macro recomendacao_plano(recomendacao, recuperavel, plano_atual) -%}
+   (plano, motivos, upgrade, url); `recuperavel`, do resultado do Raio-X; `explicacao`, o (i)
+   do valor (raio_x_apresentacao.EXPLICACOES). ---- #}
+{%- macro recomendacao_plano(recomendacao, recuperavel, plano_atual, explicacao=none) -%}
 <section class="recomendacao-plano{{ ' is-upgrade' if recomendacao.upgrade }}" aria-labelledby="recomendacaoTitulo">
     <div class="recomendacao-valor">
-        <span class="recomendacao-rotulo">Potencial recuperável identificado</span>
+        <div class="recomendacao-rotulo-linha"><span class="recomendacao-rotulo">Dinheiro recuperável (estimativa)</span>{{ rx.info(explicacao, 'Dinheiro recuperável') }}</div>
         <strong class="recomendacao-numero"><small>R$</small> {{ m.brl(recuperavel.total) }}</strong>
-        <span class="recomendacao-partes">R$ {{ m.brl(recuperavel.abaixo_custo) }} em vendas abaixo do custo informado ·
-            R$ {{ m.brl(recuperavel.variacao_preco) }} abaixo do preço de referência. Quando a mesma venda está nas
-            duas parcelas, o total conta só a maior.</span>
+        <span class="recomendacao-partes">R$ {{ m.brl(recuperavel.abaixo_custo) }} vendendo abaixo do custo ·
+            R$ {{ m.brl(recuperavel.variacao_preco) }} vendendo abaixo do preço normal. Se a mesma venda entra nas
+            duas contas, o total soma só a maior.</span>
     </div>
     <div class="recomendacao-corpo">
         {% if recomendacao.plano %}

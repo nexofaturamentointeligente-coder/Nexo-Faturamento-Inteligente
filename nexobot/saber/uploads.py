@@ -157,7 +157,8 @@ REGISTROS = (
         detalhes=(
             "No relatório de Vendas, a coluna de lucro, quando existe, é apenas reconhecida e descartada, e a "
             "coluna de custo não entra em nenhum indicador: serve só para um alerta interno à equipe sobre "
-            "itens vendidos abaixo do custo informado pelo PDV. O NEXO não calcula lucro, margem ou CMV. Já no "
+            "itens vendidos abaixo do custo informado pelo PDV. Nas análises, o NEXO não calcula lucro, margem ou "
+            "CMV. Já no "
             "relatório de Compras, colunas como “Total Custo” ou “Custo unitário” são usadas como o valor "
             "comprado.: o NEXO não usa lucro, margem ou CMV. Para o indicador de saldo estimado parado, o "
             "relatório de Compras precisa trazer produto e quantidade comprada; se vier apenas por nota fiscal "

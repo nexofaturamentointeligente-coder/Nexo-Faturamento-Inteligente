@@ -33,6 +33,7 @@ from etl_inputs import ETLInputError
 from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
 import raio_x
+import raio_x_apresentacao
 import raio_x_servico
 import whatsapp_service
 
@@ -76,6 +77,18 @@ def _plano_info(nivel):
     return None if nivel is None else {"codigo": nivel.codigo, "nome": nivel.nome}
 
 
+def _recomendacao_atual(bruto: dict, dados) -> dict:
+    """A recomendação com as regras e os textos de hoje. raio_x.recomendar é pura e só lê o resultado gravado: o
+    Raio-X já gravado também mostra os motivos de 14/11/2026 (custo a confirmar à parte, sem jargão), com a mesma
+    contagem de margem negativa da tela, e o plano sugerido continua o mesmo. Se faltar algum campo (Raio-X antigo
+    ou JSON editado), fica a recomendação gravada."""
+    prata = dados.nivel("PRATA")
+    try:
+        return raio_x.recomendar(bruto, prata.limite_historico_meses if prata is not None else None)
+    except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
+        return bruto["recomendacao"]
+
+
 def _contexto_raio_x() -> dict:
     """O último Raio-X da empresa logada, só com o que o plano libera, e os planos envolvidos."""
     empresa = current_user.empresa
@@ -90,19 +103,22 @@ def _contexto_raio_x() -> dict:
         "plano_auditoria": dados.plano_necessario("auditoria_abaixo_custo"),
         "plano_precificacao": dados.plano_necessario("alerta_precificacao"),
         "plano_cmv": dados.plano_necessario("diagnostico_cmv"),
-        "plano_historico": None, "url_upgrade": entitlements.url_upgrade,
+        "plano_historico": None, "url_upgrade": entitlements.url_upgrade, "apresentacao": None,
     }
     registro = raio_x_servico.ultimo(empresa.id_empresa)
     if registro is None:
         return contexto
     linha, bruto = registro
     visao = raio_x_servico.visao(bruto, liberadas, limite)
-    recomendado = dados.nivel(bruto["recomendacao"]["plano"])
+    recomendacao = _recomendacao_atual(bruto, dados)
+    recomendado = dados.nivel(recomendacao["plano"])
     upgrade = (recomendado is not None and atual is not None
                and recomendado.nivel_hierarquico > atual.nivel_hierarquico)
     contexto.update({
         "raio_x": visao, "linha_raio_x": linha,
-        "recomendacao": {"plano": recomendado, "motivos": bruto["recomendacao"]["motivos"], "upgrade": upgrade,
+        # Para leigos (14/11/2026): avisos por impacto, explicações (i) e as linhas das tabelas.
+        "apresentacao": raio_x_apresentacao.preparar(visao, linha.arquivos),
+        "recomendacao": {"plano": recomendado, "motivos": recomendacao["motivos"], "upgrade": upgrade,
                          "url": entitlements.url_upgrade(recomendado) if upgrade else None},
         # O menor plano acima do atual cujo corte, pelo calendário, não esconde nenhum relatório enviado.
         "plano_historico": next((n for n in dados.niveis if atual is not None
@@ -208,7 +224,8 @@ def diagnostico_enviar():
             current_app.logger.warning("Raio-X não gravado (%s).", type(erro).__name__)
             flash("Não foi possível gravar o Raio-X. Tente novamente.", "danger")
         else:
-            flash(f"Raio-X concluído com {quantidade} relatório(s) de vendas.", "success")
+            # Conta os arquivos enviados: no lote, estoque, lista de preços e compras não são relatórios de vendas.
+            flash(f"Raio-X concluído com {quantidade} {'arquivo' if quantidade == 1 else 'arquivos'}.", "success")
     _disparar_aviso_de_raio_x(aviso)
     return redirect(url_for("onboarding.diagnostico"), 303)
 

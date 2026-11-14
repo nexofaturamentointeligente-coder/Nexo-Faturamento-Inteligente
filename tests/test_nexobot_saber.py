@@ -286,6 +286,43 @@ class MatrizDePerguntasTests(ConhecimentoBase):
         self.assertEqual(d["meta"]["assunto"], "nexo.uploads.formatos")
         self.assertIn("não é aceito", d["resposta"])
 
+    def test_nomes_da_auditoria_de_custos(self):
+        """Etapa 1 (14/11/2026): os nomes dos cards e das tabelas da Auditoria de custos levam ao registro que os
+        explica, e o bot não nega o que a tela mostra (lucro bruto e prejuízo são estimativas da Auditoria)."""
+        for pergunta in ("O que é lucro bruto?", "O que é lucro bruto por produto?", "O que é sobra bruta?",
+                         "O que é prejuízo direto no caixa?", "O que significa produtos dando prejuízo?",
+                         "O que são os alertas de cadastro?", "O que é custo distorcido?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], "nexo.indicadores.auditoria_de_custos")
+        for pergunta in ("O que é prejuízo?", "O que é lucro?"):
+            with self.subTest(pergunta=pergunta):
+                resposta = self.responder(pergunta)["resposta"]
+                self.assertIn("Auditoria de custos", resposta)
+                # A frase antiga negava sem ressalva; a nova fala das análises ("as análises do NEXO não os calculam").
+                self.assertNotIn("por isso o NEXO não os calcula.", resposta)
+                self.assertIn("as análises do NEXO não os calculam", resposta)
+        self.assertIn("lucro final", self.responder("Quais são as limitações do sistema?")["resposta"])
+        # Perguntas sobre a tela vão ao registro dela (não são pedido de valores), e os nomes do Raio-X também.
+        for pergunta in ("O que mostra a Auditoria de custos?", "Quais números a Auditoria de custos mostra?",
+                         "Para que serve a Auditoria de custos?", "O que é custo a confirmar?",
+                         "O que são produtos com margem negativa?"):
+            with self.subTest(pergunta=pergunta):
+                d = self.responder(pergunta)
+                self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.auditoria_de_custos")
+                self.assertNotIn("Não tenho acesso aos valores", d["resposta"])
+        self.assertIn("menu lateral", self.responder("O que é sobra bruta?")["resposta"])
+        # Margem bruta continua com a regra da margem, e o prejuízo no Raio-X de todo plano não é negado.
+        self.assertEqual(self.responder("O que é margem bruta?")["meta"]["assunto"], "nexo.indicadores.sem_lucro")
+        self.assertIn("aparece no Raio-X de todo plano", self.responder("Tive prejuízo?")["resposta"])
+        # Pedido de valores continua sendo pedido de valores, cite ou não a tela (o bot não vê os números).
+        for pergunta in ("Qual foi o meu lucro?", "Me mostra o lucro bruto da auditoria de custos",
+                         "Qual o lucro bruto do mês passado na tabela de lucro bruto?",
+                         "Qual foi o meu lucro na Auditoria de custos?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertIn("Não tenho acesso aos valores", self.responder(pergunta)["resposta"])
+        # A tela como sujeito ("a auditoria de custos mostra...") é pergunta sobre ela.
+        self.assertNotIn("Não tenho acesso aos valores", self.responder("A auditoria de custos mostra o lucro?")["resposta"])
+
 
 class ConversaTests(ConhecimentoBase):
     def test_niveis_de_resposta(self):

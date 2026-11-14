@@ -1542,7 +1542,8 @@ def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict
     margem_negativa = (produtos["custo_total"] > 0) & (produtos["faturamento_com_custo"] < produtos["custo_total"])
 
     # Custo implausível: o item sai da perda abaixo do custo e do potencial recuperável (fica só o que ele tem
-    # de variação de preço) e é listado "a confirmar". O custo total e a margem do envio não mudam.
+    # de variação de preço) e é listado "a confirmar". O custo total e a margem do envio não mudam aqui; o card
+    # da Auditoria de custos mostra a margem sem esses itens (raio_x_servico.margem_sem_custo_a_confirmar).
     # Em centavos inteiros, como a triagem do lead compara (em Decimal): em ponto flutuante, três vendas de
     # 1,10 com custo de 3,30 cada somam 9,899999999999999 de custo, abaixo de 3 vezes 3,30.
     custo_em_centavos = (produtos["custo_total"] * 100).round()
@@ -1675,19 +1676,29 @@ def recomendar(resultado: dict, meses_prata: int | None) -> dict:
     saude, recuperavel = resultado["saude"], resultado["recuperavel"]
     motivos = []
     if not saude["arquivos_com_custo"]:
-        motivos.append("Os relatórios enviados não trazem o custo dos produtos: sem ele, a margem não pode "
-                       "ser auditada.")
+        motivos.append("Os relatórios enviados não trazem o custo dos produtos: sem ele, não dá para calcular "
+                       "a margem.")
     elif (saude["pct_faturamento_sem_custo"] or 0) >= LIMIAR_SEM_CUSTO:
         motivos.append(f"{_brl(100 * saude['pct_faturamento_sem_custo'])}% do faturamento saiu sem custo "
-                       "informado no cadastro.")
-    negativos = saude["inconsistencias"]["itens_margem_negativa"]
-    if negativos:
-        motivos.append(f"{negativos} item(ns) com margem negativa: vendidos, no período, abaixo do custo "
                        "informado.")
+    # O item de custo a confirmar também tem margem negativa (custo de RAZAO_CUSTO_IMPLAUSIVEL vezes a venda ou
+    # mais), mas é erro de cadastro: desde 14/11/2026 fica num motivo à parte, e o número de produtos com margem
+    # negativa bate com o da Auditoria de custos e o dos pontos do cadastro. O plano sugerido não muda: os dois
+    # motivos levam ao Prata. Raio-X gravado antes da 11.5 não tem o bloco: tudo continua margem negativa.
+    bloco = resultado.get("auditoria", {}).get("custo_a_confirmar")
+    confirmar = bloco.get("itens", 0) if isinstance(bloco, dict) else 0
+    negativos = max(0, saude["inconsistencias"]["itens_margem_negativa"] - confirmar)
+    if negativos:
+        motivos.append(f"{negativos} {'produto' if negativos == 1 else 'produtos'} com margem negativa: "
+                       f"{'vendido' if negativos == 1 else 'vendidos'}, no período, abaixo do custo informado.")
+    if confirmar:
+        motivos.append(f"{confirmar} {'produto' if confirmar == 1 else 'produtos'} com custo a confirmar: nas "
+                       f"vendas com custo, o custo é {RAZAO_CUSTO_IMPLAUSIVEL} vezes o valor vendido ou mais, sinal de "
+                       "erro no cadastro.")
     faturamento = saude["faturamento_total"]
     if faturamento > 0 and recuperavel["total"] / faturamento >= LIMIAR_RECUPERAVEL:
-        motivos.append(f"Potencial recuperável de R$ {_brl(recuperavel['total'])} em vendas abaixo do custo ou "
-                       "abaixo do preço de referência.")
+        motivos.append(f"Dinheiro recuperável de R$ {_brl(recuperavel['total'])} em vendas abaixo do custo ou "
+                       "abaixo do preço normal.")
     if not motivos:
         return {"plano": "BRONZE", "motivos": [
             "Cadastro com custo informado e sem perdas relevantes: o acompanhamento do Bronze cobre o que o "

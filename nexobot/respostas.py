@@ -322,7 +322,8 @@ DADOS = ("Não tenho acesso aos valores das suas análises por esta conversa. Vo
          "indicadores disponíveis na Visão Geral e, para análises anteriores, no Histórico.")
 DADOS_NAO_CALCULADOS = (" As análises do portal também não apresentam lucro, margem ou CMV: os indicadores são "
                         "sinalizações gerenciais estimadas. A margem bruta estimada sobre o custo informado "
-                        "aparece só no Raio-X do PDV, a partir do plano Prata.")
+                        "aparece só no Raio-X do PDV e na Auditoria de custos (como sobra bruta e lucro bruto por "
+                        "produto), a partir do plano Prata.")
 FORA_ESCOPO = (
     "Sou o assistente do portal NEXO e só consigo ajudar com o uso do portal: envio de relatórios, "
     "análises publicadas, indicadores, Guia, Suporte e Configurações. Para outros assuntos, não tenho como responder.",

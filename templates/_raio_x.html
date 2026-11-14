@@ -1,0 +1,130 @@
+{# ===================================================================
+   NEXO — Componentes do Raio-X do PDV e da Auditoria de custos
+   Importar com:  {% import "_raio_x.html" as rx %}
+   Recebem só argumentos, como _macros.html. O comportamento fica em static/js/raio-x.js;
+   sem JavaScript, o <details> abre e fecha sozinho e as tabelas mostram todas as linhas.
+
+   info ............. botão (i) do indicador: o que significa, como foi calculado e o que fazer
+                      se estiver ruim (textos de raio_x_apresentacao.EXPLICACOES).
+   dica ............. botão (i) curto dos cards da Auditoria: uma ou duas frases e, se houver, uma
+                      nota discreta; abre ao passar o ponteiro e ao clicar (DICAS_DA_AUDITORIA).
+   avisos ........... card recolhido de uma linha com os arquivos lidos; aberto, os avisos por
+                      impacto, em português simples, e o texto técnico original.
+   ferramentas ...... barra de busca e filtro rápido de uma tabela (escondida até o script).
+   rodape ........... botão "Ver todos" e a contagem da tabela (escondidos até o script).
+   =================================================================== #}
+
+{# ---- (i) do indicador. `e`: {"significa", "calculo", "se_ruim"}; `rotulo`: o nome do card. ---- #}
+{%- macro info(e, rotulo) -%}
+{%- if e -%}
+<details class="kpi-info" data-kpi-info>
+    <summary class="kpi-info-botao" aria-label="Entenda o indicador: {{ rotulo }}"><i class="bi bi-info-lg" aria-hidden="true"></i></summary>
+    <div class="kpi-info-balao">
+        <p class="kpi-info-titulo">{{ rotulo }}</p>
+        <dl class="kpi-info-lista">
+            <div><dt>O que significa</dt><dd>{{ e.significa }}</dd></div>
+            <div><dt>Como calculamos</dt><dd>{{ e.calculo }}</dd></div>
+            <div><dt>Se estiver ruim</dt><dd>{{ e.se_ruim }}</dd></div>
+        </dl>
+    </div>
+</details>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- (i) curto. `texto`: uma ou duas frases (o que é e o que fazer); `rotulo`: o nome do card; `nota`: uma
+   frase discreta no pé do balão (vazia, não aparece). Com mouse, abre ao passar o ponteiro e fecha ao sair;
+   o clique fixa o balão aberto (static/js/raio-x.js). No toque e no teclado, abre e fecha como o (i) comum. ---- #}
+{%- macro dica(texto, rotulo, nota='') -%}
+{%- if texto -%}
+<details class="kpi-info kpi-info-curta" data-kpi-info data-kpi-info-passar>
+    <summary class="kpi-info-botao" aria-label="Entenda o indicador: {{ rotulo }}"><i class="bi bi-info-lg" aria-hidden="true"></i></summary>
+    <div class="kpi-info-balao">
+        <p class="kpi-info-titulo">{{ rotulo }}</p>
+        <p class="kpi-info-texto">{{ texto }}</p>
+        {%- if nota %}
+        <p class="kpi-info-nota">{{ nota }}</p>
+        {%- endif %}
+    </div>
+</details>
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro _aviso(a) -%}
+<span class="aviso-titulo">{{ a.titulo }}</span>
+<span class="aviso-texto">{{ a.texto }}</span>
+{%- if a.porque %}<span class="aviso-porque"><strong>Por quê:</strong> {{ a.porque }}</span>{% endif %}
+{%- if a.o_que_fazer %}<span class="aviso-fazer"><strong>O que fazer:</strong> {{ a.o_que_fazer }}</span>{% endif %}
+{%- endmacro -%}
+
+{# ---- Card dos avisos. `avisos`: raio_x_apresentacao.organizar_avisos(); `tecnicos`: a lista
+   original (raio_x.avisos). Fechado por padrão. ---- #}
+{%- macro avisos(org, tecnicos) -%}
+<details class="avisos-raio-x" id="avisosRaioX">
+    <summary>
+        <i class="bi bi-exclamation-triangle avisos-resumo-icone" aria-hidden="true"></i>
+        <span class="avisos-resumo-texto">{{ org.resumo }}</span>
+        {%- if org.afetam %}
+        <span class="nexo-badge b-amber avisos-resumo-selo">{{ org.afetam | length }} {{ 'aviso afeta' if org.afetam | length == 1 else 'avisos afetam' }} seus números</span>
+        {%- endif %}
+        <span class="avisos-resumo-acao"><span class="quando-fechado">Ler avisos e detalhes técnicos</span><span class="quando-aberto">Fechar avisos</span> <i class="bi bi-chevron-down" aria-hidden="true"></i></span>
+    </summary>
+    <div class="avisos-corpo">
+        {%- if org.afetam %}
+        <section class="avisos-grupo" aria-labelledby="avisosAfetamTitulo">
+            <h3 id="avisosAfetamTitulo"><i class="bi bi-exclamation-circle text-warning" aria-hidden="true"></i> O que afeta seus números</h3>
+            <p class="avisos-grupo-sub">Leia antes de tirar conclusões: estes pontos mudam ou limitam os valores da tela.</p>
+            <ul class="avisos-lista">
+                {%- for a in org.afetam %}
+                <li>{{ _aviso(a) }}</li>
+                {%- endfor %}
+            </ul>
+        </section>
+        {%- endif %}
+        {%- if org.informativos %}
+        <section class="avisos-grupo" aria-labelledby="avisosInformativosTitulo">
+            <h3 id="avisosInformativosTitulo"><i class="bi bi-info-circle" aria-hidden="true"></i> Arquivos apenas informativos</h3>
+            <p class="avisos-grupo-sub">O papel de cada arquivo no envio e o que foi ajustado.</p>
+            <ul class="avisos-lista">
+                {%- for a in org.informativos %}
+                <li>{{ _aviso(a) }}</li>
+                {%- endfor %}
+            </ul>
+        </section>
+        {%- endif %}
+        <details class="avisos-tecnicos">
+            <summary>Ver o texto técnico completo dos avisos</summary>
+            <ol>{% for texto in tecnicos %}<li>{{ texto }}</li>{% endfor %}</ol>
+        </details>
+    </div>
+</details>
+{%- endmacro -%}
+
+{# ---- Barra da tabela. `id`: prefixo dos ids; `busca`: o texto de ajuda da busca; `filtros`:
+   [(valor, rótulo)], o primeiro com valor vazio ("Todos"); a opção pode trazer também a ordem das linhas
+   enquanto estiver escolhida e o texto dessa ordem para a legenda, (valor, rótulo, ordem, legenda): as
+   linhas trazem a posição em data-pos-<ordem>; `ordens`: [(valor, rótulo)] ou none. ---- #}
+{%- macro ferramentas(id, busca, rotulo_tabela, filtros=none, ordens=none) -%}
+<div class="tabela-ferramentas" data-tabela-ferramentas hidden>
+    <label class="visually-hidden" for="{{ id }}Busca">Buscar em {{ rotulo_tabela }}</label>
+    <input type="search" id="{{ id }}Busca" class="form-control form-control-sm tabela-busca" placeholder="{{ busca }}" autocomplete="off" data-tabela-busca>
+    {%- if filtros %}
+    <label class="visually-hidden" for="{{ id }}Filtro">Filtro rápido de {{ rotulo_tabela }}</label>
+    <select id="{{ id }}Filtro" class="form-select form-select-sm" data-tabela-filtro>
+        {%- for opcao in filtros %}<option value="{{ opcao[0] }}"{% if opcao | length > 3 %} data-ordem="{{ opcao[2] }}" data-legenda="{{ opcao[3] }}"{% endif %}>{{ opcao[1] }}</option>{% endfor %}
+    </select>
+    {%- endif %}
+    {%- if ordens %}
+    <label class="visually-hidden" for="{{ id }}Ordem">Ordem de {{ rotulo_tabela }}</label>
+    <select id="{{ id }}Ordem" class="form-select form-select-sm" data-tabela-ordem>
+        {%- for valor, rotulo in ordens %}<option value="{{ valor }}">{{ rotulo }}</option>{% endfor %}
+    </select>
+    {%- endif %}
+</div>
+{%- endmacro -%}
+
+{%- macro rodape(id_corpo) -%}
+<div class="tabela-rodape" data-tabela-rodape hidden>
+    <button type="button" class="btn-ghost btn-sm-x" data-tabela-mais aria-expanded="false" aria-controls="{{ id_corpo }}"><span data-tabela-mais-rotulo>Ver todos</span> <i class="bi bi-chevron-down" aria-hidden="true"></i></button>
+    <span class="tabela-contagem" data-tabela-contagem></span>
+</div>
+{%- endmacro -%}

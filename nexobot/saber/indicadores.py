@@ -145,7 +145,10 @@ REGISTROS = (
         resumo=(
             "Não. O Indicador de Pressão de Estoque compara o que foi comprado com o que foi vendido no período, "
             "em reais. Lucro, prejuízo, margem e CMV dependem do custo das unidades efetivamente vendidas e de "
-            "dados contábeis que o relatório do PDV não traz; por isso o NEXO não os calcula."
+            "dados contábeis que o relatório do PDV não traz; por isso as análises do NEXO não os calculam. O "
+            "Raio-X do PDV e a Auditoria de custos só fazem estimativas, pelo custo que o relatório de vendas "
+            "informa: a perda nas vendas abaixo do custo aparece no Raio-X de todo plano, e a margem e o lucro "
+            "bruto, a partir do plano Prata."
         ),
         explicacao=(
             "Comprar mais do que vender em um mês pode ser estoque para a alta temporada; vender mais do que "
@@ -162,6 +165,52 @@ REGISTROS = (
         fontes=("etl_processor.py", "insights.py", "README.md"),
     ),
     registro(
+        id="nexo.indicadores.auditoria_de_custos",
+        titulo="O que mostram os números da Auditoria de custos?",
+        categoria="Indicadores",
+        tipo="conceito",
+        resumo=(
+            "A Auditoria de custos, a partir do plano Prata, usa os relatórios de vendas enviados no Raio-X do PDV "
+            "e o custo que o próprio relatório informa para mostrar onde a loja perdeu dinheiro: o custo dos "
+            "produtos vendidos, a sobra bruta nas vendas, o prejuízo direto no caixa, os produtos dando prejuízo e "
+            "o lucro bruto por produto. São estimativas antes de despesas, impostos e taxas, e não o lucro final "
+            "da loja. Ela fica no menu lateral, em Auditoria de custos."
+        ),
+        explicacao=(
+            "Custo dos produtos vendidos: quanto custaram, pelo custo do relatório, os produtos das vendas "
+            "auditadas; não é o CMV contábil, que depende de inventário. Sobra bruta nas vendas: a diferença entre "
+            "o valor dessas vendas e esse custo (a margem bruta), em reais, com a margem em porcentagem logo "
+            "abaixo. Prejuízo direto no caixa: o que se perdeu nas vendas feitas "
+            "por menos do que o produto custou. Produtos dando prejuízo: os que, somando o período, custaram mais "
+            "do que renderam. Lucro bruto por produto: quanto cada produto deixou depois de pagar o próprio "
+            "custo.\n\n"
+            "Alertas de cadastro: os itens com custo distorcido, de 3 vezes o preço de venda ou mais, quase sempre "
+            "erro de cadastro (a caixa cadastrada como unidade ou um item genérico). Eles ficam fora do custo, da "
+            "sobra, do prejuízo e do lucro bruto por produto e aparecem num card à parte, para você corrigir no "
+            "seu PDV. A tela também lista os produtos com custo subindo sem reajuste de preço. No Raio-X do PDV, "
+            "os mesmos itens aparecem como custo a confirmar, e os produtos dando prejuízo, como produtos com "
+            "margem negativa."
+        ),
+        detalhes=(
+            "O custo é o que o seu sistema informa no relatório de vendas; o da contabilidade pode ser outro, "
+            "porque ela confere o estoque. Nada disso é o lucro final da loja nem o CMV contábil. As análises "
+            "continuam sem lucro, margem ou CMV, por regra do produto."
+        ),
+        perguntas=(
+            "O que é lucro bruto?", "O que é lucro bruto por produto?", "O que é sobra bruta?",
+            "O que é sobra bruta nas vendas?", "O que é prejuízo direto no caixa?",
+            "O que significa produtos dando prejuízo?", "O que são os alertas de cadastro?",
+            "O que é custo distorcido?", "O que é o custo dos produtos vendidos?",
+            "O que mostra a Auditoria de custos?", "Quais números a Auditoria de custos mostra?",
+            "Para que serve a Auditoria de custos?", "Onde vejo o lucro bruto de cada produto?",
+            "O que é custo a confirmar?", "O que são produtos com margem negativa?",
+        ),
+        termos=("auditoria custos lucro bruto sobra bruta prejuizo direto caixa produtos dando prejuizo alertas "
+                "cadastro custo distorcido produtos vendidos reajuste preco"),
+        relacionados=("nexo.indicadores.sem_lucro",),
+        fontes=("raio_x.py", "raio_x_servico.py", "raio_x_apresentacao.py", "templates/onboarding/auditoria.html"),
+    ),
+    registro(
         id="nexo.indicadores.sem_lucro",
         titulo="O NEXO calcula lucro, margem ou CMV?",
         categoria="Indicadores",
@@ -169,17 +218,23 @@ REGISTROS = (
         resumo=(
             "Nas análises, não, por regra do produto. Os indicadores trabalham com faturamento, total "
             "comprado, o descompasso entre eles (Indicador de Pressão de Estoque), produtos de destaque e "
-            "Curva ABC. Lucro, CMV contábil, rentabilidade e estoque físico exigem dados que o relatório do PDV "
-            "não sustenta. A única margem do portal está no Raio-X do PDV, a partir do plano Prata: a margem "
-            "bruta estimada sobre o custo que o próprio relatório de vendas informa."
+            "Curva ABC. O lucro final da loja, o CMV contábil, a rentabilidade e o estoque físico exigem dados que "
+            "o relatório do PDV não sustenta. A única margem do portal está no Raio-X do PDV e na Auditoria de "
+            "custos, a partir do plano Prata: a margem bruta estimada sobre o custo que o próprio relatório de "
+            "vendas informa, que a Auditoria mostra como sobra bruta e lucro bruto por produto, ao lado do "
+            "prejuízo nas vendas feitas abaixo do custo."
         ),
         explicacao=(
             "Nas análises, a regra vale em todas as camadas: o processamento descarta colunas de lucro, a "
             "devolutiva gerada com apoio de IA é verificada automaticamente contra esses termos antes de ser "
             "aproveitada e os semáforos nunca afirmam rentabilidade. O texto final da devolutiva é revisado e "
             "publicado pela equipe NEXO, que segue a mesma regra. No Raio-X do PDV, a margem bruta é o "
-            "faturamento menos o custo informado, só nas vendas que trazem custo: não desconta despesas, "
-            "impostos nem taxas, então não é lucro, e não é o CMV contábil, que depende de inventário."
+            "faturamento menos o custo informado, só nas vendas que trazem custo. Na Auditoria de custos, ela "
+            "aparece como sobra bruta nas vendas e lucro bruto por produto; o prejuízo direto no caixa é o que se "
+            "perdeu nas vendas feitas abaixo do custo informado; e o custo dos produtos vendidos e a sobra bruta "
+            "deixam de fora os itens com custo distorcido (custo de 3 vezes a venda ou mais, quase sempre erro de "
+            "cadastro). Nada disso desconta despesas, impostos nem taxas, então não é o lucro final da loja, e não "
+            "é o CMV contábil, que depende de inventário."
         ),
         perguntas=(
             "O NEXO calcula lucro?", "Onde vejo minha margem?", "Qual é o meu CMV?", "O portal mostra rentabilidade?",

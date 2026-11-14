@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% import "_planos.html" as pl %}
+{% import "_raio_x.html" as rx %}
 
 {% block title %}Auditoria de custos — NEXO{% endblock %}
 {% block page_title %}Auditoria de custos{% endblock %}
@@ -9,7 +10,7 @@
 <div class="page-head">
     <div>
         <h1>Auditoria de custos</h1>
-        <p class="sub">Vendas abaixo do custo, margem bruta por item e preços que não acompanharam o custo, a partir do seu último Raio-X.</p>
+        <p class="sub">Onde a loja perdeu dinheiro vendendo barato demais ou com custo desatualizado no sistema.</p>
     </div>
     <div class="page-head-actions">
         <a href="{{ url_for('onboarding.diagnostico') }}" class="btn-ghost"><i class="bi bi-activity" aria-hidden="true"></i> Raio-X do PDV</a>
@@ -30,188 +31,255 @@
 {% else %}
 {% set prot = raio_x.protegido %}
 {% set aud = raio_x.auditoria %}
-<p class="raio-x-meta"><i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} · {{ (raio_x.nomes_arquivos or raio_x.arquivos) | length }} arquivo(s) de vendas</p>
+{% set ap = apresentacao %}
+{% set dicas = ap.dicas_auditoria %}
+{% set custo = ap.custo_card %}
+{% set card = ap.margem_card %}
+{% set confirmar = aud.custo_a_confirmar %}
+{# Itens com custo distorcido (custo a confirmar): fora do custo, da sobra, do prejuízo e do lucro bruto por produto. #}
+{% set isolados = confirmar.itens if confirmar and confirmar.itens else 0 %}
+<p class="raio-x-meta"><i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} · {{ linha_raio_x.arquivos }} {{ 'arquivo enviado' if linha_raio_x.arquivos == 1 else 'arquivos enviados' }}</p>
 
 <div class="row g-3 mb-4">
     <div class="col-12 col-sm-6 col-xl-3">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Custo informado das vendas</span><span class="kpi-icon is-info"><i class="bi bi-receipt" aria-hidden="true"></i></span></div>
-            <div class="kpi-value">{{ pl.dado_protegido(not prot.cmv, ('<small>R$</small> '|safe ~ m.brl(aud.custo_total)) if aud.custo_total is not none else '—', plano_cmv, url_upgrade(plano_cmv), 'Custo informado das vendas') }}</div>
-            <div class="kpi-foot">Sobre R$ {{ m.brl(aud.faturamento_com_custo) }} vendidos com custo</div>
-            {% if aud.cmv_liquido is defined and aud.cmv_liquido is not none and (aud.custo_bonificacoes or aud.custo_devolucoes) %}
-            <div class="kpi-foot">Custo líquido R$ {{ m.brl(aud.cmv_liquido) }}: + R$ {{ m.brl(aud.custo_bonificacoes) }} em bonificações, − R$ {{ m.brl(aud.custo_devolucoes) }} em devoluções</div>
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Custo dos produtos vendidos</span><span class="kpi-top-acoes"><span class="kpi-icon is-info"><i class="bi bi-receipt" aria-hidden="true"></i></span>{{ rx.dica(dicas.custo, 'Custo dos produtos vendidos') }}</span></div>
+            <div class="kpi-value">{{ pl.dado_protegido(not prot.cmv, ('<small>R$</small> '|safe ~ m.brl(custo.valor)) if custo.valor is not none else '—', plano_cmv, url_upgrade(plano_cmv), 'Custo dos produtos vendidos') }}</div>
+            <div class="kpi-foot">{% if custo.base is not none %}Referente a R$ {{ m.brl(custo.base) }} em vendas auditadas{% else %}Referente às vendas auditadas{% endif %}</div>
+            {% if not prot.cmv and custo.so_isolados %}
+            <div class="kpi-foot">Todo o custo informado é {{ 'do item' if isolados == 1 else 'dos itens' }} com custo distorcido: corrija o cadastro para ver este custo.</div>
+            {% endif %}
+            {# O custo com bonificações e devoluções soma também o dos itens com custo distorcido: só sem eles. #}
+            {% if not isolados and aud.cmv_liquido is defined and aud.cmv_liquido is not none and (aud.custo_bonificacoes or aud.custo_devolucoes) %}
+            <div class="kpi-foot">Com bonificações e devoluções: R$ {{ m.brl(aud.cmv_liquido) }} (+ R$ {{ m.brl(aud.custo_bonificacoes) }} de bonificações, − R$ {{ m.brl(aud.custo_devolucoes) }} de devoluções)</div>
             {% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Margem bruta estimada</span><span class="kpi-icon is-green"><i class="bi bi-percent" aria-hidden="true"></i></span></div>
-            <div class="kpi-value">{{ pl.dado_protegido(not prot.margem, pl.pct(aud.margem_percentual), plano_margem, url_upgrade(plano_margem), 'Margem bruta', '00,0%') }}</div>
-            <div class="kpi-foot">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(aud.margem_valor)) if aud.margem_valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Margem bruta em reais') }}</div>
-            {% if aud.margem_liquida_valor is defined and aud.margem_liquida_valor is not none
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Sobra bruta nas vendas</span><span class="kpi-top-acoes"><span class="kpi-icon is-{{ card.cor }}"><i class="bi bi-percent" aria-hidden="true"></i></span>{{ rx.dica(dicas.sobra, 'Sobra bruta nas vendas', ap.nota_isolados) }}</span></div>
+            <div class="kpi-value">{{ pl.dado_protegido(not prot.margem, ('<small>R$</small> '|safe ~ m.brl(card.valor)) if card.valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Sobra bruta nas vendas') }}</div>
+            <div class="kpi-foot">Diferença entre venda e custo dos produtos</div>
+            {% if not prot.margem and card.percentual is not none %}
+            <div class="kpi-foot">Margem de {{ pl.pct(card.percentual) }} sobre as vendas auditadas</div>
+            {% endif %}
+            {% if not prot.margem and card.sem_custo_confiavel %}
+            <div class="kpi-foot">Todo o custo informado é {{ 'do item' if card.itens_fora == 1 else 'dos itens' }} com custo distorcido: corrija o cadastro para ver a sobra.</div>
+            {% elif not prot.margem and card.antigo %}
+            <div class="kpi-foot">Raio-X antigo: refaça o Raio-X para separar os itens com custo distorcido, que podem mudar esta conta.</div>
+            {% elif not isolados and aud.margem_liquida_valor is defined and aud.margem_liquida_valor is not none
                   and aud.margem_liquida_percentual is not none and aud.margem_liquida_valor != aud.margem_valor %}
-            <div class="kpi-foot">Líquida, com bonificações e devoluções: {{ pl.pct(aud.margem_liquida_percentual) }} (R$ {{ m.brl(aud.margem_liquida_valor) }})</div>
+            <div class="kpi-foot">Contando bonificações e devoluções: R$ {{ m.brl(aud.margem_liquida_valor) }} ({{ pl.pct(aud.margem_liquida_percentual) }})</div>
             {% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Perda em vendas abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+        {% set com_prejuizo = aud.itens_venda_abaixo_custo or 0 %}
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Prejuízo direto no caixa</span><span class="kpi-top-acoes"><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span>{{ rx.dica(dicas.prejuizo, 'Prejuízo direto no caixa') }}</span></div>
             <div class="kpi-value"><small>R$</small> {{ m.brl(aud.perda_abaixo_custo) }}</div>
-            <div class="kpi-foot">{{ m.num(aud.itens_venda_abaixo_custo) }} item(ns) vendidos abaixo do custo</div>
-            {% if aud.custo_a_confirmar and aud.custo_a_confirmar.itens %}
-            <div class="kpi-foot">Fora desta perda: {{ m.num(aud.custo_a_confirmar.itens) }} item(ns) com custo a confirmar (R$ {{ m.brl(aud.custo_a_confirmar.perda_desconsiderada) }})</div>
-            {% endif %}</div>
+            <div class="kpi-foot">{{ m.num(com_prejuizo) }} {{ 'produto vendido por menos do que custou' if com_prejuizo == 1 else 'produtos vendidos por menos do que custaram' }}</div></div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Itens com margem negativa</span><span class="kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span></div>
-            <div class="kpi-value">{{ m.num(aud.itens_margem_negativa) }}</div>
-            <div class="kpi-foot">No total do período, abaixo do custo</div></div>
+        {% set negativos = aud.itens_margem_negativa_sem_a_confirmar if aud.itens_margem_negativa_sem_a_confirmar is not none else aud.itens_margem_negativa %}
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Produtos dando prejuízo</span><span class="kpi-top-acoes"><span class="kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>{{ rx.dica(dicas.produtos_prejuizo, 'Produtos dando prejuízo') }}</span></div>
+            <div class="kpi-value">{{ m.num(negativos) }}</div>
+            <div class="kpi-foot">Itens que fecharam o período no vermelho</div></div>
     </div>
 </div>
 
-{# ---------------- Vendas abaixo do custo ---------------- #}
+{# ---------------- Produtos vendidos com prejuízo ---------------- #}
 <section class="nexo-card mb-4" aria-labelledby="abaixoTitulo">
     <div class="nexo-card-head">
         <div>
-            <h2 id="abaixoTitulo"><i class="bi bi-arrow-down-circle text-purple" aria-hidden="true"></i> Vendas abaixo do custo informado</h2>
-            <p class="sub">Só as vendas feitas por menos do que o custo que o próprio PDV informa, somadas por item; as de maior perda primeiro. Em cada linha, perda = custo dessas vendas − valor vendido.</p>
+            <h2 id="abaixoTitulo"><i class="bi bi-arrow-down-circle text-purple" aria-hidden="true"></i> Produtos vendidos com prejuízo</h2>
+            <p class="sub">Vendas onde o preço cobrado ficou menor que o custo de compra (maior perda primeiro).</p>
         </div>
     </div>
     <div class="nexo-card-body">
         {% if aud.itens_abaixo_custo is none %}
-        {{ pl.secao_bloqueada(plano_auditoria, url_upgrade(plano_auditoria), 'A lista de vendas abaixo do custo') }}
+        {{ pl.secao_bloqueada(plano_auditoria, url_upgrade(plano_auditoria), 'A lista das vendas com prejuízo') }}
         {% elif aud.itens_abaixo_custo %}
-        <div class="table-wrap">
-            <div class="table-responsive-x">
-                <table class="nexo-table" id="tabelaAbaixoCusto">
-                    <caption class="visually-hidden">Itens vendidos abaixo do custo informado</caption>
-                    <thead><tr><th>Produto</th><th class="text-end">Qtde vendida abaixo do custo</th><th class="text-end">Vendido por</th><th class="text-end">Custo dessas vendas</th><th class="text-end">Perda</th></tr></thead>
-                    <tbody>
-                        {% for item in aud.itens_abaixo_custo %}
-                        <tr>
-                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
-                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_abaixo) if item.quantidade_abaixo is defined else '—' }}</td>
-                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.faturamento_abaixo)) if item.faturamento_abaixo is defined else '—' }}</td>
-                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_abaixo)) if item.custo_abaixo is defined else '—' }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(item.perda) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+        {% set linhas = ap.abaixo_custo %}
+        <div data-tabela-rapida data-limite="{{ ap.limite }}" data-singular="produto" data-plural="produtos"{{ ' data-cortada' if aud.itens_venda_abaixo_custo > linhas | length }}>
+            {% if aud.itens_venda_abaixo_custo > linhas | length %}<p class="tabela-nota">A lista traz os {{ linhas | length }} de maior perda, de {{ m.num(aud.itens_venda_abaixo_custo) }} produtos vendidos com prejuízo.</p>{% endif %}
+            {{ rx.ferramentas('abaixo', 'Buscar produto ou código', 'produtos vendidos com prejuízo',
+                              [('', 'Todos'), ('principais', 'Maiores perdas (80% do total)')]) }}
+            <div class="table-wrap">
+                <div class="table-responsive-x">
+                    <table class="nexo-table" id="tabelaAbaixoCusto">
+                        <caption class="visually-hidden">Produtos vendidos com prejuízo, as maiores perdas primeiro</caption>
+                        <thead><tr><th>Produto</th><th class="text-end">Qtde vendida com prejuízo</th><th class="text-end">Valor cobrado</th><th class="text-end">Custo dessas vendas</th><th class="text-end">Perda</th></tr></thead>
+                        <tbody id="corpoAbaixoCusto">
+                            {% for linha in linhas %}{% set item = linha.item %}
+                            <tr data-texto="{{ linha.texto }}" data-marcas="{{ linha.marcas }}">
+                                <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                                <td class="text-end t-mono">{{ pl.qtd(item.quantidade_abaixo) if item.quantidade_abaixo is defined else '—' }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.faturamento_abaixo)) if item.faturamento_abaixo is defined else '—' }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_abaixo)) if item.custo_abaixo is defined else '—' }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(item.perda) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
+            {{ rx.rodape('corpoAbaixoCusto') }}
         </div>
         {% else %}
-        <p class="field-hint mb-0">Nenhuma venda abaixo do custo informado nos relatórios enviados.</p>
-        {% endif %}
-        {# Custo a confirmar: itens de custo implausível, fora da perda e do potencial recuperável. #}
-        {% set confirmar = aud.custo_a_confirmar %}
-        {% if confirmar and confirmar.itens %}
-        <p class="field-hint mt-3 mb-2" id="custoAConfirmar"><strong>Custo a confirmar:</strong> {{ m.num(confirmar.itens) }} item(ns) com custo muito acima da venda ficaram fora da perda e do potencial recuperável (R$ {{ m.brl(confirmar.perda_desconsiderada) }} desconsiderados). Costuma ser embalagem cadastrada como unidade ou item genérico vendido por valor: confira o custo deles no cadastro do PDV.</p>
-        {% if confirmar.lista %}
-        <div class="table-wrap">
-            <div class="table-responsive-x">
-                <table class="nexo-table" id="tabelaCustoAConfirmar">
-                    <caption class="visually-hidden">Itens com custo a confirmar</caption>
-                    <thead><tr><th>Produto</th><th class="text-end">Qtde com custo</th><th class="text-end">Vendido por</th><th class="text-end">Custo informado</th></tr></thead>
-                    <tbody>
-                        {% for item in confirmar.lista %}
-                        <tr>
-                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
-                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
-                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_total)) if item.custo_total is not none else '—' }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% endif %}
+        <p class="field-hint mb-0">Nenhuma venda abaixo do custo nos relatórios enviados{{ (', fora ' ~ ('o item' if isolados == 1 else 'os itens') ~ ' com custo distorcido, nos alertas de cadastro logo abaixo') if isolados }}.</p>
         {% endif %}
     </div>
 </section>
 
-{# ---------------- Margem por item ---------------- #}
-<section class="nexo-card mb-4" aria-labelledby="margemTitulo">
+{# ---------------- Alertas de cadastro: custo distorcido (custo a confirmar), recolhido ---------------- #}
+{% if isolados %}
+<details class="nexo-card mb-4 alertas-cadastro" id="alertasCadastro">
+    <summary>
+        <i class="bi bi-exclamation-triangle alertas-cadastro-icone" aria-hidden="true"></i>
+        <span class="alertas-cadastro-titulo">Alertas de cadastro: {{ m.num(isolados) }} {{ 'item com custo distorcido ignorado' if isolados == 1 else 'itens com custo distorcido ignorados' }} na conta</span>
+        <i class="bi bi-chevron-down alertas-cadastro-seta" aria-hidden="true"></i>
+    </summary>
+    <div class="nexo-card-body alertas-cadastro-corpo">
+        <p class="field-hint mt-0 mb-3">Produtos com custo cadastrado mais de {{ ap.razao_a_confirmar }}x acima do preço de venda — geralmente embalagem/caixa cadastrada como unidade ou item genérico (ex: 'Diversos'). Corrija no seu PDV para a margem ficar exata.</p>
+        {% if confirmar.lista is none %}
+        {{ pl.secao_bloqueada(plano_auditoria, url_upgrade(plano_auditoria), 'A lista dos itens com custo distorcido') }}
+        {% elif confirmar.lista %}
+        {% set linhas = ap.custo_a_confirmar %}
+        <div data-tabela-rapida data-limite="{{ ap.limite }}" data-singular="item" data-plural="itens"{{ ' data-cortada' if confirmar.itens > linhas | length }}>
+            {% if confirmar.itens > linhas | length %}<p class="tabela-nota">A lista traz os {{ linhas | length }} de maior custo no seu sistema, de {{ m.num(confirmar.itens) }} itens com custo distorcido.</p>{% endif %}
+            {{ rx.ferramentas('confirmar', 'Buscar produto ou código', 'itens com custo distorcido',
+                              [('', 'Todos'), ('principais', 'Maiores distorções (80% do custo)')]) }}
+            <div class="table-wrap">
+                <div class="table-responsive-x">
+                    <table class="nexo-table" id="tabelaCustoAConfirmar">
+                        <caption class="visually-hidden">Itens com custo distorcido, os de maior custo no seu sistema primeiro</caption>
+                        <thead><tr><th>Produto</th><th class="text-end">Qtde vendida com custo</th><th class="text-end">Valor vendido</th><th class="text-end">Custo no seu sistema</th><th class="text-end">Custo por unidade</th><th class="text-end">Preço médio por unidade</th></tr></thead>
+                        <tbody id="corpoCustoAConfirmar">
+                            {% for linha in linhas %}{% set item = linha.item %}
+                            <tr data-texto="{{ linha.texto }}" data-marcas="{{ linha.marcas }}">
+                                <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                                <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_total)) if item.custo_total is not none else '—' }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_medio)) if item.custo_medio is defined and item.custo_medio is not none else '—' }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.faturamento_com_custo / item.quantidade_com_custo)) if item.quantidade_com_custo else '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{ rx.rodape('corpoCustoAConfirmar') }}
+        </div>
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{# ---------------- Lucro bruto por produto ---------------- #}
+<section class="nexo-card mb-4" aria-labelledby="lucroTitulo">
     <div class="nexo-card-head">
         <div>
-            <h2 id="margemTitulo"><i class="bi bi-percent text-purple" aria-hidden="true"></i> Margem bruta por item</h2>
-            <p class="sub">Os itens de maior faturamento com custo informado.</p>
+            <h2 id="lucroTitulo"><i class="bi bi-cash-coin text-purple" aria-hidden="true"></i> Lucro bruto por produto</h2>
+            <p class="sub">Quanto cada produto deixou de sobra após pagar o próprio custo.</p>
         </div>
     </div>
     <div class="nexo-card-body">
         {% if aud.margem_por_item is none %}
-        {{ pl.secao_bloqueada(plano_margem, url_upgrade(plano_margem), 'A margem bruta por item') }}
-        {% elif aud.margem_por_item %}
-        <div class="table-wrap">
-            <div class="table-responsive-x">
-                <table class="nexo-table" id="tabelaMargem">
-                    <caption class="visually-hidden">Margem bruta estimada por item</caption>
-                    <thead><tr><th>Produto</th><th class="text-end">Qtde com custo</th><th class="text-end">Faturamento</th><th class="text-end">Custo médio</th><th class="text-end">Margem bruta</th><th class="text-end">Margem %</th></tr></thead>
-                    <tbody>
-                        {% for item in aud.margem_por_item %}
-                        <tr>
-                            <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
-                            <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
-                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_medio)) if item.custo_medio is not none else '—' }}</td>
-                            <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.margem_valor)) if item.margem_valor is not none else '—' }}</td>
-                            <td class="text-end t-mono">{{ pl.pct(item.margem_percentual) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+        {{ pl.secao_bloqueada(plano_margem, url_upgrade(plano_margem), 'O lucro bruto por produto') }}
+        {% elif ap.lucro_por_produto %}
+        {% set linhas = ap.lucro_por_produto %}
+        {# Produtos com custo informado, sem os de custo distorcido (fora da tabela, como da sobra bruta). #}
+        {% set com_custo = raio_x.saude.itens_vendidos - raio_x.saude.itens_sem_custo - isolados %}
+        <div data-tabela-rapida data-limite="{{ ap.limite }}" data-singular="produto" data-plural="produtos"{{ ' data-cortada' if com_custo > linhas | length }}>
+            {% if com_custo > linhas | length %}<p class="tabela-nota">A lista traz os {{ linhas | length }} que mais venderam, de {{ m.num(com_custo) }} produtos com custo informado{{ ' (sem os de custo distorcido)' if isolados }}.</p>{% endif %}
+            {{ rx.ferramentas('lucro', 'Buscar produto ou código', 'lucro bruto por produto',
+                              [('', 'Todos'), ('margem_alta', 'Margem alta (> ' ~ ap.margem_alta ~ ')'),
+                               ('margem_baixa', 'Margem baixa (< ' ~ ap.margem_baixa ~ ')', 'piores', 'do menor para o maior lucro bruto'),
+                               ('negativa', 'No vermelho (margem negativa)', 'piores', 'do maior para o menor prejuízo')]) }}
+            <div class="table-wrap">
+                <div class="table-responsive-x">
+                    <table class="nexo-table" id="tabelaLucro">
+                        <caption class="visually-hidden" data-legenda-base="Lucro bruto por produto" data-legenda-padrao="do maior para o menor lucro bruto">Lucro bruto por produto, do maior para o menor lucro bruto</caption>
+                        <thead><tr><th>Produto</th><th class="text-end">Qtde vendida com custo</th><th class="text-end">Vendas com custo</th><th class="text-end">Custo por unidade</th><th class="text-end">Lucro bruto (R$)</th><th class="text-end">Margem bruta (%)</th></tr></thead>
+                        <tbody id="corpoLucro">
+                            {% for linha in linhas %}{% set item = linha.item %}
+                            <tr data-texto="{{ linha.texto }}" data-marcas="{{ linha.marcas }}" data-pos-piores="{{ linha.pos_piores }}">
+                                <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
+                                <td class="text-end t-mono">{{ pl.qtd(item.quantidade_com_custo) }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(item.faturamento_com_custo) }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.custo_medio)) if item.custo_medio is not none else '—' }}</td>
+                                <td class="text-end t-mono">{{ ('R$ ' ~ m.brl(item.margem_valor)) if item.margem_valor is not none else '—' }}</td>
+                                <td class="text-end t-mono">{{ pl.pct(item.margem_percentual) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
+            {{ rx.rodape('corpoLucro') }}
         </div>
         {% else %}
-        <p class="field-hint mb-0">Nenhuma venda com custo informado nos relatórios enviados.</p>
+        <p class="field-hint mb-0">Nenhuma venda com custo informado{{ (' fora ' ~ ('o item' if isolados == 1 else 'os itens') ~ ' com custo distorcido') if isolados }}: sem o custo, não dá para calcular o lucro bruto de cada produto.</p>
         {% endif %}
     </div>
 </section>
 
-{# ---------------- Precificação desatualizada ---------------- #}
+{# ---------------- Produtos com custo subindo sem reajuste de preço ---------------- #}
+{% if aud.precificacao_visivel and aud.precificacao is not none and not aud.precificacao %}
+{# Lista vazia: só a faixa discreta, sem o card. #}
+<p class="faixa-positiva mb-4" id="precificacaoOk"><span class="faixa-positiva-icone" aria-hidden="true">✓</span> Nenhum produto teve aumento de custo sem repasse no preço neste período.</p>
+{% else %}
 <section class="nexo-card mb-4" aria-labelledby="precificacaoTitulo">
     <div class="nexo-card-head">
         <div>
-            <h2 id="precificacaoTitulo"><i class="bi bi-tags text-purple" aria-hidden="true"></i> Preços que não acompanharam o custo</h2>
-            <p class="sub">Entre o primeiro e o último mês com custo, o custo unitário subiu ao menos 5% e o preço médio subiu menos. O impacto é a margem por unidade perdida vezes a quantidade do último mês.</p>
+            <h2 id="precificacaoTitulo"><i class="bi bi-tags text-purple" aria-hidden="true"></i> Produtos com custo subindo sem reajuste de preço</h2>
+            <p class="sub">O custo de uma unidade subiu {{ ap.alta_custo }} ou mais entre o primeiro e o último mês com custo, e o preço não acompanhou. A última coluna mostra quanto deixou de ganhar no último mês.</p>
         </div>
     </div>
     <div class="nexo-card-body">
         {% if aud.precificacao is none %}
-        {{ pl.secao_bloqueada(plano_precificacao, url_upgrade(plano_precificacao), 'Os alertas de precificação') }}
+        {{ pl.secao_bloqueada(plano_precificacao, url_upgrade(plano_precificacao), 'Os alertas de preço') }}
         {% elif not aud.precificacao_visivel %}
-        <p class="field-hint mb-0">Para comparar custo e preço no tempo, envie ao menos dois meses com o período no cabeçalho e a coluna de custo.</p>
-        {% elif aud.precificacao %}
-        <div class="table-wrap">
-            <div class="table-responsive-x">
-                <table class="nexo-table" id="tabelaPrecificacao">
-                    <caption class="visually-hidden">Itens cujo custo subiu mais que o preço</caption>
-                    <thead><tr><th>Produto</th><th class="text-end">Custo unitário</th><th class="text-end">Preço médio</th><th class="text-end">Alta do custo</th><th class="text-end">Alta do preço</th><th class="text-end">Impacto</th></tr></thead>
-                    <tbody>
-                        {% for alerta in aud.precificacao %}
-                        <tr>
-                            <td>{{ alerta.produto }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(alerta.custo_unitario_inicial) }} → {{ m.brl(alerta.custo_unitario_final) }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(alerta.preco_inicial) }} → {{ m.brl(alerta.preco_final) }}</td>
-                            <td class="text-end t-mono">{{ pl.pct(alerta.variacao_custo) }}</td>
-                            <td class="text-end t-mono">{{ pl.pct(alerta.variacao_preco) }}</td>
-                            <td class="text-end t-mono">R$ {{ m.brl(alerta.impacto) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+        <p class="field-hint mb-0">Para comparar custo e preço ao longo do tempo, envie pelo menos dois meses de relatório com as datas do período no topo e a coluna de custo.</p>
         {% else %}
-        <p class="field-hint mb-0">Nenhum item com custo subindo à frente do preço no período enviado.</p>
+        {% set linhas = ap.precificacao %}
+        {% set cortada = linhas | length >= ap.limite_da_lista %}
+        <div data-tabela-rapida data-limite="{{ ap.limite }}" data-singular="produto" data-plural="produtos"{{ ' data-cortada' if cortada }}>
+            {% if cortada %}<p class="tabela-nota">A lista traz os {{ linhas | length }} de maior impacto; pode haver outros produtos com impacto menor.</p>{% endif %}
+            {{ rx.ferramentas('precificacao', 'Buscar produto', 'produtos com custo subindo sem reajuste de preço',
+                              [('', 'Todos'), ('parado', 'Preço parado ou em queda'), ('subiu_pouco', 'Preço subiu menos que o custo')]) }}
+            <div class="table-wrap">
+                <div class="table-responsive-x">
+                    <table class="nexo-table" id="tabelaPrecificacao">
+                        <caption class="visually-hidden">Produtos com custo subindo sem reajuste de preço, os de maior impacto primeiro</caption>
+                        <thead><tr><th>Produto</th><th class="text-end">Custo por unidade</th><th class="text-end">Preço médio por unidade</th><th class="text-end">Custo subiu</th><th class="text-end">Mudança do preço</th><th class="text-end">Deixou de ganhar (último mês)</th></tr></thead>
+                        <tbody id="corpoPrecificacao">
+                            {% for linha in linhas %}{% set alerta = linha.item %}
+                            <tr data-texto="{{ linha.texto }}" data-marcas="{{ linha.marcas }}">
+                                <td>{{ alerta.produto }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(alerta.custo_unitario_inicial) }} → {{ m.brl(alerta.custo_unitario_final) }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(alerta.preco_inicial) }} → {{ m.brl(alerta.preco_final) }}</td>
+                                <td class="text-end t-mono">{{ pl.pct(alerta.variacao_custo) }}</td>
+                                <td class="text-end t-mono">{{ pl.pct(alerta.variacao_preco) }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(alerta.impacto) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{ rx.rodape('corpoPrecificacao') }}
+        </div>
         {% endif %}
     </div>
 </section>
+{% endif %}
 
 <div class="nota-pressao mb-4">
     <i class="bi bi-info-circle" aria-hidden="true"></i>
-    <span>Estimativas sobre o custo que o relatório de vendas do PDV informa. A margem bruta não é lucro (não desconta despesas, impostos nem taxas) e o custo das vendas não é o CMV contábil, que depende de inventário.</span>
+    <span>Valores estimados com o custo que o seu sistema informa no relatório de vendas; ele pode ser diferente do custo da contabilidade, que confere o estoque. A sobra e o lucro bruto são o que fica da venda depois do custo do produto, antes de despesas, impostos e taxas: não são o lucro final da loja. {% if card.antigo %}Este Raio-X é de antes da separação dos itens com custo distorcido (custo de {{ ap.razao_a_confirmar }} vezes o preço de venda ou mais): refaça o Raio-X para tirá-los do custo, da sobra, do prejuízo e do lucro bruto por produto.{% else %}Os itens com custo distorcido (custo de {{ ap.razao_a_confirmar }} vezes o preço de venda ou mais) ficam fora do custo, da sobra, do prejuízo e do lucro bruto por produto.{% endif %}</span>
 </div>
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/raio-x.js') }}" defer></script>
 {% endblock %}

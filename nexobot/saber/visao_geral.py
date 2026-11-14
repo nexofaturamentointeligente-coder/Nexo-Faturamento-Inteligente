@@ -113,8 +113,8 @@ REGISTROS = (
             "indicadores; quando isso ocorre, a análise exibe o selo correspondente).."
         ),
         detalhes=(
-            "O que o NEXO não faz: não calcula lucro, margem, CMV nem estoque físico real, porque o relatório "
-            "do PDV não sustenta esses conceitos sem reconciliação contábil e contagem física. Também não "
+            "O que o NEXO não faz: nas análises, não calcula lucro, margem, CMV nem estoque físico real, porque o "
+            "relatório do PDV não sustenta esses conceitos sem reconciliação contábil e contagem física. Também não "
             "emite notas fiscais nem controla o caixa: isso continua no seu PDV."
         ),
         perguntas=(
@@ -199,9 +199,11 @@ REGISTROS = (
             "Histórico: todas as análises publicadas; cada uma abre a análise completa, com indicadores, "
             "tabela da Curva ABC, semáforos e devolutiva, e o botão Exportar PDF.\n\n"
             "Raio-X do PDV: a partir dos relatórios de vendas de vários meses, mostra a saúde do cadastro, os "
-            "itens vendidos com preços diferentes no mesmo mês, o potencial recuperável e o plano sugerido. "
-            "Auditoria de custos: vendas abaixo do custo informado, margem bruta por item e preços que não "
-            "acompanharam o custo; aparece com cadeado no menu de quem ainda não tem o plano Prata.\n\n"
+            "produtos vendidos fora do preço normal, o dinheiro recuperável (estimativa) e o plano sugerido, "
+            "com o botão (i) de cada indicador explicando o número. "
+            "Auditoria de custos: produtos vendidos com prejuízo (abaixo do custo informado), lucro bruto por "
+            "produto, alertas de cadastro com custo distorcido e produtos com custo subindo sem reajuste de preço; "
+            "aparece com cadeado no menu de quem ainda não tem o plano Prata.\n\n"
             "Guia: tutoriais mantidos pela equipe NEXO. Suporte: abertura e acompanhamento de chamados. "
             "Sininho: avisos de processamento dos relatórios, publicação da devolutiva, respostas da equipe em chamados e chamados marcados como resolvidos."
         ),
@@ -230,8 +232,8 @@ REGISTROS = (
             "fiscais. O NEXO trabalha depois disso, com os relatórios exportados, e produz leitura gerencial: "
             "faturamento, total comprado, Indicador de Pressão de Estoque, produtos de destaque, Curva ABC, "
             "semáforos e devolutiva. Por regra do produto, as análises nunca apresentam lucro, margem, CMV ou "
-            "rentabilidade; a margem bruta estimada sobre o custo informado aparece só no Raio-X do PDV, a "
-            "partir do plano Prata."
+            "rentabilidade; a margem bruta estimada sobre o custo informado aparece só no Raio-X do PDV e na "
+            "Auditoria de custos, a partir do plano Prata."
         ),
         perguntas=(
             "O NEXO emite notas fiscais?", "O NEXO é um ERP?", "O NEXO substitui meu PDV?",
@@ -250,7 +252,8 @@ REGISTROS = (
         resumo=(
             "Benefícios: leitura rápida e honesta dos seus dados de vendas e compras, com indicadores, Curva ABC, "
             "semáforos e devolutiva da consultoria. Limitações: depende da qualidade dos relatórios do PDV, "
-            "não calcula lucro ou estoque real e os resultados chegam no ritmo da equipe, não em tempo real."
+            "não calcula o lucro final nem o estoque real e os resultados chegam no ritmo da equipe, não em tempo "
+            "real."
         ),
         explicacao=(
             "Entre os benefícios estão a visão do descompasso entre compras e vendas, a identificação dos "

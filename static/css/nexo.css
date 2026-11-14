@@ -78,6 +78,9 @@
   --radius-lg:      22px;
   --radius-xl:      26px;
   --shell-gap:      14px;
+  /* Espaço interno à direita da topbar. O conteúdo (.page) usa o mesmo valor, para a borda direita dos cards
+     coincidir com a do selo do usuário. */
+  --topbar-pad-dir: 14px;
   --ease-out:       cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -448,7 +451,7 @@ button.nav-logout { width: 100%; background: transparent; font: inherit; text-al
   height: var(--topbar-h);
   display: flex; align-items: center; gap: 16px;
   margin: var(--shell-gap) var(--shell-gap) 0 0;
-  padding: 0 14px 0 24px;
+  padding: 0 var(--topbar-pad-dir) 0 24px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
@@ -528,8 +531,14 @@ button.nav-logout { width: 100%; background: transparent; font: inherit; text-al
 .user-meta strong { font-size: 0.84rem; font-weight: 600; }
 .user-meta small { font-size: 0.7rem; color: #a49cc4; }
 
-/* Conteúdo */
-.page { padding: 26px var(--shell-gap) 40px 0; flex: 1; max-width: calc(1440px + var(--shell-gap)); width: 100%; }
+/* Conteúdo. A borda direita dos cards e das tabelas coincide com a do selo do usuário (user-chip), o último item
+   da topbar: margem direita da topbar + 1 px de borda + espaço interno direito. Vale em qualquer largura: a topbar
+   vai de ponta a ponta da área principal, então o conteúdo também vai (sem largura máxima), senão, em telas largas,
+   os cards terminariam antes do selo. */
+.page {
+  padding: 26px calc(var(--shell-gap) + 1px + var(--topbar-pad-dir)) 40px 0;
+  flex: 1; width: 100%;
+}
 
 /* Cabeçalho de página interno */
 .page-head {
@@ -1392,7 +1401,9 @@ body:has(> .nexobot) .nexo-toast-wrap { bottom: 96px; }
   .main-area { margin-left: 0; }
   .nav-toggle { display: grid; place-items: center; }
   .page { padding: 20px 12px 32px; }
-  .topbar { margin: 10px 10px 0; top: 10px; padding: 0 10px 0 10px; border-radius: 18px; height: 60px; }
+  /* 6 de margem + 1 de borda + 5 de espaço interno = 12, o mesmo recuo do conteúdo: o selo do usuário (ou o último
+     botão, quando ele some) termina na borda direita dos cards, e o botão de menu começa na borda esquerda. */
+  .topbar { margin: 10px 6px 0; top: 10px; padding: 0 5px; border-radius: 18px; height: 60px; }
   .user-meta { display: none; }
   .user-chip { padding: 3px; }
 }
@@ -1419,9 +1430,9 @@ body:has(> .nexobot) .nexo-toast-wrap { bottom: 96px; }
 }
 /* Celular estreito (320 a 359 px): a topbar cede espaçamento ao título, para "Configurações" e
    "Conhecimento" caberem inteiros também nas fontes de reserva largas (DejaVu Sans, no Linux).
-   Os botões continuam com 42 px. */
+   Os botões continuam com 42 px. O espaço interno (5 px) é o do celular, que alinha o conteúdo. */
 @media (max-width: 359.98px) {
-  .topbar { padding: 0 6px; gap: 8px; }
+  .topbar { gap: 8px; }
   .topbar-right { gap: 6px; }
 }
 
@@ -2306,6 +2317,174 @@ body.termos-bloqueio { overflow: hidden; }
 .raio-x-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 0 16px; color: #b7b2d3; font-size: 0.86rem; }
 .raio-x-subtitulo { margin: 22px 0 10px; color: var(--text); font-size: 0.95rem; font-weight: 600; }
 .raio-x-avisos { margin: 6px 0 0; padding-left: 1.1rem; }
+
+/* Raio-X para quem não é do ramo (14/11/2026): a explicação (i) dos indicadores, os avisos
+   recolhidos num card de uma linha e as tabelas com as 5 de maior impacto (static/js/raio-x.js).
+   Sem JavaScript, o <details> abre e fecha sozinho e as tabelas mostram tudo. */
+.kpi-top-acoes { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.kpi-top:has(.kpi-top-acoes) { position: relative; }
+/* Com o (i), sobra menos largura para o rótulo: a palavra longa quebra, em vez de empurrar o ícone para fora. */
+.kpi-top:has(.kpi-top-acoes) .kpi-label { min-width: 0; overflow-wrap: anywhere; hyphens: auto; }
+.kpi-info > summary { list-style: none; }
+.kpi-info > summary::-webkit-details-marker { display: none; }
+.kpi-info-botao {
+  display: inline-grid; place-items: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted); font-size: 0.95rem; line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.kpi-info-botao:hover { color: var(--text); border-color: var(--glass-border-2); background: rgba(168, 85, 247, 0.14); }
+.kpi-info-botao:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.kpi-info[open] > .kpi-info-botao { color: var(--text); border-color: rgba(168, 85, 247, 0.55); background: rgba(168, 85, 247, 0.2); }
+/* O balão abre logo abaixo da linha do botão (posicionado pelo .kpi-top), alinhado ao botão e nunca mais
+   largo que o card: não cria rolagem lateral em tela estreita e não cobre o botão que o abriu. */
+.kpi-info-balao {
+  position: absolute; z-index: 5;
+  top: calc(100% + 6px); right: 0;
+  width: min(340px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: 0 18px 40px -18px rgba(3, 0, 12, 0.85);
+  color: var(--text);
+  font-size: 0.84rem; font-weight: 400; line-height: 1.45;
+  letter-spacing: normal; text-transform: none; text-align: left; white-space: normal;
+}
+/* Fechado, o conteúdo do <details> sai do layout: o Chromium recente só o esconde (content-visibility),
+   e o balão fechado continuava com caixa, medida fora da tela no celular. */
+.kpi-info:not([open]) > .kpi-info-balao,
+.avisos-raio-x:not([open]) > .avisos-corpo,
+.avisos-tecnicos:not([open]) > ol { display: none; }
+.kpi-info-titulo { margin: 0 0 8px; font-weight: 700; font-size: 0.88rem; color: var(--text); }
+.kpi-info-lista { display: grid; gap: 8px; margin: 0; }
+.kpi-info-lista dt { color: var(--text-muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.kpi-info-lista dd { margin: 2px 0 0; color: var(--text); overflow-wrap: anywhere; }
+/* (i) curto da Auditoria: uma ou duas frases e a nota discreta. */
+.kpi-info-texto { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.kpi-info-nota {
+  margin: 8px 0 0; padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted); font-size: 0.78rem; overflow-wrap: anywhere;
+}
+/* Aberto, o balão passa por cima dos cards vizinhos: o card do indicador e o bloco que o contém
+   sobem de camada (o vidro com backdrop-filter isola cada card). */
+.kpi-tile:has(.kpi-info[open]) { overflow: visible; z-index: 30; }
+.nexo-card:has(.kpi-info[open]),
+.row:has(> [class*="col"] .kpi-info[open]),
+.recomendacao-plano:has(.kpi-info[open]) { position: relative; z-index: 30; }
+.recomendacao-plano { position: relative; }
+.recomendacao-rotulo-linha { position: relative; display: flex; align-items: center; gap: 8px; }
+.recomendacao-plano .kpi-info-balao { left: 0; right: auto; }
+
+/* Avisos dos arquivos: card de uma linha, recolhido; aberto, os avisos por impacto. */
+.avisos-raio-x {
+  margin-bottom: 24px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.avisos-raio-x > summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  padding: 12px 16px;
+  list-style: none; cursor: pointer;
+  border-radius: var(--radius-lg);
+}
+.avisos-raio-x > summary::-webkit-details-marker { display: none; }
+.avisos-raio-x > summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.avisos-resumo-icone { flex: 0 0 auto; color: var(--warning); font-size: 1.1rem; }
+.avisos-resumo-texto { flex: 1 1 240px; min-width: 0; color: var(--text); font-size: 0.9rem; overflow-wrap: anywhere; }
+.avisos-resumo-texto strong { font-weight: 700; }
+.avisos-resumo-selo { flex: 0 0 auto; }
+.avisos-resumo-acao {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto;
+  color: var(--text); font-size: 0.85rem; font-weight: 600; text-decoration: underline; text-underline-offset: 3px;
+}
+.avisos-resumo-acao .bi { transition: transform 0.2s ease; }
+.avisos-raio-x[open] .avisos-resumo-acao .bi { transform: rotate(180deg); }
+.avisos-raio-x:not([open]) .quando-aberto,
+.avisos-raio-x[open] .quando-fechado { display: none; }
+.avisos-corpo { padding: 2px 16px 16px; border-top: 1px solid rgba(245, 158, 11, 0.22); }
+.avisos-grupo h3 { display: flex; align-items: center; gap: 8px; margin: 16px 0 4px; color: var(--text); font-size: 0.95rem; font-weight: 700; }
+.avisos-grupo-sub { margin: 0 0 10px; color: var(--text-muted); font-size: 0.82rem; }
+.avisos-lista { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.avisos-lista > li {
+  min-width: 0; padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-strong);
+}
+.aviso-titulo { display: block; margin-bottom: 2px; color: var(--text); font-weight: 600; font-size: 0.88rem; overflow-wrap: anywhere; }
+.aviso-texto { display: block; color: var(--text); font-size: 0.86rem; overflow-wrap: anywhere; }
+.aviso-porque, .aviso-fazer { display: block; margin-top: 4px; color: var(--text-muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.aviso-porque strong, .aviso-fazer strong { color: var(--text); font-weight: 600; }
+.aviso-arquivo { font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.avisos-tecnicos { margin-top: 14px; }
+.avisos-tecnicos > summary { width: fit-content; max-width: 100%; color: var(--text-muted); font-size: 0.82rem; cursor: pointer; }
+.avisos-tecnicos > summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.avisos-tecnicos ol { margin: 8px 0 0; padding-left: 1.2rem; color: var(--text-muted); font-size: 0.8rem; }
+.avisos-tecnicos li { overflow-wrap: anywhere; }
+.avisos-tecnicos li + li { margin-top: 4px; }
+
+/* Tabelas com as 5 de maior impacto: barra de busca e filtro em cima, botão de ver todas embaixo.
+   Os cabeçalhos em português simples são mais longos: quebram a linha em vez de empurrar a tabela
+   para a rolagem lateral (no computador, a tabela inteira cabe no card). */
+[data-tabela-rapida] .nexo-table thead th { white-space: normal; vertical-align: bottom; min-width: 6.5rem; }
+[data-tabela-rapida] .nexo-table thead th:first-child { min-width: 9rem; }
+.tabela-ferramentas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.tabela-ferramentas .tabela-busca { flex: 1 1 200px; min-width: 0; max-width: 360px; }
+.tabela-ferramentas .form-select { flex: 0 1 auto; width: auto; min-width: 0; max-width: 100%; }
+.tabela-rodape { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
+.tabela-rodape .btn-ghost .bi { transition: transform 0.2s ease; }
+.tabela-rodape .btn-ghost.is-aberto .bi { transform: rotate(180deg); }
+.tabela-contagem { color: var(--text-muted); font-size: 0.8rem; }
+/* Listras pelas linhas visíveis: com linhas escondidas pelo script, o nth-child(even) da tabela contaria as
+   escondidas, e duas linhas vizinhas sairiam da mesma cor. Só nas tabelas que o script montou (data-pronta) e fora
+   do modo cartões, que pinta cada linha; o cinza neutro serve aos dois temas, e o realce do ponteiro continua. */
+[data-tabela-rapida][data-pronta] .table-responsive-x:not(.em-cartoes) .nexo-table tbody tr:nth-child(even) { background: transparent; }
+[data-tabela-rapida][data-pronta] .table-responsive-x:not(.em-cartoes) .nexo-table tbody tr.is-listra { background: rgba(127, 127, 127, 0.045); }
+[data-tabela-rapida][data-pronta] .table-responsive-x:not(.em-cartoes) .nexo-table tbody tr:hover { background: rgba(168, 85, 247, 0.10); }
+.tabela-nota { margin: 0 0 10px; color: var(--text-muted); font-size: 0.8rem; }
+.selo-a-confirmar { margin-left: 6px; vertical-align: middle; }
+.dados-contrato dd.raio-x-dica { margin-top: 4px; color: var(--text-muted); font-size: 0.78rem; line-height: 1.4; }
+
+/* Auditoria de custos (Etapa 1, 14/11/2026): os alertas de cadastro (itens com custo distorcido) num card recolhido,
+   e a faixa discreta quando nenhum produto teve custo subindo sem reajuste de preço. */
+.alertas-cadastro > summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 24px;
+  list-style: none; cursor: pointer;
+  border-radius: var(--radius-lg);
+}
+.alertas-cadastro > summary::-webkit-details-marker { display: none; }
+.alertas-cadastro > summary:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.alertas-cadastro[open] > summary { border-bottom: 1px solid var(--glass-border); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.alertas-cadastro-icone { flex: 0 0 auto; color: var(--warning); font-size: 1.05rem; }
+.alertas-cadastro-titulo { flex: 1 1 auto; min-width: 0; color: var(--text); font-size: 0.95rem; font-weight: 700; overflow-wrap: anywhere; }
+.alertas-cadastro-seta { flex: 0 0 auto; color: var(--text-muted); transition: transform 0.2s ease; }
+.alertas-cadastro[open] .alertas-cadastro-seta { transform: rotate(180deg); }
+/* Fechado, o corpo sai do layout (o Chromium recente só o esconde, com content-visibility). */
+.alertas-cadastro:not([open]) > .alertas-cadastro-corpo { display: none; }
+.faixa-positiva {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(var(--success-bg), var(--success-bg)), var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text); font-size: 0.86rem;
+}
+.faixa-positiva-icone { flex: 0 0 auto; color: var(--success); font-weight: 700; }
+@media (max-width: 575.98px) {
+  .alertas-cadastro > summary { padding: 14px 18px; }
+}
 
 /* Página de planos: um cartão por nível; o do plano atual em destaque. */
 .planos-grade { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
