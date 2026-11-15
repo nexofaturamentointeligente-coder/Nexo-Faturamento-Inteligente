@@ -293,7 +293,9 @@ REGISTROS = (
         ),
         perguntas=(
             "Posso ver uma análise antiga?", "Como consulto análises passadas?", "Consigo rever a análise do mês passado?",
-            "As análises antigas ficam guardadas?",
+            "As análises antigas ficam guardadas?", "Consigo ver o histórico dos últimos 12 meses?",
+            "Quantos meses ficam no histórico?", "Quantos meses o histórico guarda?",
+            "O histórico tem limite de meses?", "Quantos meses o histórico mostra?",
         ),
         termos="consultar ver rever acessar abrir analise anterior antiga passada historico meses anteriores",
         relacionados=("nexo.historico.abrir", "nexo.historico.pdf_exportar"),

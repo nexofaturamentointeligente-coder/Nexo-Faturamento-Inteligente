@@ -45,7 +45,8 @@ from tests.test_contratos_postgresql import (
 
 REVISAO_ANTERIOR = "a8d3f6b91c24"
 REVISAO_PLANOS = "b3e9d6c1f7a2"
-TABELAS = ("plano_nivel", "funcionalidade", "plano_funcionalidade", "diagnostico_entrada")
+# Com a dos retratos mensais do Raio-X (d9e4b7a2c6f1): o mesmo RLS, as mesmas políticas e o mesmo downgrade.
+TABELAS = ("plano_nivel", "funcionalidade", "plano_funcionalidade", "diagnostico_entrada", "diagnostico_fechamento")
 CATALOGO = {"plano_nivel": 4, "funcionalidade": 15, "plano_funcionalidade": 38}
 POLITICAS = {
     ("deny_api_access", "RESTRICTIVE", "anon,authenticated", "false", "false"),
@@ -127,8 +128,10 @@ class _ClusterDosPlanos(_PrivateCluster):
     @staticmethod
     def _limpar_cache_esquema():
         import entitlements
+        import raio_x_servico
         _PrivateCluster._limpar_cache_esquema()
         entitlements._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
 
     def _sql(self, consulta, **parametros):
         from sqlalchemy import text
@@ -237,6 +240,7 @@ class _ClusterDosPlanos(_PrivateCluster):
                                               "FROM plano_nivel ORDER BY nivel_hierarquico")]
         self.check("catalog_seeded",
                    all(contagens[t] == n for t, n in CATALOGO.items()) and contagens["diagnostico_entrada"] == 0
+                   and contagens["diagnostico_fechamento"] == 0
                    and niveis == [("BRONZE", 1, 6), ("PRATA", 2, 24), ("OURO", 3, None), ("CUSTOM", 4, None)]
                    and matriz["BRONZE"] < matriz["PRATA"] < matriz["OURO"] < matriz["CUSTOM"],
                    str({t: contagens.get(t) for t in TABELAS}))
@@ -316,6 +320,9 @@ class _ClusterDosPlanos(_PrivateCluster):
         self.stage = "downgrade com Raio-X gravado"
         with self.app.app_context():
             self.db.session.remove()
+        # Sem o retrato do mês (a d9e4b7a2c6f1 recusaria antes) e sem dado de lead neste ensaio, só a b3e9d6c1f7a2
+        # pode recusar: é a guarda do Raio-X gravado que este passo confere.
+        self._executar("DELETE FROM diagnostico_fechamento")
         antes = self._contagens()
         try:
             self._migrar(downgrade, REVISAO_ANTERIOR)
@@ -327,6 +334,8 @@ class _ClusterDosPlanos(_PrivateCluster):
                    f"recusado={recusado} revisão={self._revisao()}")
 
         self.stage = "downgrade sem Raio-X"
+        # O Raio-X gravado deixou o retrato do mês: sem os dois, o downgrade passa.
+        self._executar("DELETE FROM diagnostico_fechamento")
         self._executar("DELETE FROM diagnostico_entrada")
         self._migrar(downgrade, REVISAO_ANTERIOR)
         self.check("downgrade_removes_tables_and_policies",

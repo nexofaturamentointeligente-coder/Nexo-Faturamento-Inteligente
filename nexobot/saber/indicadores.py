@@ -88,7 +88,7 @@ REGISTROS = (
         ),
         perguntas=(
             "O que é total comprado?", "Como é calculado o total comprado?", "O que entra no total comprado?",
-            "Total comprado inclui frete?", "O que significa volume de compras?",
+            "Total comprado inclui frete?", "O que significa volume de compras?", "Quanto eu compro por mês?",
         ),
         termos="total comprado compras volume entradas notas fornecedores soma calculado",
         relacionados=("nexo.indicadores.faturamento_total", "nexo.indicadores.pressao_estoque"),
@@ -158,7 +158,7 @@ REGISTROS = (
         aviso=AVISO_PRESSAO,
         perguntas=(
             "Pressão de estoque é lucro?", "Esse indicador é meu lucro?", "Se o indicador é negativo eu tive prejuízo?",
-            "Pressão de estoque mostra margem?", "O NEXO calcula o lucro?",
+            "Pressão de estoque mostra margem?", "O NEXO calcula o lucro?", "O NEXO calcula prejuízo?",
         ),
         termos="lucro prejuizo margem cmv rentabilidade nao eh pressao estoque diferenca",
         relacionados=("nexo.indicadores.sem_lucro", "nexo.indicadores.pressao_estoque"),
@@ -189,7 +189,11 @@ REGISTROS = (
             "sobra, do prejuízo e do lucro bruto por produto e aparecem num card à parte, para você corrigir no "
             "seu PDV. A tela também lista os produtos com custo subindo sem reajuste de preço. No Raio-X do PDV, "
             "os mesmos itens aparecem como custo a confirmar, e os produtos dando prejuízo, como produtos com "
-            "margem negativa."
+            "margem negativa. Nos cards do prejuízo, \"Nos N meses auditados (média de R$ X/mês)\" divide o valor "
+            "pelos meses dos relatórios que trazem a coluna de custo (os auditados, no mínimo 1: com menos de 1 "
+            "mês, a tela diz \"Em menos de 1 mês auditado\" e a média é o próprio valor); \"de N meses enviados\" "
+            "aparece quando outros relatórios vieram sem a coluna e não foram auditados, por isso a Auditoria pode "
+            "ter menos meses que o Raio-X."
         ),
         detalhes=(
             "O custo é o que o seu sistema informa no relatório de vendas; o da contabilidade pode ser outro, "
@@ -204,11 +208,201 @@ REGISTROS = (
             "O que mostra a Auditoria de custos?", "Quais números a Auditoria de custos mostra?",
             "Para que serve a Auditoria de custos?", "Onde vejo o lucro bruto de cada produto?",
             "O que é custo a confirmar?", "O que são produtos com margem negativa?",
+            "O que são meses auditados?", "Por que só 1 mês auditado?", "O que é a média por mês do prejuízo direto?",
+            "A Auditoria de custos calcula prejuízo?", "A Auditoria de custos mostra o lucro?",
+            "Por que a auditoria tem menos meses que o Raio-X?", "Quanto eu perco com vendas abaixo do custo?",
+            "A Auditoria de custos mostra o faturamento?", "A Auditoria de custos calcula o faturamento?",
+            "A Auditoria de custos da minha loja mostra o prejuízo?", "Como é calculada a perda por mês?",
+            "O que significa meses enviados?", "O que significa perda por mês?",
+            "Quanto eu perdi com vendas abaixo do custo?", "Onde fica a Auditoria de custos?",
         ),
         termos=("auditoria custos lucro bruto sobra bruta prejuizo direto caixa produtos dando prejuizo alertas "
                 "cadastro custo distorcido produtos vendidos reajuste preco"),
         relacionados=("nexo.indicadores.sem_lucro",),
         fontes=("raio_x.py", "raio_x_servico.py", "raio_x_apresentacao.py", "templates/onboarding/auditoria.html"),
+    ),
+    registro(
+        id="nexo.indicadores.raio_x_do_pdv",
+        titulo="O que é o Raio-X do PDV?",
+        categoria="Indicadores",
+        tipo="conceito",
+        resumo=(
+            "O Raio-X do PDV lê os seus relatórios de vendas por produto e mostra a saúde do cadastro (quanto da "
+            "venda tem custo informado e produto sem código ou nome conflitante), os produtos vendidos fora do preço "
+            "normal e o dinheiro recuperável, que são as vendas abaixo do custo ou do preço normal. Ele fica no menu "
+            "lateral, em Raio-X do PDV, em todos os planos; a Auditoria de custos, a partir do plano Prata, detalha o "
+            "custo, a sobra bruta e o prejuízo por produto."
+        ),
+        explicacao=(
+            "Para fazer ou refazer o Raio-X, envie na própria página de 1 a 36 relatórios de Vendas por produto (o "
+            "mesmo das análises mensais, um por mês), em CSV, XLSX, XLS ou Planilha XML, até 20 MB no total. Os "
+            "arquivos são lidos num processo isolado e descartados: fica só o resultado, e o Raio-X novo substitui o "
+            "anterior. Com a coluna de custo, o Raio-X acha as vendas abaixo do custo; com o preço unitário de cada "
+            "linha (ou uma linha por venda), as vendas abaixo do preço normal. Cada usuário faz até 10 envios por hora."
+        ),
+        detalhes=(
+            "O Plano de Ação (12 meses) sai do último Raio-X. São estimativas pelo custo que o relatório informa, antes "
+            "de despesas, impostos e taxas, e não o lucro final da loja."
+        ),
+        perguntas=(
+            "O que é o Raio-X do PDV?", "O que é o Raio-X?", "Como funciona o Raio-X?", "Como faço o Raio-X?",
+            "Como refaço o Raio-X?", "Como gerar um novo Raio-X?", "Quais relatórios o Raio-X usa?",
+            "Como enviar os relatórios do Raio-X?", "Onde fica o Raio-X?", "Que tipo de arquivo o Raio-X aceita?",
+            "Quais formatos o Raio-X aceita?",
+        ),
+        termos=("raio x pdv saude cadastro relatorios vendas produto enviar refazer novo refaco custo preco normal "
+                "dinheiro recuperavel arquivos csv xlsx"),
+        relacionados=("nexo.indicadores.auditoria_de_custos", "nexo.indicadores.plano_de_acao"),
+        fontes=("raio_x.py", "raio_x_servico.py", "templates/onboarding/diagnostico.html", "Docs/PLANOS_E_RAIO_X.md"),
+    ),
+    registro(
+        id="nexo.indicadores.plano_de_acao",
+        titulo="O que é o Plano de Ação (12 meses)?",
+        categoria="Indicadores",
+        tipo="conceito",
+        resumo=(
+            "O Plano de Ação (12 meses) abre pelo botão no topo do Raio-X do PDV e da Auditoria de custos. Com o "
+            "último Raio-X da empresa, ele mostra quanto a loja deixa de ganhar em 12 meses se nada for corrigido "
+            "(o custo da inação), quanto pode recuperar (o retorno projetado, em dois cenários) e um roteiro em 3 "
+            "etapas com os produtos a corrigir, com um checklist para marcar o que já foi feito."
+        ),
+        explicacao=(
+            "Custo da inação, ou sangria anualizada: o dinheiro recuperável do Raio-X dividido pelos meses "
+            "analisados (no mínimo 1) e multiplicado por 12 (o mesmo ritmo por mês e por ano que o card do dinheiro "
+            "recuperável mostra); ao lado, quanto do faturamento de 12 meses sai sem custo informado (no escuro). Retorno "
+            "projetado: no cenário conservador, 70% do custo da inação; no otimizado, 100% dele mais 1,5% de "
+            "margem sobre as vendas de 12 meses dos produtos com variação de preço ou sem custo. A tela diz que "
+            "esse valor vai direto para o lucro líquido porque parte da premissa de que as despesas fixas da loja "
+            "já estão pagas: é uma estimativa, não o lucro apurado.\n\n"
+            "Roteiro: Etapa 1 (semana 1), estancar o prejuízo, com até 5 produtos vendidos abaixo do custo e os "
+            "alertas de cadastro; Etapa 2 (semanas 2 e 3), travar os descontos no balcão, com até 5 produtos que "
+            "mais deixaram dinheiro na mesa; Etapa 3 (do mês 1 em diante), as metas de controle: o custo (cadastrar "
+            "o dos produtos vendidos sem custo, conferir o das vendas que saíram sem ele ou exportar o relatório com "
+            "a coluna de custo) e o estoque (lançar as notas dos produtos com estoque negativo ou enviar o relatório "
+            "com o estoque). A etapa sem nada a corrigir já vem marcada como regularizada. As listas de produtos da "
+            "Etapa 1 são da Auditoria de custos, a partir do plano Prata; nos demais planos, aparece a contagem. O "
+            "checklist fica salvo neste navegador, para aquele Raio-X (outro navegador ou um Raio-X novo começam do "
+            "zero), e o botão Imprimir / Salvar PDF gera o plano para entregar ou apresentar.\n\n"
+            "Sem ritmo nem projeção: quando um relatório não traz as datas do período ou traz um período depois da "
+            "data do Raio-X (com venda, que entra nos totais), não há ritmo por mês nem os valores de 12 meses; envie "
+            "o relatório com o período no topo, ou confira esse período, e refaça o Raio-X. Com menos de 1 mês de "
+            "relatórios, a tela diz \"menos de 1 mês\" e a conta usa 1 mês."
+        ),
+        detalhes=(
+            "Os meses analisados são os dias cobertos pelos relatórios, até a data do Raio-X: o mês fechado vale 1, "
+            "e o mês pela metade, a fração dos dias; abaixo de 1 mês, a conta usa 1. Os valores de 12 meses repetem "
+            "esse ritmo: são estimativas feitas com os relatórios enviados."
+        ),
+        perguntas=(
+            "O que é o Plano de Ação?", "O que é o Plano de Ação de 12 meses?", "O que mostra o Plano de Ação?",
+            "Como funciona o Plano de Ação?", "O que é custo da inação?", "O que é o retorno projetado?",
+            "O que é o cenário conservador?", "O que é o cenário otimizado?", "Como é calculado o Plano de Ação?",
+            "O que é o ritmo por mês do dinheiro recuperável?", "O que é sangria anualizada?",
+            "Como imprimir o Plano de Ação?", "Onde fica salvo o checklist do Plano de Ação?",
+            "Meu checklist do Plano de Ação sumiu", "O Plano de Ação mostra lucro?", "Quanto vou recuperar?",
+            "Quanto posso recuperar?", "Quanto eu perco por mês?", "Quanto estou perdendo por mês?",
+            "Por que diz que vai direto para o lucro líquido?",
+            "O que significa período depois da data do Raio-X?", "Por que diz período depois da data do Raio-X?",
+            "Por que o plano diz lucro líquido?", "O que é o checklist de execução?",
+            "Quanto vou perder em 12 meses?", "Quanto perdi no mês?", "Quanto está escapando por mês?",
+            "Quanto está vazando por mês?", "Quanto dinheiro está saindo por mês?",
+            "Quanto está saindo do caixa por mês?",
+            "Como travar os descontos no balcão?", "O que é travar os descontos no balcão?",
+            "Por que a projeção não aparece?", "Por que não tem projeção?", "O que significa menos de 1 mês?",
+            "Por que aparece menos de 1 mês?",
+        ),
+        termos=("plano acao 12 meses custo inacao sangria anualizada retorno projetado cenario conservador otimizado "
+                "roteiro etapas checklist navegador imprimir pdf ritmo projecao anual"),
+        relacionados=("nexo.indicadores.auditoria_de_custos", "nexo.indicadores.amostra_parcial"),
+        fontes=("plano_acao.py", "templates/_plano_acao.html", "static/js/plano-acao.js",
+                "templates/onboarding/diagnostico.html", "templates/onboarding/auditoria.html"),
+    ),
+    registro(
+        id="nexo.indicadores.evolucao_conquistas",
+        titulo="O que é o painel Evolução & Conquistas?",
+        categoria="Indicadores",
+        tipo="conceito",
+        resumo=(
+            "O painel Evolução & Conquistas compara o seu primeiro Raio-X do PDV (o Marco Zero) com o último "
+            "fechamento mensal, que é o Raio-X feito com o relatório de vendas do mês, no início de cada mês. Ele fica na "
+            "Visão Geral e no Plano de Ação, e a linha do tempo mês a mês fica no Histórico. Com um Raio-X só, a "
+            "comparação é ativada automaticamente no próximo fechamento mensal: é só enviar o relatório de vendas do "
+            "mês no Raio-X do PDV, porque nenhum processo faz o fechamento sozinho."
+        ),
+        explicacao=(
+            "Os indicadores, por mês: as perdas nas vendas abaixo do custo, o vazamento por variação de preço, o "
+            "faturamento sem custo informado, os itens com margem negativa e alertas de cadastro e, a partir do "
+            "plano Prata, a sobra bruta ajustada. A Economia Gerada no Mês é quanto o dinheiro recuperável por mês "
+            "caiu desde o Marco Zero (quando sobe, o painel mostra onde houve regressão), e a Projeção Anual no "
+            "Ritmo Atual é essa economia vezes 12.\n\n"
+            "Os selos: Prejuízo Zero no Caixa, com nenhuma venda abaixo do custo no último fechamento; Cadastro "
+            "Blindado, com a venda sem custo abaixo de 2% do faturamento ou com queda de mais de 50% desde o Marco "
+            "Zero; Balcão Travado, com o vazamento por variação de preço caindo mais de 30% desde o Marco Zero (ou "
+            "sem vazamento nenhum desde ele); e Margem em Alta, com a sobra bruta ajustada acima do mês anterior e "
+            "do Marco Zero (a partir do plano Prata).\n\n"
+            "A perda só se compara quando o último fechamento a mede na mesma venda que o Marco Zero ou em mais: até "
+            "1 ponto a mais de venda sem custo e todos os relatórios com a coluna de custo. Fora disso, a perda, os "
+            "itens e a sobra bruta aparecem como Não comparável (ou Sem dados, quando o fechamento não tem venda com "
+            "custo), a economia fica sem conta, os selos Prejuízo Zero e Margem em Alta não saem e a primeira meta "
+            "fica Sem dados, para a perda escondida não virar ganho. Se o Marco Zero não tinha nenhuma venda com "
+            "custo, ele não mediu perda: a conta da economia vale, com o aviso de que perdas que antes não apareciam "
+            "entram agora, mas o zero de um fechamento com um relatório sem a coluna de custo não vira selo nem "
+            "Sanado.\n\n"
+            "Mês a mês, cada meta do Plano de Ação original aparece como Sanado (zerado), Em evolução (menor "
+            "que no Marco Zero), Pendente (igual ou pior), Ponto de partida (a linha do próprio Marco Zero) ou Sem "
+            "dados (os relatórios do mês não permitem avaliar). Os valores por mês usam os meses dos relatórios, sem "
+            "o piso de 1 mês do Plano de Ação: com menos de 1 mês, o painel avisa que o ritmo é estimado, e o número "
+            "pode ser diferente do custo da inação (com um Raio-X só, o painel mostra o mesmo número do Plano de "
+            "Ação)."
+        ),
+        detalhes=(
+            "Fica um fechamento por mês: o Raio-X refeito no mesmo mês substitui o daquele mês. Sem o período em "
+            "algum dos Raio-X, não há economia nem projeção. São estimativas pelo custo que o relatório informa, "
+            "antes de despesas, impostos e taxas."
+        ),
+        perguntas=(
+            "O que é Evolução & Conquistas?", "O que é o Marco Zero?", "O que é economia gerada no mês?",
+            "O que é a projeção anual no ritmo atual?", "O que significa o selo Prejuízo Zero no Caixa?",
+            "Como ganho o selo Cadastro Blindado?", "O que é o selo Balcão Travado?", "O que é o selo Margem em Alta?",
+            "Quando a comparação de evolução é ativada?", "Por que a comparação de evolução ainda não aparece?",
+            "O fechamento mensal é automático?",
+            "O que significa Sanado, Em evolução e Pendente?", "Onde vejo a evolução mês a mês?",
+            "O que é o fechamento mensal?", "Como faço o fechamento mensal?",
+            "O que significa Ponto de partida?", "O que é o ritmo estimado?",
+            "O que significa a mais escapando por mês?", "Por que aparece a mais escapando por mês?",
+            "Qual a economia por ano?",
+        ),
+        termos=("evolucao conquistas marco zero fechamento mensal economia gerada projecao anual ritmo atual selos "
+                "prejuizo cadastro blindado travado margem sanado"),
+        relacionados=("nexo.indicadores.plano_de_acao", "nexo.indicadores.auditoria_de_custos"),
+        destino="dashboard",
+        fontes=("evolucao.py", "raio_x_servico.py", "templates/_evolucao.html", "templates/cliente/dashboard.html",
+                "templates/cliente/historico.html", "templates/_plano_acao.html"),
+    ),
+    registro(
+        id="nexo.indicadores.amostra_parcial",
+        titulo="O que significa o selo de amostra parcial?",
+        categoria="Indicadores",
+        tipo="conceito",
+        resumo=(
+            "O selo “Amostra parcial (N% dos itens ativos)” aparece no card do dinheiro recuperável do Raio-X do "
+            "PDV e no Plano de Ação quando a venda enviada parece ser só uma parte da loja: com 20 produtos ou mais "
+            "com saldo no estoque enviado, a venda de um período de 90 dias ou mais vendeu menos de 15% deles (menos "
+            "de 30% num período de um ano ou mais). O N% é essa parte. O potencial da loja completa tende a ser "
+            "maior."
+        ),
+        explicacao=(
+            "Costuma acontecer quando o relatório de vendas foi exportado com filtro (por cliente, por vendedor ou "
+            "por loja) e o estoque enviado é o da loja inteira. Para ver a loja como ela é, envie a venda de todos "
+            "os clientes, vendedores e lojas do mesmo período, sem filtro, e refaça o Raio-X."
+        ),
+        perguntas=(
+            "O que significa amostra parcial?", "O que é amostra parcial?", "Por que aparece amostra parcial?",
+            "O que são os itens ativos da amostra parcial?", "Como tirar o selo de amostra parcial?",
+        ),
+        termos="amostra parcial selo itens ativos venda filtrada estoque inteiro cliente vendedor loja",
+        relacionados=("nexo.indicadores.plano_de_acao",),
+        fontes=("raio_x.py", "plano_acao.py", "templates/_planos.html", "templates/_plano_acao.html"),
     ),
     registro(
         id="nexo.indicadores.sem_lucro",
@@ -238,7 +432,10 @@ REGISTROS = (
         ),
         perguntas=(
             "O NEXO calcula lucro?", "Onde vejo minha margem?", "Qual é o meu CMV?", "O portal mostra rentabilidade?",
-            "Por que não aparece o lucro?", "O NEXO mostra prejuízo?",
+            "Por que não aparece o lucro?", "O NEXO mostra prejuízo?", "O NEXO calcula lucro líquido?",
+            "O NEXO apura o lucro?", "Vocês mostram lucro líquido?", "O que é lucro líquido?",
+            "As análises mostram lucro líquido?", "O que significa lucro líquido?",
+            "Queria saber o lucro da minha loja",
         ),
         termos="lucro margem cmv rentabilidade prejuizo nao calcula regra proibido",
         relacionados=("nexo.indicadores.pressao_nao_e_lucro", "nexo.visao_geral.o_que_nao_e"),
@@ -377,7 +574,8 @@ REGISTROS = (
         categoria="Indicadores",
         resumo=(
             "São cards de risco e oportunidade gerados automaticamente a partir dos indicadores, com “O que "
-            "fazer” e “Por que fazer”. Vermelho é crítico, amarelo é atenção e verde é oportunidade."
+            "fazer” e “Por que fazer”. Vermelho é crítico, amarelo é atenção e verde é oportunidade. Na página de "
+            "planos, esse recurso aparece como “Checklist de ações operacionais”."
         ),
         explicacao=(
             "Três leituras alimentam os cards: o Indicador de Pressão de Estoque em relação ao faturamento "
@@ -388,6 +586,7 @@ REGISTROS = (
         perguntas=(
             "O que são os semáforos?", "O que é a síntese executiva?", "O que significa o card vermelho?",
             "O que é crítico, atenção e oportunidade?", "O que é 5W2H no painel?",
+            "O que é o recurso Checklist de ações operacionais dos planos?",
         ),
         termos="semaforos sintese executiva cards risco oportunidade critico atencao 5w2h o que fazer por que",
         relacionados=("nexo.indicadores.pressao_estoque", "nexo.indicadores.classe_a"),

@@ -2,6 +2,7 @@
 {% import "_macros.html" as m %}
 {% import "_planos.html" as pl %}
 {% import "_raio_x.html" as rx %}
+{% import "_plano_acao.html" as acao %}
 
 {% block title %}Auditoria de custos — NEXO{% endblock %}
 {% block page_title %}Auditoria de custos{% endblock %}
@@ -13,6 +14,7 @@
         <p class="sub">Onde a loja perdeu dinheiro vendendo barato demais ou com custo desatualizado no sistema.</p>
     </div>
     <div class="page-head-actions">
+        {% if raio_x and plano_acao %}{{ acao.botao() }}{% endif %}
         <a href="{{ url_for('onboarding.diagnostico') }}" class="btn-ghost"><i class="bi bi-activity" aria-hidden="true"></i> Raio-X do PDV</a>
     </div>
 </div>
@@ -73,13 +75,15 @@
         {% set com_prejuizo = aud.itens_venda_abaixo_custo or 0 %}
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Prejuízo direto no caixa</span><span class="kpi-top-acoes"><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span>{{ rx.dica(dicas.prejuizo, 'Prejuízo direto no caixa') }}</span></div>
             <div class="kpi-value"><small>R$</small> {{ m.brl(aud.perda_abaixo_custo) }}</div>
-            <div class="kpi-foot">{{ m.num(com_prejuizo) }} {{ 'produto vendido por menos do que custou' if com_prejuizo == 1 else 'produtos vendidos por menos do que custaram' }}</div></div>
+            <div class="kpi-foot">{{ m.num(com_prejuizo) }} {{ 'produto vendido por menos do que custou' if com_prejuizo == 1 else 'produtos vendidos por menos do que custaram' }}</div>
+            {% if plano_acao %}{{ acao.janela(plano_acao.janela_prejuizo) }}{% endif %}</div>
     </div>
     <div class="col-12 col-sm-6 col-xl-3">
         {% set negativos = aud.itens_margem_negativa_sem_a_confirmar if aud.itens_margem_negativa_sem_a_confirmar is not none else aud.itens_margem_negativa %}
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Produtos dando prejuízo</span><span class="kpi-top-acoes"><span class="kpi-icon is-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>{{ rx.dica(dicas.produtos_prejuizo, 'Produtos dando prejuízo') }}</span></div>
             <div class="kpi-value">{{ m.num(negativos) }}</div>
-            <div class="kpi-foot">Itens que fecharam o período no vermelho</div></div>
+            <div class="kpi-foot">Itens que fecharam o período no vermelho</div>
+            {% if plano_acao %}{{ acao.janela(plano_acao.janela_produtos) }}{% endif %}</div>
     </div>
 </div>
 
@@ -130,7 +134,7 @@
 {# ---------------- Alertas de cadastro: custo distorcido (custo a confirmar), recolhido ---------------- #}
 {% if isolados %}
 <details class="nexo-card mb-4 alertas-cadastro" id="alertasCadastro">
-    <summary>
+    <summary id="alertasCadastroResumo">
         <i class="bi bi-exclamation-triangle alertas-cadastro-icone" aria-hidden="true"></i>
         <span class="alertas-cadastro-titulo">Alertas de cadastro: {{ m.num(isolados) }} {{ 'item com custo distorcido ignorado' if isolados == 1 else 'itens com custo distorcido ignorados' }} na conta</span>
         <i class="bi bi-chevron-down alertas-cadastro-seta" aria-hidden="true"></i>
@@ -276,10 +280,12 @@
     <i class="bi bi-info-circle" aria-hidden="true"></i>
     <span>Valores estimados com o custo que o seu sistema informa no relatório de vendas; ele pode ser diferente do custo da contabilidade, que confere o estoque. A sobra e o lucro bruto são o que fica da venda depois do custo do produto, antes de despesas, impostos e taxas: não são o lucro final da loja. {% if card.antigo %}Este Raio-X é de antes da separação dos itens com custo distorcido (custo de {{ ap.razao_a_confirmar }} vezes o preço de venda ou mais): refaça o Raio-X para tirá-los do custo, da sobra, do prejuízo e do lucro bruto por produto.{% else %}Os itens com custo distorcido (custo de {{ ap.razao_a_confirmar }} vezes o preço de venda ou mais) ficam fora do custo, da sobra, do prejuízo e do lucro bruto por produto.{% endif %}</span>
 </div>
+{% if plano_acao %}{{ acao.modal(plano_acao, linha_raio_x, empresa, url_upgrade, plano_auditoria, 'auditoria', evolucao, plano_margem) }}{% endif %}
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/raio-x.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/plano-acao.js') }}" defer></script>
 {% endblock %}

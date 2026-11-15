@@ -69,11 +69,15 @@ _MODIFICADORES = re.compile(
 _RUIDO_DEFINICAO = frozenset("significa significado quer dizer definicao conceito seria serve existe vem fica "
                              "entendi entendo entender compreendi compreendo".split())
 _PERGUNTA_COMO = re.compile(r"^(?:\w+ ){0,3}como\b")
+# Cumprimento no começo ("oi, bom dia como faço meu cadastro?"): o "dia", a "tarde" e a "noite" não são o assunto.
+_CUMPRIMENTO_INICIAL = re.compile(
+    r"^(?:(?:oi|ola|opa|e ai|eai)\b[\s,.;:!]*)*(?:(?:bom dia|boa tarde|boa noite)\b[\s,.;:!]*)+")
 
 
 def limpar_pedido(consulta: str) -> str:
-    """Remove da consulta o pedido de forma ("me explica X em detalhes" → "X")."""
-    limpa = _MODIFICADORES.sub(" ", consulta or "")
+    """Remove da consulta o cumprimento do começo e o pedido de forma ("bom dia, me explica X em detalhes" → "X")."""
+    limpa = _CUMPRIMENTO_INICIAL.sub("", consulta or "")
+    limpa = _MODIFICADORES.sub(" ", limpa)
     limpa = " ".join(limpa.split())
     return limpa or consulta
 

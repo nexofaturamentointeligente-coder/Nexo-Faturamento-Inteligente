@@ -32,6 +32,8 @@ from entitlements import requer_funcionalidade
 from etl_inputs import ETLInputError
 from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
+from horario import BRASILIA, instante_utc
+import plano_acao
 import raio_x
 import raio_x_apresentacao
 import raio_x_servico
@@ -89,8 +91,39 @@ def _recomendacao_atual(bruto: dict, dados) -> dict:
         return bruto["recomendacao"]
 
 
-def _contexto_raio_x() -> dict:
-    """O último Raio-X da empresa logada, só com o que o plano libera, e os planos envolvidos."""
+def _plano_de_acao(visao: dict, bruto: dict, linha) -> dict | None:
+    """O período, o ritmo e o Plano de Ação (12 meses) das duas páginas (Etapa 2, 14/11/2026), cortados na data do
+    Raio-X (horário de Brasília). Só leitura do resultado: uma falha aqui (um JSON gravado fora do formato) não
+    derruba a página, que abre sem o plano, como abria antes dele."""
+    try:
+        return plano_acao.preparar(visao, bruto, instante_utc(linha.gerado_em).astimezone(BRASILIA).date())
+    except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError) as erro:
+        current_app.logger.warning("Plano de Ação não montado (%s).", type(erro).__name__)
+        return None
+
+
+def _evolucao(id_empresa: int, liberadas: frozenset) -> dict | None:
+    """O painel Evolução & Conquistas (Etapa 3, 14/11/2026) no Plano de Ação. Só leitura: uma falha aqui (banco ou um
+    retrato fora do formato) não derruba a página, que abre sem o painel."""
+    try:
+        return raio_x_servico.evolucao_da_empresa(id_empresa, liberadas)
+    except SQLAlchemyError as erro:
+        # Tabela removida ou conexão perdida: desfaz, e as próximas leituras conferem de novo os esquemas.
+        current_app.logger.warning("Evolução não montada (%s).", type(erro).__name__)
+        try:
+            db.session.rollback()
+            raio_x_servico.esquecer_fechamentos()
+            entitlements.esquecer_esquema_planos()
+        except Exception:  # noqa: BLE001 - a página precisa sair mesmo com o banco fora
+            pass
+    except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError) as erro:
+        current_app.logger.warning("Evolução não montada (%s).", type(erro).__name__)
+    return None
+
+
+def _contexto_raio_x(plano: bool = True) -> dict:
+    """O último Raio-X da empresa logada, só com o que o plano libera, e os planos envolvidos. `plano`: monta também
+    o Plano de Ação (só as páginas o usam; as rotas JSON não)."""
     empresa = current_user.empresa
     dados = entitlements.catalogo()
     liberadas = entitlements.funcionalidades_da_empresa(empresa.id_empresa)
@@ -104,6 +137,7 @@ def _contexto_raio_x() -> dict:
         "plano_precificacao": dados.plano_necessario("alerta_precificacao"),
         "plano_cmv": dados.plano_necessario("diagnostico_cmv"),
         "plano_historico": None, "url_upgrade": entitlements.url_upgrade, "apresentacao": None,
+        "plano_acao": None, "evolucao": None,
     }
     registro = raio_x_servico.ultimo(empresa.id_empresa)
     if registro is None:
@@ -118,6 +152,9 @@ def _contexto_raio_x() -> dict:
         "raio_x": visao, "linha_raio_x": linha,
         # Para leigos (14/11/2026): avisos por impacto, explicações (i) e as linhas das tabelas.
         "apresentacao": raio_x_apresentacao.preparar(visao, linha.arquivos),
+        # Etapa 2 (14/11/2026): o período e o ritmo por mês e por ano dos cards, e o Plano de Ação (12 meses). Do
+        # resultado sem filtro saem só as datas das fatias, quais relatórios trazem custo e se trazem estoque.
+        "plano_acao": _plano_de_acao(visao, bruto, linha) if plano else None,
         "recomendacao": {"plano": recomendado, "motivos": recomendacao["motivos"], "upgrade": upgrade,
                          "url": entitlements.url_upgrade(recomendado) if upgrade else None},
         # O menor plano acima do atual cujo corte, pelo calendário, não esconde nenhum relatório enviado.
@@ -126,6 +163,9 @@ def _contexto_raio_x() -> dict:
                                  and raio_x_servico.mostra_todas_as_fatias(bruto["fatias"], n.limite_historico_meses)),
                                 None),
     })
+    # Etapa 3 (14/11/2026): o painel Evolução & Conquistas, no Plano de Ação das duas páginas.
+    if plano and contexto["plano_acao"] is not None:
+        contexto["evolucao"] = _evolucao(empresa.id_empresa, liberadas)
     return contexto
 
 
@@ -271,7 +311,7 @@ def planos():
 @cliente_required
 @requer_funcionalidade("raio_x_entrada")
 def api_diagnostico():
-    contexto = _contexto_raio_x()
+    contexto = _contexto_raio_x(plano=False)
     if contexto["raio_x"] is None:
         return _erro_json("Nenhum Raio-X foi enviado ainda.", 404)
     return jsonify(_json_raio_x(contexto))
@@ -298,14 +338,14 @@ def api_diagnostico_enviar():
             current_app.logger.warning("Raio-X não gravado (%s).", type(erro).__name__)
             return _erro_json("Não foi possível gravar o Raio-X. Tente novamente.", 503)
     _disparar_aviso_de_raio_x(aviso)
-    return jsonify(_json_raio_x(_contexto_raio_x())), 201
+    return jsonify(_json_raio_x(_contexto_raio_x(plano=False))), 201
 
 
 @onboarding_bp.route("/api/onboarding/diagnostico/auditoria")
 @cliente_required
 @requer_funcionalidade("auditoria_abaixo_custo")
 def api_auditoria():
-    contexto = _contexto_raio_x()
+    contexto = _contexto_raio_x(plano=False)
     if contexto["raio_x"] is None:
         return _erro_json("Nenhum Raio-X foi enviado ainda.", 404)
     visao = contexto["raio_x"]

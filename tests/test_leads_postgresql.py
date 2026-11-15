@@ -636,7 +636,9 @@ class _ClusterDosLeads(_PrivateCluster):
         self.stage = "migração até head"
         self._migrar(upgrade, "head")
         self.head = ScriptDirectory(MIGRATIONS).get_current_head()
-        self.check("migration_reaches_head", self._revisao() == self.head == REVISAO_LEADS
+        # A cadeia segue depois da última revisão do lead (a d9e4b7a2c6f1, dos retratos do Raio-X, não mexe nelas).
+        cadeia_lead = {r.revision for r in ScriptDirectory(MIGRATIONS).iterate_revisions(self.head, "base")}
+        self.check("migration_reaches_head", self._revisao() == self.head and REVISAO_LEADS in cadeia_lead
                    and set(TABELAS) <= self._tabelas() and self._funcao_existe(), f"revisão={self._revisao()}")
         diferencas = self._diferencas_metadata()
         self.check("metadata_matches_models", diferencas == [], repr(diferencas)[:400])

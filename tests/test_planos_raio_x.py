@@ -498,8 +498,15 @@ class MigracaoPlanosTests(_PlanosCase):
     def test_downgrade_recusa_apagar_raio_x_gravado(self):
         resposta = self._enviar_raio_x(("jan.csv", JANEIRO))
         self.assertEqual(resposta.status_code, 303)
-        with self.assertRaises(SystemExit):
+        # O Raio-X também deixou o retrato do mês (Etapa 3), cuja migração recusa antes: sem ele, quem recusa é a
+        # b3e9d6c1f7a2, pelo Raio-X gravado.
+        self.db.session.execute(self.db.text("DELETE FROM diagnostico_fechamento"))
+        self.db.session.commit()
+        with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
             self._migrar("downgrade", "a8d3f6b91c24")
+        self.assertIn("Downgrade dos planos por nível recusado", registro.output[0])
+        self.assertEqual(self.db.session.scalar(self.db.text("SELECT version_num FROM alembic_version")),
+                         "b3e9d6c1f7a2")
         self.assertIsNotNone(self._linha())
 
     def test_downgrade_recusa_apagar_catalogo_alterado(self):
@@ -785,8 +792,9 @@ class RaioXPortalTests(_PlanosCase):
         self._enviar_raio_x(("jan.csv", JANEIRO))
         self.assertEqual(self._linha().versao_regras, raio_x.VERSAO_REGRAS)
         # 11.4: saneamento de 11/2026; 11.5: unificação do motor (custo a confirmar, centavos, formatos); 11.6:
-        # indicadores executivos (o nó indicadores_executivos e as fatias mensais no Raio-X do cliente).
-        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.6")
+        # indicadores executivos (o nó indicadores_executivos e as fatias mensais no Raio-X do cliente); 11.7: Plano de
+        # Ação (a venda dos produtos com variação de preço ou sem custo, no scanner).
+        self.assertEqual(raio_x.VERSAO_REGRAS, "raio-x-2026-11.7")
 
     def test_api_envia_e_le_o_raio_x(self):
         self.assertEqual(self.cliente_http.get(API).status_code, 404)
@@ -950,6 +958,8 @@ class RaioXPortalTests(_PlanosCase):
     def test_exclusao_permanente_da_empresa_leva_o_raio_x(self):
         from horario import agora_utc
         self._enviar_raio_x(("jan.csv", JANEIRO))
+        self.assertEqual(self.db.session.scalar(self.db.text(
+            "SELECT count(*) FROM diagnostico_fechamento WHERE id_empresa = :e"), {"e": self.empresa_id}), 1)
         empresa = self.db.session.get(self.Empresa, self.empresa_id)
         empresa.deletado_em = agora_utc().replace(tzinfo=None)
         self.db.session.commit()
@@ -960,6 +970,9 @@ class RaioXPortalTests(_PlanosCase):
         self.assertEqual(resposta.status_code, 302)
         self.assertIsNone(self._linha())  # expira o mapa de identidade antes de reler a empresa
         self.assertIsNone(self.db.session.get(self.Empresa, self.empresa_id))
+        # Os retratos mensais da evolução (Etapa 3) saem junto, por ON DELETE CASCADE.
+        self.assertEqual(self.db.session.scalar(self.db.text(
+            "SELECT count(*) FROM diagnostico_fechamento WHERE id_empresa = :e"), {"e": self.empresa_id}), 0)
 
     def test_aceite_pendente_dos_termos_trava_a_api_com_428(self):
         from horario import agora_utc

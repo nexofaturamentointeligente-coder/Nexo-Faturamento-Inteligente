@@ -14,6 +14,8 @@ import uuid
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
+from alembic.script import ScriptDirectory
+
 from tests.deploy_support import ROOT, DeployTestCase
 
 AGORA = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
@@ -21,6 +23,9 @@ AGORA = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
 # 6a8f2d4c0e13 agenda o expurgo no pg_cron, sem efeito no SQLite, 7c4e2a9b5d31 é a Etapa 2,
 # 9b3e5d7f1a28, a Etapa 3, e c5f8a1d3e7b9, os indicadores executivos do lead).
 REVISAO = "c5f8a1d3e7b9"
+# A head da cadeia inteira: depois da c5f8a1d3e7b9 vêm revisões que não mexem nas tabelas de lead (a d9e4b7a2c6f1,
+# dos retratos mensais do Raio-X). O downgrade passa por elas antes de chegar às revisões do lead.
+HEAD = ScriptDirectory(str(ROOT / "migrations")).get_current_head()
 REVISAO_ETAPA_3 = "9b3e5d7f1a28"
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 REVISAO_SEM_EFEITO = "6a8f2d4c0e13"
@@ -60,7 +65,7 @@ class _LeadsCase(DeployTestCase):
 class EsquemaTests(_LeadsCase):
     def test_tabelas_colunas_e_indices_da_revisao(self):
         inspetor = inspect(self.db.engine)
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
         colunas = {c["name"] for c in inspetor.get_columns("lead_avaliacao")}
         self.assertEqual(colunas, {
             "id", "nome_contato", "email", "whatsapp", "nome_loja", "score_saude_cadastral", "vazamento_total_r$",
@@ -303,7 +308,7 @@ class DowngradeTests(_LeadsCase):
         # Sem dado da Etapa 3 nem indicadores, a c5f8a1d3e7b9 e a 9b3e5d7f1a28 descem; o SQLite registra esses
         # passos antes da recusa.
         self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
-                      (REVISAO, REVISAO_ETAPA_3, REVISAO_ETAPA_2))
+                      (HEAD, REVISAO, REVISAO_ETAPA_3, REVISAO_ETAPA_2))
         self.assertEqual(self.db.session.scalar(text("SELECT categoria_produto FROM brainstorming_dados_pdv")),
                          "BEBIDAS")
 
@@ -313,7 +318,7 @@ class DowngradeTests(_LeadsCase):
         self.assertIn("Downgrade da Etapa 3 da Avaliação de Cenário recusado", registro.output[0])
         # Sem indicadores no lead, a c5f8a1d3e7b9 desce antes; o SQLite pode registrar esse passo antes da recusa.
         self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
-                      (REVISAO, REVISAO_ETAPA_3))
+                      (HEAD, REVISAO, REVISAO_ETAPA_3))
 
     def test_downgrade_da_etapa_3_recusa_linha_das_regras_novas_ou_resumo_preenchido(self):
         lead = self.lead()
@@ -345,7 +350,7 @@ class DowngradeTests(_LeadsCase):
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM lead_avaliacao")), 1)
         self._migrar("upgrade", "head")
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
         self.assertIsNone(self.db.session.scalar(text(
             "SELECT fim_ultimo_relatorio_com_venda FROM brainstorming_dados_pdv")))
@@ -392,7 +397,7 @@ class DowngradeTests(_LeadsCase):
         # PostgreSQL a recusa desfaz tudo (ensaio próprio). A linha de PDV fica: a 7c4e2a9b5d31 não recria
         # a tabela do lead, e o CASCADE não a apaga.
         self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
-                      (REVISAO, REVISAO_ETAPA_2, REVISAO_SEM_EFEITO, REVISAO_QUE_RECUSA))
+                      (HEAD, REVISAO, REVISAO_ETAPA_2, REVISAO_SEM_EFEITO, REVISAO_QUE_RECUSA))
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
         colunas = {c["name"] for c in inspect(self.db.engine).get_columns("brainstorming_dados_pdv")}
         self.assertIn("chave_produto", colunas)

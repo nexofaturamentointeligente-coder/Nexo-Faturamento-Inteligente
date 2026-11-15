@@ -3,7 +3,8 @@ plano vê. O cálculo fica em raio_x.py, no processo isolado do ETL (etl_runtime
 
   - Os arquivos vão para um diretório temporário com o mesmo teto de tamanho do upload,
     são validados e lidos no processo isolado e somem com o diretório: só o resultado
-    (agregados e listas resumidas) fica no banco, uma linha por empresa.
+    (agregados e listas resumidas) fica no banco, uma linha por empresa, mais o retrato
+    mensal da evolução (Etapa 3, diagnostico_fechamento: só agregados, um por mês).
   - visao() devolve uma cópia do resultado só com o que o plano libera. O dado protegido
     vira None, então nem o HTML nem o JSON levam o valor: o desfoque da tela é desenho
     sobre um marcador, não um filtro sobre o número verdadeiro.
@@ -12,7 +13,7 @@ plano vê. O cálculo fica em raio_x.py, no processo isolado do ETL (etl_runtime
 from __future__ import annotations
 
 import copy
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 import json
@@ -21,15 +22,20 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import time
+from weakref import WeakKeyDictionary
 
+from sqlalchemy import inspect, select
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.utils import secure_filename
 
 from etl_inputs import ETLInputError
 from etl_limits import get_limits
 import etl_runtime
+import evolucao
 from extensions import db
-from horario import agora_utc
-from models import DiagnosticoEntrada
+from horario import agora_utc, instante_utc
+from models import DiagnosticoEntrada, DiagnosticoFechamento
 import raio_x
 import security_gatekeeper
 
@@ -201,8 +207,10 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
 # Banco
 # ---------------------------------------------------------------------------
 def salvar(id_empresa: int, id_usuario: int, resultado: dict, recomendacao: dict, nomes: list) -> DiagnosticoEntrada:
-    """Grava (sem commit) o Raio-X da empresa no lugar do anterior."""
+    """Grava (sem commit) o Raio-X da empresa no lugar do anterior e o retrato dele na evolução mensal (Etapa 3)."""
     linha = db.session.get(DiagnosticoEntrada, id_empresa, with_for_update=True, populate_existing=True)
+    # O Raio-X que sai: vira o Marco Zero de quem ainda não tem retrato (_registrar_fechamento).
+    anterior = (linha.gerado_em, linha.resultado) if linha is not None else None
     if linha is None:
         linha = DiagnosticoEntrada(id_empresa=id_empresa)
         db.session.add(linha)
@@ -221,6 +229,9 @@ def salvar(id_empresa: int, id_usuario: int, resultado: dict, recomendacao: dict
     linha.plano_recomendado = recomendacao["plano"]
     linha.resultado = json.dumps({**resultado, "recomendacao": recomendacao, "nomes_arquivos": nomes},
                                  ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    # O Raio-X vai ao banco antes do retrato: um erro dele sobe como sempre subiu.
+    db.session.flush()
+    _registrar_fechamento(id_empresa, linha.gerado_em, resultado, anterior)
     return linha
 
 
@@ -238,6 +249,153 @@ def ultimo(id_empresa: int) -> tuple[DiagnosticoEntrada, dict] | None:
     if not isinstance(dados, dict) or not raio_x.CHAVES_OBRIGATORIAS <= set(dados):
         return None
     return linha, dados
+
+
+# ---------------------------------------------------------------------------
+# Evolução & Conquistas (Etapa 3, 14/11/2026): os retratos mensais
+# ---------------------------------------------------------------------------
+TABELA_FECHAMENTO = "diagnostico_fechamento"
+REVISAO_FECHAMENTO = "d9e4b7a2c6f1"
+_REVERIFICAR_FECHAMENTO_SEGUNDOS = 30
+_fechamento_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
+
+
+def fechamentos_disponiveis(sessao=None) -> bool:
+    """True quando a tabela dos retratos (migração d9e4b7a2c6f1) existe. Confirmada a presença, o resultado fica fixo
+    para o engine; a ausência é reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo (como
+    entitlements.esquema_planos_disponivel). Sem a tabela, o Raio-X grava igual e a evolução mostra o estado inicial."""
+    sessao = sessao or db.session
+    engine = sessao.get_bind()
+    estado = _fechamento_por_engine.get(engine)
+    if estado is True:
+        return True
+    if estado is not None and time.monotonic() - estado < _REVERIFICAR_FECHAMENTO_SEGUNDOS:
+        return False
+    presente = inspect(sessao.connection()).has_table(TABELA_FECHAMENTO)
+    _fechamento_por_engine[engine] = True if presente else time.monotonic()
+    if not presente:
+        logger.info("Tabela %s ausente: a evolução mensal espera a migração %s.", TABELA_FECHAMENTO,
+                    REVISAO_FECHAMENTO)
+    return presente
+
+
+def retrato_do_raio_x(dados: dict, gerado_em) -> dict:
+    """O retrato de um Raio-X gravado (evolucao.retrato), com tudo calculado e nada escondido: o plano esconde na
+    hora de mostrar (evolucao.comparar)."""
+    return evolucao.retrato(visao(dados, evolucao.TUDO, None), dados, gerado_em)
+
+
+def _gravar_retrato(id_empresa: int, retrato: dict) -> None:
+    """Grava (sem commit) o retrato no mês dele, no lugar do retrato do mesmo mês."""
+    competencia = date.fromisoformat(retrato["competencia"])
+    linha = db.session.scalar(
+        select(DiagnosticoFechamento)
+        .where(DiagnosticoFechamento.id_empresa == id_empresa, DiagnosticoFechamento.competencia == competencia)
+        .with_for_update()
+    )
+    if linha is None:
+        linha = DiagnosticoFechamento(id_empresa=id_empresa, competencia=competencia)
+        db.session.add(linha)
+    linha.gerado_em = datetime.fromisoformat(retrato["gerado_em"])
+    linha.versao_regras = (retrato.get("versao_regras") or retrato["versao"])[:40]
+    linha.indicadores = json.dumps(retrato, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def esquecer_fechamentos(sessao=None) -> None:
+    """Esquece a presença da tabela dos retratos: a próxima leitura confere de novo (depois de uma falha de banco ou
+    de um downgrade com o processo no ar)."""
+    sessao = sessao or db.session
+    _fechamento_por_engine.pop(sessao.get_bind(), None)
+
+
+def _registrar_fechamento(id_empresa: int, gerado_em, resultado: dict, anterior: tuple | None) -> None:
+    """O retrato do Raio-X recém-gravado, na mesma transação, num SAVEPOINT (a linha do Raio-X já foi enviada ao
+    banco: um erro dela nunca se confunde com um erro do retrato). Sem retrato nenhum da empresa e com um Raio-X
+    anterior de outro mês (e das regras raio-x-2026-11.5 em diante), grava antes o retrato dele: o Marco Zero de quem
+    fez o Raio-X antes da Etapa 3. Sem a
+    tabela (migração não aplicada) ou com qualquer erro, o Raio-X grava igual e só o retrato falta (fica no log): a
+    evolução nunca derruba o Raio-X."""
+    try:
+        with db.session.begin_nested():
+            # Dentro do SAVEPOINT: no PostgreSQL, uma consulta que falha fora dele abortaria a transação do Raio-X.
+            if not fechamentos_disponiveis():
+                return
+            ja_tem = db.session.scalar(select(DiagnosticoFechamento.id_fechamento)
+                                       .where(DiagnosticoFechamento.id_empresa == id_empresa).limit(1)) is not None
+            novos = []
+            if (not ja_tem and anterior is not None
+                    and evolucao.competencia(anterior[0]) != evolucao.competencia(gerado_em)):
+                dados_anteriores = _resultado_legivel(anterior[1])
+                # Com as regras de antes da raio-x-2026-11.5 (o custo implausível dentro da perda), o Raio-X
+                # anterior não serve de base: o novo vira o Marco Zero.
+                if dados_anteriores is not None and evolucao.regras_comparaveis(dados_anteriores.get("versao")):
+                    novos.append(retrato_do_raio_x(dados_anteriores, anterior[0]))
+            novos.append(retrato_do_raio_x(resultado, gerado_em))
+            for retrato in novos:
+                _gravar_retrato(id_empresa, retrato)
+            db.session.flush()
+    except SQLAlchemyError as erro:
+        esquecer_fechamentos()
+        logger.warning("Retrato da evolução não gravado (empresa %s): %s.", id_empresa, type(erro).__name__)
+    except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError) as erro:
+        logger.warning("Retrato da evolução não gravado (empresa %s): %s.", id_empresa, type(erro).__name__)
+
+
+def _resultado_legivel(texto) -> dict | None:
+    """O JSON gravado de um Raio-X, se for legível e completo; None senão."""
+    try:
+        dados = json.loads(texto)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(dados, dict) or not raio_x.CHAVES_OBRIGATORIAS <= set(dados):
+        return None
+    return dados
+
+
+def retratos_da_empresa(id_empresa: int) -> list:
+    """Os retratos gravados da empresa, do mês mais antigo ao mais recente (vazio sem a tabela). O JSON ilegível
+    fica de fora (evolucao.comparar também descarta o retrato fora do formato)."""
+    if not fechamentos_disponiveis():
+        return []
+    retratos = []
+    for texto in db.session.scalars(select(DiagnosticoFechamento.indicadores)
+                                    .where(DiagnosticoFechamento.id_empresa == id_empresa)
+                                    .order_by(DiagnosticoFechamento.competencia)):
+        try:
+            retratos.append(json.loads(texto))
+        except (TypeError, ValueError):
+            logger.warning("Retrato da evolução ilegível (empresa %s): ignorado.", id_empresa)
+    return retratos
+
+
+def _mesmo_instante(texto, instante) -> bool:
+    try:
+        return abs((datetime.fromisoformat(texto) - instante_utc(instante)).total_seconds()) < 1
+    except (TypeError, ValueError):
+        return False
+
+
+def evolucao_da_empresa(id_empresa: int, liberadas: frozenset) -> dict | None:
+    """O painel Evolução & Conquistas da empresa (evolucao.comparar): None sem o Raio-X do PDV no plano ou sem Raio-X.
+    O Raio-X atual sem retrato (feito antes da Etapa 3, ou com a gravação do retrato falhando) entra calculado na
+    hora, sem gravar: com ele sozinho, o painel mostra o estado inicial."""
+    if "raio_x_entrada" not in liberadas:
+        return None
+    retratos = retratos_da_empresa(id_empresa)
+    gerado_em = db.session.scalar(select(DiagnosticoEntrada.gerado_em)
+                                  .where(DiagnosticoEntrada.id_empresa == id_empresa))
+    if gerado_em is not None and not any(isinstance(r, dict) and _mesmo_instante(r.get("gerado_em"), gerado_em)
+                                         for r in retratos):
+        registro = ultimo(id_empresa)
+        # O Raio-X com regras de antes da raio-x-2026-11.5 não vira Marco Zero (o próximo Raio-X fica no lugar dele).
+        if registro is not None and (retratos or evolucao.regras_comparaveis(registro[1].get("versao"))):
+            linha, dados = registro
+            try:
+                retratos.append(retrato_do_raio_x(dados, linha.gerado_em))
+            except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError) as erro:
+                logger.warning("Retrato do Raio-X atual não montado (empresa %s): %s.", id_empresa,
+                               type(erro).__name__)
+    return evolucao.comparar(retratos, liberadas)
 
 
 # ---------------------------------------------------------------------------

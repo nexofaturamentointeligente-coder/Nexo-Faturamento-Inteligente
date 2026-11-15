@@ -27,6 +27,7 @@ import contract_policy
 import emails
 import politica_senha
 import preferencias_usuario
+import raio_x_servico
 from blueprints import auth
 from tests.contratos_support import T0, TEXTO_PRIVADO, ContratosCase
 from tests.deploy_support import ROOT
@@ -1354,6 +1355,7 @@ class EsquemaAusenteTests(_ConfigCase):
                 patch("logging.config.fileConfig"):
             downgrade(directory=str(ROOT / "migrations"), revision="b6935e8de9d4")
         preferencias_usuario._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
 
     def test_sem_as_tabelas_o_portal_funciona_e_os_ajustes_ficam_indisponiveis(self):
         from models import ChamadoSuporte

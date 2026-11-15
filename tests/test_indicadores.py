@@ -2874,7 +2874,7 @@ class LeadTests(_BancoCase):
         self.assertEqual(estado[ids["convertido"]], ("convertido", False))
 
     def test_downgrade_recusa_com_indicadores_e_desce_sem_eles(self):
-        from tests.test_leads_avaliacao import REVISAO, REVISAO_ETAPA_3, DowngradeTests
+        from tests.test_leads_avaliacao import HEAD, REVISAO, REVISAO_ETAPA_3, DowngradeTests
         from sqlalchemy import inspect, text
         migrar = DowngradeTests._migrar
         self._registrar()
@@ -2891,7 +2891,7 @@ class LeadTests(_BancoCase):
         # Sem o modo batch, as linhas de PDV não saem em cascata.
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), linhas)
         migrar(self, "upgrade", "head")
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), REVISAO)
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
 
 
 if __name__ == "__main__":

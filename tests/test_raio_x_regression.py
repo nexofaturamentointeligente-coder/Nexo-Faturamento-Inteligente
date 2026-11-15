@@ -9,8 +9,9 @@ relatório nenhum que não os tenha.
 
 Campo NOVO só passa se estiver em ACRESCIMOS_APROVADOS, com o motivo. Nenhum valor antigo pode
 mudar nem sumir; a única troca aprovada é o rótulo da versão das regras do Raio-X
-(VALORES_ALTERADOS_APROVADOS), que subiu com o saneamento (11.4), com a unificação do motor (11.5) e
-com os indicadores executivos (11.6, que acrescentam o nó indicadores_executivos).
+(VALORES_ALTERADOS_APROVADOS), que subiu com o saneamento (11.4), com a unificação do motor (11.5),
+com os indicadores executivos (11.6, que acrescentam o nó indicadores_executivos) e com o Plano de Ação
+(11.7, que acrescenta ao scanner a venda dos produtos com variação de preço ou sem custo).
 Nenhum conjunto histórico tem item de custo implausível nem total informado com fração de centavo
 que mude a soma: as duas regras da unificação não alteram valor nenhum daqui (os testes delas estão
 em test_cobertura_leiautes_erp.py e test_planos_raio_x.py).
@@ -63,14 +64,18 @@ ACRESCIMOS_APROVADOS: dict = {
         "Indicadores executivos 11/2026 (raio-x-2026-11.6): o nó com os 21 indicadores (indicadores_executivos.py), "
         "conferido pelo contrato em test_indicadores_novos_passam_no_contrato; os valores têm testes próprios em "
         "tests/test_indicadores.py. Campo novo; nenhum valor antigo muda."),
+    "raio_x.*.resultado.scanner.faturamento_variacao_ou_sem_custo": (
+        "Plano de Ação 11/2026 (raio-x-2026-11.7): a venda dos produtos com variação de preço ou sem custo, base do "
+        "ganho de margem do cenário otimizado (plano_acao.py). Campo novo, conferido entre as duas partes em "
+        "test_venda_com_variacao_ou_sem_custo_fica_entre_as_partes; nenhum valor antigo muda."),
 }
 # Caminho (padrão fnmatch) -> (valor da referência, valor aprovado, motivo). Só o rótulo da versão:
 # nenhum valor de relatório pode mudar.
 VALORES_ALTERADOS_APROVADOS: dict = {
-    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.6",
-                                  "Saneamento 11/2026 (11.4), unificação do motor 11/2026 (11.5) e indicadores "
-                                  "executivos 11/2026 (11.6): a versão das regras do Raio-X sobe para separar o "
-                                  "resultado gravado antes do gravado depois."),
+    "raio_x.*.resultado.versao": ("raio-x-2026-11.3", "raio-x-2026-11.7",
+                                  "Saneamento 11/2026 (11.4), unificação do motor 11/2026 (11.5), indicadores "
+                                  "executivos 11/2026 (11.6) e Plano de Ação 11/2026 (11.7): a versão das regras do "
+                                  "Raio-X sobe para separar o resultado gravado antes do gravado depois."),
 }
 
 
@@ -328,6 +333,21 @@ class RegressaoDoMotorTests(unittest.TestCase):
             if "resultado" in saida:
                 with self.subTest(caso=caso):
                     self.assertEqual(saida["resultado"]["auditoria"]["custo_a_confirmar"], vazio)
+
+    def test_venda_com_variacao_ou_sem_custo_fica_entre_as_partes(self):
+        # O campo novo é aprovado inteiro (ACRESCIMOS_APROVADOS): a venda dos produtos com variação ou sem custo é a
+        # união das duas partes, então fica entre a maior delas e a soma (sem passar do faturamento), em centavos.
+        for caso, saida in self.atual["raio_x"].items():
+            if "resultado" in saida:
+                with self.subTest(caso=caso):
+                    resultado = saida["resultado"]
+                    centavos = lambda valor: round(valor * 100)  # noqa: E731
+                    uniao = centavos(resultado["scanner"]["faturamento_variacao_ou_sem_custo"])
+                    variacao = centavos(resultado["scanner"]["faturamento_envolvido"])
+                    sem_custo = centavos(resultado["saude"]["faturamento_sem_custo"])
+                    total = centavos(resultado["saude"]["faturamento_total"])
+                    self.assertGreaterEqual(uniao, max(variacao, sem_custo))
+                    self.assertLessEqual(uniao, min(total, variacao + sem_custo))
 
     def test_indicadores_novos_passam_no_contrato(self):
         # O nó novo é aprovado inteiro (ACRESCIMOS_APROVADOS): aqui se confere a forma (a mesma conferência do

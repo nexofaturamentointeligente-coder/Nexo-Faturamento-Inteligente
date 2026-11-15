@@ -161,15 +161,41 @@ _DADOS = re.compile(
 _DEFINICAO = re.compile(r"\b(?:significa|significado|quer dizer|definicao|conceito|o que eh|calculad[oa]|como eh)\b")
 # "O NEXO calcula lucro?": pergunta sobre o produto, não pedido de valores.
 _PRODUTO_CALCULA = re.compile(
-    r"\b(?:o |a )?(?:nexo|sistema|portal|plataforma|ferramenta|voces|voce|vc|auditoria de custos?) "
+    r"\b(?:o |a )?(?:nexo|sistema|portal|plataforma|ferramenta|voces|voce|vc) "
     r"(?:calcula|calculam|mostra|mostram|informa|informam|gera|geram|fornece|fornecem|apresenta|apresentam|"
     r"exibe|exibem|tem|possui|da|entrega|entregam|mede|medem|considera|trabalha com|usa|utiliza)\b"
+    r"|\b(?:a )?auditoria de custos? "
+    r"(?:calcula|calculam|mostra|mostram|informa|informam|gera|geram|fornece|fornecem|apresenta|apresentam|"
+    r"exibe|exibem|tem|possui|entrega|entregam|mede|medem|considera|trabalha com|usa|utiliza)\b"
 )
 # "O que mostra a Auditoria de custos?", "Quais números a Auditoria de custos mostra?": pergunta sobre a tela e
 # os números que ela traz (nexo.indicadores.auditoria_de_custos), não pedido de valores. O nome da tela sai do texto
 # antes de procurar o pedido de valores, e não o pedido inteiro: "Me mostra o lucro bruto da auditoria de custos"
 # continua pedindo valores (lucro), que o bot não vê.
 _TELA_DA_AUDITORIA = re.compile(r"\bauditoria de custos?\b|\btabela de lucro bruto\b")
+# Etapa 2 (14/11/2026): "O plano de ação mostra lucro?" é pergunta sobre o Plano de Ação (12 meses), que fala em lucro
+# líquido, e "A auditoria de custos da minha loja mostra o prejuízo?", sobre a tela da Auditoria (o "da minha loja"
+# entre o nome e o verbo escapa de _PRODUTO_CALCULA). Só a oração que começa por um deles, com o verbo logo depois,
+# sai do pedido de valores. Procurada no núcleo da oração (sem "e", "oi", "nexobot", "por favor"...), depois do
+# cumprimento ("bom dia") e da forma indireta ("queria saber se"). "Me mostra no plano de ação o prejuízo", "Qual o
+# lucro do plano de ação da minha empresa?" e "Quanto a auditoria de custos da minha loja mostra de prejuízo?"
+# continuam pedido de valores.
+_VERBOS_DA_TELA = (r"(?:calcula|calculam|mostra|mostram|informa|informam|gera|geram|fornece|fornecem|apresenta|"
+                   r"apresentam|exibe|exibem|tem|possui|entrega|entregam|mede|medem|considera|usa|utiliza)\b")
+_ANTES_DA_TELA = (r"^(?:(?:bom |boa )?(?:dia|tarde|noite) )?(?:(?:nexobot|bot|tudo bem) )*"
+                  r"(?:(?:sera que|por acaso|me diga se|me diz se|(?:(?:queria|quero|gostaria de|preciso) saber"
+                  r"|(?:voce )?sabe(?:ria)?(?: me dizer)?) se) )?")
+# Advérbio curto antes do verbo: "o plano de ação também mostra...", "a auditoria de custos da loja já calcula...".
+_ADVERBIO_DA_TELA = r"(?:(?:tambem|ja|realmente|mesmo) )?"
+_PERGUNTA_SOBRE_O_PLANO = re.compile(
+    _ANTES_DA_TELA + r"(?:o |a |esse |este |o meu |meu |o nosso |nosso )?plano de acao (?:(?:de )?12 meses )?"
+    + _ADVERBIO_DA_TELA + _VERBOS_DA_TELA
+)
+# A Auditoria "da minha loja", "do meu mercado", "das filiais": um complemento curto de lugar entre o nome e o verbo.
+_PERGUNTA_SOBRE_A_AUDITORIA = re.compile(
+    _ANTES_DA_TELA + r"(?:a |essa |esta )?auditoria de custos? d[aoe]s? (?:\w+ ){1,3}?" + _ADVERBIO_DA_TELA
+    + _VERBOS_DA_TELA
+)
 # Pedido de ACESSO à administração (recusa) — perguntas sobre ela vão ao conhecimento.
 _ACESSO_ADMIN = re.compile(
     r"\b(?:acess\w*|entrar|entro|entra|entrei|entre (?:na|no|em|nas|nos|la)|abr\w*|lev\w*|direcion\w*|redirecion\w*|"
@@ -529,7 +555,8 @@ def analisar_oracao(oracao: Oracao) -> Oracao:
     # Pedido de valores ("me mostra o faturamento") não é ordem de navegação.
     # Comparar termos ou perguntar o que o NEXO calcula é dúvida, não pedido de dados.
     pede_dados = bool(_DADOS.search(_TELA_DA_AUDITORIA.sub(" ", texto))) and not _DEFINICAO.search(texto) \
-        and not _COMPARA.search(texto) and not _PRODUTO_CALCULA.search(texto)
+        and not _COMPARA.search(texto) and not _PRODUTO_CALCULA.search(texto) \
+        and not _PERGUNTA_SOBRE_O_PLANO.search(nucleo) and not _PERGUNTA_SOBRE_A_AUDITORIA.search(nucleo)
     if pede_dados and not _NEGACAO.search(texto):
         oracao.tipo = "dados"
         return oracao
@@ -715,8 +742,13 @@ def classificar(normalizado: TextoNormalizado, contexto: Contexto | None = None)
 
     oracoes = [analisar_oracao(o) for o in segmentar(normalizado)]
     oracoes = fundir_fragmentos([o for o in oracoes if o.tokens])
+    # Também pelo texto inteiro quando o resto é vocativo: em "bom dia pessoal", o "bom" sai como abertura e sobraria
+    # "dia pessoal", que não é cumprimento nem assunto (a busca, sem o "bom dia", responderia pela palavra que sobra).
+    # "Bom dia minha sessão caiu" traz o assunto e continua pergunta.
     saudacao = bool(oracoes) and bool(_SAUDACAO.match(" ".join(_sem_abertura(oracoes[0].tokens))
-                                                     or oracoes[0].texto))
+                                                     or oracoes[0].texto)
+                                      or (_SAUDACAO.match(oracoes[0].texto)
+                                          and set(oracoes[0].tokens) <= _VOCATIVOS_DO_CUMPRIMENTO))
     # Cumprimentos ("oi", "tudo bem?") e vocativos não são o assunto da mensagem.
     substantivas = [o for o in oracoes if o.tipo != "cortesia"
                     and not (o.tipo in ("outro", "pergunta") and set(o.tokens) <= _PALAVRAS_SAUDACAO)]
@@ -860,6 +892,10 @@ def classificar(normalizado: TextoNormalizado, contexto: Contexto | None = None)
 
 _PALAVRAS_SAUDACAO = frozenset("oi ola e ai bom boa dia tarde noite boas opa fala tudo bem bom como vai "
                                "voce esta certo eae nexobot bot assistente".split())
+# O que pode vir com um cumprimento sem virar assunto ("bom dia pessoal", "bom dia de novo", "bom dia, voltei").
+_VOCATIVOS_DO_CUMPRIMENTO = _PALAVRAS_SAUDACAO | frozenset(
+    "pessoal equipe galera turma gente todos todas chefe querido querida amigo amiga amigos amigas brasil novamente "
+    "de novo mais uma vez voltei cheguei agora aqui".split())
 _INTENCAO_DO_TIPO = {
     "comando": Intencao.NAVEGAR, "negacao": Intencao.COMANDO_NEGADO,
     "operacao": Intencao.OPERACAO_NAO_PERMITIDA, "pergunta": Intencao.DUVIDA_FUNCIONAL,

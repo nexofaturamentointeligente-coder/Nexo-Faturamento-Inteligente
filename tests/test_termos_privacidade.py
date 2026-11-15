@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 import preferencias_usuario
+import raio_x_servico
 import termos_legais
 from tests.contratos_support import T0, TEXTO_PRIVADO
 from tests.deploy_support import ROOT
@@ -224,6 +225,7 @@ class BloqueioTests(_TermosCase):
                 patch("logging.config.fileConfig"):
             downgrade(directory=str(ROOT / "migrations"), revision="e2f7a94c1d35")
         preferencias_usuario._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
         self.assertFalse(preferencias_usuario.esquema_configuracoes_disponivel())
         cliente, _ = self._entrar()
         self.assertNotIn('id="modalTermos"', self._modal(cliente))

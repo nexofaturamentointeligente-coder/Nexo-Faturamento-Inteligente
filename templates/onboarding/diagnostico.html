@@ -2,6 +2,7 @@
 {% import "_macros.html" as m %}
 {% import "_planos.html" as pl %}
 {% import "_raio_x.html" as rx %}
+{% import "_plano_acao.html" as acao %}
 
 {% block title %}Raio-X do PDV — NEXO{% endblock %}
 {% block page_title %}Raio-X do PDV{% endblock %}
@@ -13,6 +14,7 @@
         <p class="sub">O que os seus relatórios de vendas mostram: vendas sem custo informado, vendas abaixo do preço normal ou do custo e uma estimativa do dinheiro que dá para recuperar.</p>
     </div>
     <div class="page-head-actions">
+        {% if raio_x and plano_acao %}{{ acao.botao() }}{% endif %}
         <a href="{{ url_for('onboarding.planos') }}" class="btn-ghost"><i class="bi bi-layers" aria-hidden="true"></i> Planos</a>
     </div>
 </div>
@@ -30,7 +32,7 @@
     {%- if raio_x.periodo.inicio %} · vendas de {{ raio_x.periodo.inicio[8:10] }}/{{ raio_x.periodo.inicio[5:7] }}/{{ raio_x.periodo.inicio[0:4] }} a {{ raio_x.periodo.fim[8:10] }}/{{ raio_x.periodo.fim[5:7] }}/{{ raio_x.periodo.fim[0:4] }} ({{ raio_x.periodo.meses }} {{ 'mês' if raio_x.periodo.meses == 1 else 'meses' }}){% endif %}
 </p>
 
-{{ pl.recomendacao_plano(recomendacao, raio_x.recuperavel, plano_atual, ex.recuperavel) }}
+{{ pl.recomendacao_plano(recomendacao, raio_x.recuperavel, plano_atual, ex.recuperavel, plano_acao) }}
 
 {% if raio_x.avisos %}
 {{ rx.avisos(ap.avisos, raio_x.avisos) }}
@@ -216,6 +218,7 @@
     <i class="bi bi-info-circle" aria-hidden="true"></i>
     <span>As margens e o dinheiro recuperável são estimativas feitas com os relatórios que você enviou. Margem bruta é o que sobra da venda depois do custo do produto, antes de despesas, impostos e taxas: não é o lucro final da loja, e só conta as vendas com custo informado. O custo é o que o seu sistema informa; o da contabilidade pode ser outro, porque ela confere o estoque. Dinheiro recuperável é quanto a mais teria entrado se cada venda tivesse saído pelo menos pelo preço normal do produto e nunca abaixo do custo. {% if raio_x.auditoria.custo_a_confirmar is not none %}Nos produtos com custo a confirmar (custo de {{ ap.razao_a_confirmar }} vezes o valor das vendas com custo, ou mais), a perda abaixo do custo fica fora dessa conta.{% else %}Este Raio-X é de antes da separação dos produtos com custo a confirmar (custo de {{ ap.razao_a_confirmar }} vezes o valor das vendas com custo, ou mais): a perda abaixo do custo deles entrou na conta. Refaça o Raio-X para tirá-la.{% endif %}</span>
 </div>
+{% if plano_acao %}{{ acao.modal(plano_acao, linha_raio_x, empresa, url_upgrade, plano_auditoria, 'raio_x', evolucao, plano_margem) }}{% endif %}
 {% endif %}
 
 {# ---------------- Envio ---------------- #}
@@ -249,4 +252,5 @@
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/raio-x.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/plano-acao.js') }}" defer></script>
 {% endblock %}

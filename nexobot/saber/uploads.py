@@ -132,6 +132,7 @@ REGISTROS = (
         perguntas=(
             "Como exportar os relatórios do PDV?", "Como tiro o relatório do meu sistema?", "Como gero a planilha de vendas?",
             "Como exporto do ERP?", "Qual relatório do PDV devo usar?", "Como extraio os dados do caixa?",
+            "Posso enviar o relatório de fechamento de caixa?",
         ),
         termos="exportar pdv erp sistema caixa gerar relatorio planilha extrair excel csv",
         relacionados=("nexo.uploads.colunas_necessarias", "nexo.uploads.formatos"),
@@ -396,7 +397,7 @@ REGISTROS = (
         ),
         perguntas=(
             "Como sei se foi processado?", "Qual o status do meu arquivo?", "O que é aguardando validação?",
-            "Meu arquivo foi validado?", "Como confiro se a equipe recebeu?",
+            "Meu arquivo foi validado?", "Como confiro se a equipe recebeu?", "Meu relatório está pendente?",
         ),
         termos="status arquivo enviado processado processamento validado validacao aguardando recebido erro andamento conferir",
         relacionados=("nexo.analises.status", "nexo.processamento.acompanhar_resultado"),

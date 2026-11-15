@@ -25,6 +25,7 @@ from etl_processor import (
 import etl_uploads
 from notifications import classificar_notificacao
 import preferencias_usuario
+import raio_x_servico
 import validacao_pdv
 from tests.contratos_support import ContratosCase
 from tests.deploy_support import ROOT
@@ -202,6 +203,7 @@ class TravaPdvCase(ContratosCase):
         validacao_pdv._esquema_por_engine.clear()
         # O downgrade também tira as colunas da a8d3f6b91c24, que vem depois: como reiniciar o processo.
         preferencias_usuario._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
 
 
 class CenariosPedidosTests(TravaPdvCase):

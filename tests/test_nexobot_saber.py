@@ -323,6 +323,321 @@ class MatrizDePerguntasTests(ConhecimentoBase):
         # A tela como sujeito ("a auditoria de custos mostra...") é pergunta sobre ela.
         self.assertNotIn("Não tenho acesso aos valores", self.responder("A auditoria de custos mostra o lucro?")["resposta"])
 
+    def test_plano_de_acao(self):
+        """Etapa 2 (14/11/2026): o Plano de Ação (12 meses) e os nomes dos cards dele levam ao registro que os
+        explica; o valor do cliente continua fora do alcance do bot."""
+        for pergunta in ("O que é o Plano de Ação?", "O que é o Plano de Ação de 12 meses?",
+                         "O que mostra o Plano de Ação?", "O que é custo da inação?", "O que é o retorno projetado?",
+                         "O que é o cenário conservador?", "O que é o cenário otimizado?",
+                         "Como é calculado o Plano de Ação?", "Como imprimir o Plano de Ação?",
+                         "O que é sangria anualizada?", "O que é sangria?", "O plano de ação mostra lucro?",
+                         "O Plano de Ação calcula lucro líquido?"):
+            with self.subTest(pergunta=pergunta):
+                d = self.responder(pergunta)
+                self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+                self.assertNotIn("Não tenho acesso aos valores", d["resposta"])
+        resposta = self.responder("O que é custo da inação?")["resposta"]
+        self.assertIn("multiplicado por", resposta)
+        # O conservador é 70% do custo da inação (a sangria anualizada), não do "no escuro".
+        self.assertIn("70% do custo da inação", resposta)
+        self.assertIn("Raio-X do PDV e da Auditoria de custos", self.responder("O que é o Plano de Ação?")["resposta"])
+        # O checklist, a impressão e a premissa do "lucro líquido" já estão na resposta padrão (sem "Explique melhor").
+        self.assertIn("navegador", self.responder("Onde fica salvo o checklist do Plano de Ação?")["resposta"])
+        self.assertIn("Imprimir / Salvar PDF", self.responder("Como imprimir o Plano de Ação?")["resposta"])
+        self.assertIn("premissa", self.responder("O plano de ação mostra lucro?")["resposta"])
+        # A frase do lucro líquido que o plano mostra leva à premissa, e não à regra "sem lucro".
+        d = self.responder("Por que diz que vai direto para o lucro líquido?")
+        self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+        self.assertIn("premissa", d["resposta"])
+        # Com abertura, forma indireta ou outro determinante, a pergunta sobre o plano continua sobre o plano.
+        for pergunta in ("E o plano de ação mostra lucro?", "Queria saber se o plano de ação mostra lucro",
+                         "Oi o plano de ação mostra lucro?", "Bom dia o plano de ação mostra lucro?",
+                         "Esse plano de ação mostra lucro?", "Por favor o plano de ação mostra lucro?"):
+            with self.subTest(pergunta=pergunta):
+                d = self.responder(pergunta)
+                self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+                self.assertNotIn("Não tenho acesso aos valores", d["resposta"])
+        # A Auditoria "da minha loja" como sujeito é pergunta sobre a tela; o pedido do número continua recusado.
+        for pergunta in ("A auditoria de custos da minha loja mostra o prejuízo?",
+                         "A auditoria de custos da loja mostra margem?",
+                         "A auditoria de custos da minha empresa mostra lucro?",
+                         "A Auditoria de custos da empresa calcula o lucro bruto?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertNotIn("Não tenho acesso aos valores", self.responder(pergunta)["resposta"])
+        for pergunta in ("Qual o prejuízo que a auditoria de custos da minha loja mostra?",
+                         "Quanto a auditoria de custos da minha loja mostra de prejuízo?",
+                         "Qual o lucro bruto da auditoria de custos da minha loja?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertIn("Não tenho acesso aos valores", self.responder(pergunta)["resposta"])
+        # O prejuízo e os meses da Auditoria ficam com a Auditoria; o período depois da data do Raio-X, com o plano.
+        for pergunta, assunto in (("A auditoria de custos calcula prejuízo?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("A auditoria de custos calcula o prejuízo?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("Por que a auditoria tem menos meses que o Raio-X?",
+                                   "nexo.indicadores.auditoria_de_custos"),
+                                  ("O que significa período depois da data do Raio-X?",
+                                   "nexo.indicadores.plano_de_acao"),
+                                  ("Por que diz período depois da data do Raio-X?", "nexo.indicadores.plano_de_acao")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        self.assertIn("Em menos de 1 mês auditado", self.responder("O que são meses auditados?")["resposta"])
+        # Quarta revisão: a explicação do período já na primeira resposta.
+        for pergunta in ("O que significa período depois da data do Raio-X?", "Por que diz período depois da data do Raio-X?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertIn("depois da data do Raio-X", self.responder(pergunta)["resposta"])
+        for pergunta, assunto in (
+                # O lucro líquido genérico fica na regra sem lucro; a frase do plano, no plano.
+                ("As análises mostram lucro líquido?", "nexo.indicadores.sem_lucro"),
+                ("Vocês mostram lucro líquido?", "nexo.indicadores.sem_lucro"),
+                ("O que é lucro líquido?", "nexo.indicadores.sem_lucro"),
+                ("Por que o plano diz lucro líquido?", "nexo.indicadores.plano_de_acao"),
+                # O preço do plano contratado por mês.
+                ("Quanto eu pago por mês?", "nexo.planos.diferenca"), ("Qual o preço por mês?", "nexo.planos.diferenca"),
+                ("Quanto vou pagar por mês?", "nexo.planos.diferenca"),
+                ("Quanto sai o plano por mês?", "nexo.planos.diferenca"),
+                ("Quanto se paga por mês?", "nexo.planos.diferenca"),
+                # A perda abaixo do custo e o faturamento ficam com a Auditoria.
+                ("Quanto eu perco com vendas abaixo do custo?", "nexo.indicadores.auditoria_de_custos"),
+                ("A auditoria de custos da minha empresa mostra o faturamento?", "nexo.indicadores.auditoria_de_custos"),
+                ("A auditoria de custos do meu mercado mostra o prejuízo?", "nexo.indicadores.auditoria_de_custos"),
+                ("A auditoria de custos da minha farmácia mostra o prejuízo?", "nexo.indicadores.auditoria_de_custos"),
+                # O checklist do Plano de Ação não é o recurso dos semáforos.
+                ("O que é o checklist?", "nexo.indicadores.plano_de_acao"),
+                ("O que é o checklist de execução?", "nexo.indicadores.plano_de_acao"),
+                ("O que significa checklist de ações operacionais?", "nexo.indicadores.semaforos"),
+                # O Raio-X do PDV tem registro próprio; a sangria no Raio-X é a do caixa.
+                ("O que é o Raio-X do PDV?", "nexo.indicadores.raio_x_do_pdv"),
+                ("Como refaço o Raio-X?", "nexo.indicadores.raio_x_do_pdv"),
+                ("Quais relatórios o Raio-X usa?", "nexo.indicadores.raio_x_do_pdv"),
+                ("A sangria entra no Raio-X?", "nexo.processamento.sangria_de_caixa"),
+                ("Qual plano tem o Raio-X?", "nexo.planos.diferenca"),
+                ("Quanto custa o Raio-X?", "nexo.planos.diferenca"),
+                # A perda por mês é do plano (a economia já feita, da evolução); o que a loja compra, do total
+                # comprado.
+                ("Quanto vou perder em 12 meses?", "nexo.indicadores.plano_de_acao"),
+                ("Quanto perdi no mês?", "nexo.indicadores.plano_de_acao"),
+                ("Quanto eu compro por mês?", "nexo.indicadores.total_comprado"),
+                ("Queria saber o lucro da minha loja", "nexo.indicadores.sem_lucro")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        # Saudação com o nome do bot, o nome inteiro do plano e a forma "será que": pergunta sobre a tela.
+        for pergunta in ("Bom dia NexoBot o plano de ação mostra lucro?", "O Plano de Ação (12 meses) mostra lucro?",
+                         "Será que o plano de ação mostra lucro?", "O plano de ação também mostra o prejuízo?",
+                         "A auditoria de custos da minha loja também mostra o prejuízo?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertNotIn("Não tenho acesso aos valores", self.responder(pergunta)["resposta"])
+        for pergunta, assunto in (("A auditoria de custos da minha empresa mostra lucro?",
+                                   "nexo.indicadores.auditoria_de_custos"),
+                                  ("Quanto eu perco por mês?", "nexo.indicadores.plano_de_acao"),
+                                  ("Quanto estou perdendo por mês?", "nexo.indicadores.plano_de_acao"),
+                                  ("O que significa perda por mês?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("O que significa meses enviados?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("Por que descontos aparece como produto?", "nexo.processamento.transformacao"),
+                                  ("Por que a média por mês é igual ao total?", "nexo.indicadores.auditoria_de_custos"),
+                                  # O recurso dos planos (semáforos), e não o checklist do Plano de Ação.
+                                  ("O que significa checklist de ações operacionais?", "nexo.indicadores.semaforos")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        # Amostra parcial tem registro próprio, com o que fazer; os números são os do motor.
+        d = self.responder("O que significa amostra parcial?")
+        self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.amostra_parcial")
+        import raio_x
+        self.assertEqual((raio_x._AMOSTRA_PARCIAL_DIAS, raio_x._AMOSTRA_PARCIAL_FRACAO, raio_x._AMOSTRA_PARCIAL_FRACAO_ANUAL),
+                         (90, 0.15, 0.30))
+        self.assertEqual(raio_x._AMOSTRA_PARCIAL_MINIMO_DE_PRODUTOS, 20)
+        for trecho in ("20 produtos", "90 dias", "15%", "30%", "sem filtro"):
+            self.assertIn(trecho, d["resposta"])
+        # O que cada plano vê no plano já está na resposta padrão; "no mínimo 1" mês, também.
+        self.assertIn("Prata", self.responder("O Bronze vê os produtos do plano de ação?")["resposta"])
+        self.assertIn("(no mínimo 1)", self.responder("O que é custo da inação?")["resposta"])
+        # A janela dos cards da Auditoria (meses auditados) tem explicação.
+        self.assertEqual(self.responder("O que são meses auditados?")["meta"]["assunto"],
+                         "nexo.indicadores.auditoria_de_custos")
+        # "Quanto vou recuperar?" (forma curta) é o plano; recuperar a senha continua sendo a senha.
+        self.assertEqual(self.responder("Quanto vou recuperar?")["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+        self.assertNotEqual(self.responder("Como recupero minha senha?")["meta"]["assunto"],
+                            "nexo.indicadores.plano_de_acao")
+        # Sangria de caixa (as linhas que não são venda) não é a sangria anualizada do plano.
+        for pergunta in ("O que é sangria de caixa?", "A sangria do caixa entra no faturamento?",
+                         "O NEXO conta a sangria como venda?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], "nexo.processamento.sangria_de_caixa")
+        # Só a linha chamada exatamente "Sangria" sai (etl_processor._NAO_PRODUTOS): o bot não promete mais que isso.
+        import etl_processor
+        self.assertIn("SANGRIA", etl_processor._NAO_PRODUTOS)
+        self.assertNotIn("SANGRIA DE CAIXA", etl_processor._NAO_PRODUTOS)
+        self.assertIn("Sangria de caixa\", a linha entra como produto",
+                      self.responder("A sangria do caixa entra no faturamento?")["resposta"])
+        # O lucro líquido do NEXO continua na regra sem lucro.
+        for pergunta in ("O NEXO calcula lucro líquido?", "O sistema calcula lucro líquido?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], "nexo.indicadores.sem_lucro")
+        # As perguntas sobre o plano contratado não vão ao Plano de Ação (12 meses).
+        for pergunta, assunto in (("Qual plano tem o Raio-X?", "nexo.planos.diferenca"),
+                                  ("Meu plano tem o Raio-X?", "nexo.planos.diferenca"),
+                                  ("O meu plano tem Raio-X?", "nexo.planos.diferenca"),
+                                  ("Meu plano inclui a auditoria?", "nexo.planos.diferenca"),
+                                  ("O plano é anual?", "nexo.planos.quais"), ("O plano é de 12 meses?", "nexo.planos.quais"),
+                                  ("Quais são os planos?", "nexo.planos.quais"),
+                                  ("Qual a diferença entre os planos?", "nexo.planos.diferenca"),
+                                  ("Quanto custa o plano por ano?", "nexo.planos.diferenca"),
+                                  ("Quanto custa o plano por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto custa o Prata por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto custa o NEXO por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto custa o plano ao mês?", "nexo.planos.diferenca"),
+                                  ("Quanto é o plano por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto pago no plano por mês?", "nexo.planos.diferenca"),
+                                  ("Tem desconto no plano anual?", "nexo.planos.quais"),
+                                  ("Qual o preço do plano anual?", "nexo.planos.quais"),
+                                  ("Quanto custa o plano anual?", "nexo.planos.diferenca"),
+                                  ("O NEXO calcula prejuízo?", "nexo.indicadores.pressao_nao_e_lucro"),
+                                  ("Quantos meses o histórico mostra?", "nexo.historico.consultar_anterior"),
+                                  ("Até quando vale meu plano?", "nexo.planos.diferenca"),
+                                  ("Quantos meses ficam no histórico?", "nexo.historico.consultar_anterior"),
+                                  ("Quantos meses o histórico guarda?", "nexo.historico.consultar_anterior")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        # Pedido de valores continua pedido de valores, cite ou não o plano.
+        for pergunta in ("Me mostra o lucro do plano de ação", "Me mostra no plano de ação o prejuízo",
+                         "Qual o lucro do plano de ação da minha empresa?", "Mostra o lucro que o plano de ação calcula",
+                         "Qual o lucro da auditoria de custos da minha empresa?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertIn("Não tenho acesso aos valores", self.responder(pergunta)["resposta"])
+        # O número do cliente é pedido de valores: o bot não vê os números da tela.
+        self.assertIn("Não tenho acesso aos valores", self.responder("Qual o meu custo da inação?")["resposta"])
+        # "Quanto vou recuperar?" leva ao plano, que diz onde ver o número e como ele é calculado, sem inventar valor.
+        d = self.responder("Quanto vou recuperar em 12 meses?")
+        self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+        self.assertIn("Raio-X do PDV e da Auditoria de custos", d["resposta"])
+        self.assertNotRegex(d["resposta"], r"R\$ ?\d")
+
+
+    def test_evolucao_conquistas(self):
+        """Etapa 3 (14/11/2026): o painel Evolução & Conquistas, o Marco Zero, os selos e a linha do tempo levam ao
+        registro que os explica; o número do cliente continua fora do alcance do bot."""
+        for pergunta in ("O que é Evolução & Conquistas?", "O que é o Marco Zero?", "O que é economia gerada no mês?",
+                         "O que significa o selo Prejuízo Zero no Caixa?", "Como ganho o selo Cadastro Blindado?",
+                         "O que é o selo Balcão Travado?", "O que é o selo Margem em Alta?",
+                         "Quando a comparação de evolução é ativada?", "O que é o fechamento mensal?",
+                         "Onde vejo a evolução mês a mês?", "O que significa Sanado, Em evolução e Pendente?"):
+            with self.subTest(pergunta=pergunta):
+                d = self.responder(pergunta)
+                self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.evolucao_conquistas")
+                self.assertNotIn("Não tenho acesso aos valores", d["resposta"])
+        resposta = self.responder("O que é Evolução & Conquistas?")["resposta"]
+        for trecho in ("Marco Zero", "início de cada mês", "Visão Geral", "Histórico"):
+            self.assertIn(trecho, resposta)
+        # As regras dos selos batem com evolucao.py.
+        import evolucao
+        self.assertEqual((float(evolucao.LIMITE_CADASTRO_BLINDADO), float(evolucao.QUEDA_CADASTRO_BLINDADO),
+                          float(evolucao.QUEDA_BALCAO_TRAVADO)), (0.02, 0.5, 0.3))
+        selos = self.responder("O que é o selo Balcão Travado?")["resposta"]
+        for trecho in ("2%", "50%", "30%", "Prata"):
+            self.assertIn(trecho, selos)
+        # O número do cliente o bot não vê: a pergunta leva à explicação (onde fica e como é calculado), sem inventar
+        # valor, como "Quanto vou recuperar em 12 meses?".
+        d = self.responder("Qual a minha economia gerada no mês?")
+        self.assertEqual(d["meta"]["assunto"], "nexo.indicadores.evolucao_conquistas")
+        self.assertIn("Visão Geral", d["resposta"])
+        self.assertNotRegex(d["resposta"], r"R\$ ?\d")
+        # Saudação no começo não leva ao painel (o "dia" de "bom dia" não é assunto).
+        for pergunta, assunto in (("Bom dia o plano de ação mostra o prejuízo?", "nexo.indicadores.plano_de_acao"),
+                                  ("Bom dia o NEXO mostra o prejuízo?", "nexo.indicadores.sem_lucro"),
+                                  ("O fechamento mensal é automático?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Qual o valor mensal?", "nexo.planos.diferenca"),
+                                  ("Por que não tem projeção?", "nexo.indicadores.plano_de_acao"),
+                                  ("Bom dia esqueci minha senha", "nexo.acesso.recuperar_senha"),
+                                  ("Oi bom dia como faço meu cadastro?", "nexo.primeiros_passos.como_recebo_acesso"),
+                                  ("Opa bom dia o que é o Raio-X?", "nexo.indicadores.raio_x_do_pdv"),
+                                  ("Quanto dinheiro está saindo por mês?", "nexo.indicadores.plano_de_acao"),
+                                  ("Bom dia quanto custa o plano por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto eu economizei?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Quanto economizei no mês?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("O que significa Ponto de partida?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Por que a etapa 3 está pendente?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("O que é o ritmo estimado?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("O que significa a mais escapando por mês?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("O relatório está pendente há dias", "nexo.uploads.status"),
+                                  ("Quanto está escapando por mês?", "nexo.indicadores.plano_de_acao"),
+                                  ("Quanto eu perdi com vendas abaixo do custo?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("Onde fica a auditoria?", "nexo.indicadores.auditoria_de_custos"),
+                                  ("O que é o Raio X do PDV?", "nexo.indicadores.raio_x_do_pdv"),
+                                  ("Onde fica o Raio X do PDV?", "nexo.indicadores.raio_x_do_pdv"),
+                                  ("O pagamento é mensal ou anual?", "nexo.planos.quais"),
+                                  # O Raio-X aceita XLS e Planilha XML; o envio das análises, não.
+                                  ("Que tipo de arquivo o Raio-X aceita?", "nexo.indicadores.raio_x_do_pdv"),
+                                  ("O Raio-X aceita xls?", "nexo.indicadores.raio_x_do_pdv"),
+                                  ("Quais formatos são aceitos?", "nexo.uploads.formatos"),
+                                  ("Aceita arquivo xls?", "nexo.uploads.formatos"),
+                                  # "Está saindo" com o plano é preço; sem ele, é o dinheiro que escapa.
+                                  ("Quanto está saindo o plano por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto está saindo a mensalidade?", "nexo.planos.diferenca"),
+                                  ("Quanto está saindo o Prata por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto está saindo a assinatura por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto está saindo o NEXO por mês?", "nexo.planos.diferenca"),
+                                  ("Quanto está saindo do caixa por mês?", "nexo.indicadores.plano_de_acao"),
+                                  # A economia por ano é a Projeção Anual; o texto do card é do painel.
+                                  ("Quanto economizo por ano?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Quanto é por ano?", "nexo.planos.diferenca"),
+                                  ("Quanto tempo de histórico tenho no Prata?", "nexo.planos.diferenca"),
+                                  ("Por que aparece a mais escapando por mês?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Por que aparece a menos escapando por mês?", "nexo.indicadores.evolucao_conquistas"),
+                                  ("Por que aparece menos de 1 mês?", "nexo.indicadores.plano_de_acao"),
+                                  # A análise mensal é da equipe; o fechamento mensal do Raio-X, do cliente.
+                                  ("A análise mensal é automática?", "nexo.analises.quando_vejo_resultados"),
+                                  ("O relatório mensal é automático?", "nexo.analises.quando_vejo_resultados")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        # "Pendente" de chamado ou de relatório não é a etapa do Plano de Ação.
+        for pergunta in ("Meu chamado está pendente", "O relatório está pendente há dias", "O que é a etapa 2?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertNotEqual(self.responder(pergunta)["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+        # Cumprimento com vocativo é só saudação: sem o "bom dia", a busca responderia pela palavra que sobra.
+        for mensagem in ("Bom dia pessoal", "Bom dia novamente", "Bom dia, voltei", "Bom dia equipe",
+                         "Olá bom dia pessoal", "Bom dia de novo"):
+            with self.subTest(mensagem=mensagem):
+                self.assertEqual(self.responder(mensagem)["meta"]["intencao"], "saudacao")
+        # Com o assunto junto, não é só cumprimento.
+        for mensagem, assunto in (("Bom dia minha sessão caiu.", "nexo.acesso.sessao_expirada"),
+                                  ("Bom dia status relatório recebido.", "nexo.analises.status_recebido")):
+            with self.subTest(mensagem=mensagem):
+                self.assertEqual(self.responder(mensagem)["meta"]["assunto"], assunto)
+        # A primeira resposta já explica a cobertura de custo (com a exceção), os 5 status e o ritmo sem o piso.
+        resposta = self.responder("O que é Evolução & Conquistas?")["resposta"]
+        for trecho in ("Não comparável", "1 ponto", "não mediu perda", "não vira selo nem Sanado"):
+            with self.subTest(trecho=trecho):
+                self.assertIn(trecho, resposta)
+        resposta = self.responder("O que significa Ponto de partida?")["resposta"]
+        for trecho in ("Ponto de partida (a linha do próprio Marco Zero)", "Sem dados (os relatórios do mês",
+                       "Pendente (igual ou pior)"):
+            with self.subTest(trecho=trecho):
+                self.assertIn(trecho, resposta)
+        resposta = self.responder("O que é o ritmo estimado?")["resposta"]
+        for trecho in ("o ritmo é estimado", "sem o piso de 1 mês"):
+            with self.subTest(trecho=trecho):
+                self.assertIn(trecho, resposta)
+        self.assertIn("Pendente (igual ou pior)", self.responder("Por que a etapa 3 está pendente?")["resposta"])
+        # A linha de desconto só sai pelo nome exato: o bot não promete mais que isso.
+        resposta = self.responder("Por que descontos aparece como produto?")["resposta"]
+        self.assertIn("nome exato", resposta)
+        self.assertIn("Desconto concedido", resposta)
+        # O fechamento depende do envio do cliente: o bot diz como fazer.
+        self.assertIn("enviar o relatório de vendas do mês", self.responder("Como faço o fechamento mensal?")["resposta"])
+        # O Plano de Ação e a análise mensal continuam nos registros deles.
+        self.assertEqual(self.responder("O que é o Plano de Ação?")["meta"]["assunto"], "nexo.indicadores.plano_de_acao")
+        # Perguntas de outros assuntos que só dividem palavras com o painel continuam nos registros delas.
+        for pergunta, assunto in (("O fechamento de caixa entra no faturamento?", "nexo.processamento.sangria_de_caixa"),
+                                  ("O fechamento do caixa entra na análise?", "nexo.processamento.sangria_de_caixa"),
+                                  ("Posso enviar o relatório de fechamento de caixa?", "nexo.uploads.exportar_pdv"),
+                                  ("Como travar descontos no balcão?", "nexo.indicadores.plano_de_acao"),
+                                  ("Como evito desconto no balcão?", "nexo.indicadores.plano_de_acao"),
+                                  ("Meu relatório está pendente", "nexo.uploads.status")):
+            with self.subTest(pergunta=pergunta):
+                self.assertEqual(self.responder(pergunta)["meta"]["assunto"], assunto)
+        for pergunta in ("Minha análise está pendente", "Meu relatório ficou pendente", "Por que o status está pendente?",
+                         "O que é o balcão?", "Quando sai o fechamento mensal da análise?"):
+            with self.subTest(pergunta=pergunta):
+                self.assertNotEqual(self.responder(pergunta)["meta"]["assunto"], "nexo.indicadores.evolucao_conquistas")
+
 
 class ConversaTests(ConhecimentoBase):
     def test_niveis_de_resposta(self):

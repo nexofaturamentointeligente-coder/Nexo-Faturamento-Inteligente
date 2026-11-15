@@ -100,7 +100,7 @@ TABELAS_CONTRATUAIS = (
 # (a migração até "head" também as traz; nascem vazias como as contratuais).
 TABELAS_POSTERIORES = ("sessao_autenticada", "preferencia_usuario", "documento_legal", "aceite_documento",
                        "configuracao_sistema", "validacao_pdv", "diagnostico_entrada",
-                       "lead_avaliacao", "brainstorming_dados_pdv")
+                       "lead_avaliacao", "brainstorming_dados_pdv", "diagnostico_fechamento")
 # Catálogo dos planos por nível (b3e9d6c1f7a2): nasce com os dados de referência que a própria
 # revisão grava (níveis, funcionalidades e a matriz cumulativa), nunca com dado de cliente.
 CATALOGO_PLANOS = {"plano_nivel": 4, "funcionalidade": 15, "plano_funcionalidade": 38}
@@ -456,10 +456,12 @@ class _PrivateCluster:
     def _limpar_cache_esquema():
         import contract_policy
         import preferencias_usuario
+        import raio_x_servico
         import validacao_pdv
         contract_policy._esquema_por_engine.clear()
         preferencias_usuario._esquema_por_engine.clear()
         validacao_pdv._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
 
     def _nova_empresa(self, nome, *, status="ATIVA", deletado_em=None, senha=False):
         from models import Empresa, Usuario

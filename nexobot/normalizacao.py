@@ -192,6 +192,10 @@ def normalizar(texto) -> TextoNormalizado:
             continue
         expandidas = ABREVIACOES.get(palavra, palavra).split()
         for parte in expandidas:
+            # "Raio X" com espaço é o "Raio-X" (que o hífen já junta em "raiox").
+            if parte == "x" and tokens and tokens[-1] == "raio":
+                tokens[-1] = "raiox"
+                continue
             corrigida = corrigir_palavra(parte)
             if corrigida != parte:
                 corrigidos.append((parte, corrigida))

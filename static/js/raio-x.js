@@ -6,6 +6,22 @@
 (function () {
   'use strict';
 
+  /* ---- Âncora para um card recolhido ----
+     O link "Ver todos os alertas de cadastro" do Plano de Ação, no Raio-X, leva a
+     /onboarding/diagnostico/auditoria#alertasCadastroResumo, o <summary> do card dos alertas: o próprio
+     navegador rola até ele e lhe dá o foco (ele é focável; o <details> não é, e o foco se perderia). Aqui o
+     card recolhido abre. A âncora no próprio <details> (#alertasCadastro) também o abre. */
+  function abrirPelaAncora() {
+    var id = '';
+    try { id = decodeURIComponent((window.location.hash || '').slice(1)); } catch (erro) { return; }
+    var alvo = id ? document.getElementById(id) : null;
+    if (!alvo) return;
+    var detalhes = alvo.tagName === 'DETAILS' ? alvo : (alvo.closest ? alvo.closest('details') : null);
+    if (detalhes && !detalhes.open) detalhes.open = true;
+  }
+  abrirPelaAncora();
+  window.addEventListener('hashchange', abrirPelaAncora);
+
   /* ---- Explicação (i) dos indicadores ----
      <details data-kpi-info>: abre uma de cada vez; fecha com Esc (o foco volta ao botão) e com
      um clique fora dela. Com data-kpi-info-passar (o (i) curto da Auditoria), num aparelho com mouse,

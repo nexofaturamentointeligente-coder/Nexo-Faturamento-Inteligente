@@ -1256,7 +1256,8 @@ class PlanoFuncionalidade(db.Model):
 
 class DiagnosticoEntrada(db.Model):
     """
-    Último Raio-X de entrada de cada empresa (um por empresa: o novo substitui o anterior).
+    Último Raio-X de entrada de cada empresa (um por empresa: o novo substitui o anterior). O
+    retrato mensal de cada Raio-X, para a evolução, fica em DiagnosticoFechamento.
 
     Guarda só agregados e as listas resumidas do resultado (JSON em `resultado`); os
     arquivos enviados são lidos no processo isolado do ETL e descartados. A linha sai com
@@ -1293,6 +1294,34 @@ class DiagnosticoEntrada(db.Model):
         CheckConstraint("periodo_inicio IS NULL OR periodo_fim IS NULL OR periodo_inicio <= periodo_fim",
                         name="ck_diagnostico_entrada_periodo"),
         Index("ix_diagnostico_entrada_usuario", "id_usuario"),
+    )
+
+
+class DiagnosticoFechamento(db.Model):
+    """
+    Retrato mensal do Raio-X de entrada (Etapa 3, Evolução & Conquistas, 14/11/2026): um por empresa e
+    mês do Raio-X (`competencia`, dia 1 do mês no horário de Brasília; o Raio-X refeito no mesmo mês
+    substitui o retrato daquele mês). O primeiro é o Marco Zero com que os seguintes se comparam.
+
+    Guarda só agregados (`indicadores`, JSON de evolucao.retrato: ritmos por mês, percentuais e
+    contagens; nenhum nome de produto). Sai com a empresa por ON DELETE CASCADE, como o
+    diagnostico_entrada. Ver evolucao.py e raio_x_servico.
+    """
+    __tablename__ = "diagnostico_fechamento"
+
+    id_fechamento: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_empresa: Mapped[int] = mapped_column(
+        ForeignKey("empresa.id_empresa", ondelete="CASCADE", name="fk_diagnostico_fechamento_empresa"),
+        nullable=False,
+    )
+    competencia: Mapped[date] = mapped_column(Date, nullable=False)
+    gerado_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    versao_regras: Mapped[str] = mapped_column(String(40), nullable=False)
+    indicadores: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        # A chave da empresa vem primeiro: o índice da unicidade serve à leitura de todos os retratos dela.
+        UniqueConstraint("id_empresa", "competencia", name="uq_diagnostico_fechamento_empresa_competencia"),
     )
 
 

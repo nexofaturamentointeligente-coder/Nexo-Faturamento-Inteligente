@@ -234,12 +234,14 @@ class PostgreSQLConfiguracoesTests(unittest.TestCase):
     def test_sem_as_tabelas_nenhuma_consulta_aborta_a_transacao(self):
         """No PostgreSQL, consultar uma tabela que não existe aborta a transação inteira."""
         import preferencias_usuario
+        import raio_x_servico
         import validacao_pdv
         from models import ChamadoSuporte
         with self.app.app_context():
             db.session.remove()
             self._migrar("downgrade", "b6935e8de9d4")
         preferencias_usuario._esquema_por_engine.clear()
+        raio_x_servico._fechamento_por_engine.clear()
         validacao_pdv._esquema_por_engine.clear()
         cliente = self._entrar("um@example.invalid")
         admin = self._entrar("admin1@example.invalid")

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
+{% import "_evolucao.html" as evo %}
 
 {% block title %}Histórico — NEXO{% endblock %}
 {% block page_title %}Histórico{% endblock %}
@@ -18,6 +19,8 @@
     <div><strong>Conta suspensa: são exibidas apenas as análises dos períodos contratados e efetivamente pagos{% if situacao.suspensao_limite %}, disponíveis até {{ situacao.suspensao_limite|instante_local }}{% endif %}.</strong></div>
 </div>
 {% endif %}
+
+{% if evolucao %}{{ evo.linha_do_tempo(evolucao) }}{% endif %}
 
 <div class="table-wrap">
     {% if analises %}

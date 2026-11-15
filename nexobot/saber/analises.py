@@ -263,6 +263,7 @@ REGISTROS = (
         perguntas=(
             "Quando vejo os resultados?", "Quando a análise fica pronta?", "Quanto tempo demora a análise?",
             "Quando sai a devolutiva?", "Em quanto tempo recebo o resultado?",
+            "Quando sai o fechamento mensal da análise?", "A análise mensal é automática?",
         ),
         termos="quando resultados pronta prazo demora tempo publicacao ver",
         relacionados=("nexo.devolutivas.publicacao", "nexo.analises.status"),

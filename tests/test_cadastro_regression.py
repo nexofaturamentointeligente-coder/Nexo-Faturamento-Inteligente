@@ -18,7 +18,8 @@ do motor de 11/2026 subiu a versão das regras do Raio-X para 11.5 e acrescentou
 conjunto tem item assim: o bloco vem zerado, e o teste confere isso antes de comparar o resto. Os
 indicadores executivos de 11/2026 (11.6) acrescentaram o nó "indicadores_executivos", conferido aqui pelo
 contrato (indicadores_executivos.valido) antes de comparar o resto; os valores dele têm testes próprios em
-tests/test_indicadores.py. Nenhum relatório deste conjunto traz a data de cada venda: o Raio-X do cliente,
+tests/test_indicadores.py. O Plano de Ação de 11/2026 (11.7) acrescentou ao scanner a venda dos produtos com
+variação de preço ou sem custo, conferida entre as duas partes antes de comparar o resto. Nenhum relatório deste conjunto traz a data de cada venda: o Raio-X do cliente,
 que agora fatia por mês a venda item a item, continua com um relatório por arquivo.
 
 Recapturar (só com motivo documentado, numa cópia sem .env), informando o commit do motor que roda:
@@ -44,7 +45,7 @@ COMMIT_DE_REFERENCIA = "53020e6"
 
 # O que mudou de propósito no Raio-X depois da captura (ver o texto do módulo).
 MUDANCAS_APROVADAS = {
-    "versao": ("raio-x-2026-11.4", "raio-x-2026-11.6"),
+    "versao": ("raio-x-2026-11.4", "raio-x-2026-11.7"),
     "custo_a_confirmar": {"itens": 0, "faturamento_com_custo": 0.0, "custo_total": 0.0,
                           "perda_desconsiderada": 0.0, "lista": []},
 }
@@ -171,6 +172,11 @@ class CadastroRegressaoTests(unittest.TestCase):
             resultado["versao"] = antiga
             self.assertEqual(resultado["auditoria"].pop("custo_a_confirmar"), MUDANCAS_APROVADAS["custo_a_confirmar"])
             self.assertTrue(indicadores_executivos.valido(resultado.pop("indicadores_executivos")))
+            uniao = round(resultado["scanner"].pop("faturamento_variacao_ou_sem_custo") * 100)
+            variacao = round(resultado["scanner"]["faturamento_envolvido"] * 100)
+            sem_custo = round(resultado["saude"]["faturamento_sem_custo"] * 100)
+            self.assertGreaterEqual(uniao, max(variacao, sem_custo))
+            self.assertLessEqual(uniao, min(round(resultado["saude"]["faturamento_total"] * 100), variacao + sem_custo))
         return saida
 
     def _grupo(self, grupo):

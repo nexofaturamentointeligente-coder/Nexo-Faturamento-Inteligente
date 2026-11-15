@@ -1,0 +1,235 @@
+{# ===================================================================
+   NEXO — Plano de Ação (12 meses) e o horizonte de tempo dos cards (Etapa 2, 14/11/2026)
+   Importar com:  {% import "_plano_acao.html" as acao %}
+   Dados: plano_acao.preparar (contexto "plano_acao" de blueprints/onboarding.py), já sem o que o
+   plano esconde: a lista que o plano não libera chega como None e vira o cadeado com o plano que a
+   libera. Os textos de período e de janela vêm prontos de plano_acao (horizonte, janela). O
+   comportamento (checklist salvo no navegador, barra de progresso e impressão) fica em
+   static/js/plano-acao.js; nada é calculado no navegador.
+
+   janela ........... "Nos 12 meses auditados (média de R$ X/mês)": a janela de tempo dos cards da
+                      Auditoria de custos.
+   botao ............ "🎯 Ver Plano de Ação (12 Meses)": abre o modal.
+   modal ............ o Plano de Ação: comparativo de 12 meses, roteiro em 3 etapas e checklist.
+   =================================================================== #}
+{% import "_macros.html" as m %}
+{% import "_planos.html" as pl %}
+{% import "_evolucao.html" as evo %}
+
+{# ---- A janela de tempo de um card da Auditoria (o texto vem de plano_acao.janela). ---- #}
+{%- macro janela(texto) -%}
+{%- if texto -%}<div class="kpi-foot kpi-foot-janela">{{ texto }}</div>{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Botão do topo das páginas: abre o modal (Bootstrap). ---- #}
+{%- macro botao() -%}
+<button type="button" class="btn-nexo btn-plano-acao" data-bs-toggle="modal" data-bs-target="#planoAcao" aria-haspopup="dialog"><span aria-hidden="true">🎯</span> Ver Plano de Ação (12 Meses)</button>
+{%- endmacro -%}
+
+{# ---- Produto e código, como nas tabelas. ---- #}
+{%- macro _produto(item) -%}
+<span class="plano-acao-produto">{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</span>
+{%- endmacro -%}
+
+{# ---- Link para a lista completa: na mesma página, o script fecha o modal e rola até ela. ---- #}
+{%- macro _lista_completa(href, texto) -%}
+<a class="plano-acao-link plano-acao-nao-imprime" href="{{ href }}" data-plano-ir>{{ texto }} <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+{%- endmacro -%}
+
+{%- macro _bloqueio(oque, plano_auditoria, url_upgrade) -%}
+<p class="plano-acao-bloqueio"><i class="bi bi-lock-fill" aria-hidden="true"></i> A lista {{ oque }} aparece a partir do plano {{ plano_auditoria.nome if plano_auditoria else 'superior' }}. {% if plano_auditoria %}<a href="{{ url_upgrade(plano_auditoria) }}">Conhecer o plano</a>{% endif %}</p>
+{%- endmacro -%}
+
+{%- macro _etapa_estancar(etapa, pagina, url_upgrade, plano_auditoria, razao) -%}
+{%- set abaixo, alertas = etapa.abaixo, etapa.alertas -%}
+{%- set na_auditoria = pagina == 'auditoria' -%}
+<div class="plano-acao-grupo">
+    <p class="plano-acao-grupo-titulo">Vendas abaixo do custo:
+        {% if abaixo.quantidade %}<strong>{{ m.num(abaixo.quantidade) }} {{ 'produto' if abaixo.quantidade == 1 else 'produtos' }}</strong>, R$ {{ m.brl(abaixo.perda) }} de prejuízo no período{% else %}nenhuma{% endif %}</p>
+    {%- if abaixo.bloqueado %}
+    {{ _bloqueio('dos produtos', plano_auditoria, url_upgrade) }}
+    {%- elif abaixo.itens %}
+    <ul class="plano-acao-itens">
+        {%- for item in abaixo.itens %}
+        <li>{{ _produto(item) }}
+            <span class="plano-acao-dado">R$ {{ m.brl(item.perda) }} de prejuízo{% if item.preco_unitario is not none and item.custo_unitario is not none %} · vendido a R$ {{ m.brl(item.preco_unitario) }}/un., custou R$ {{ m.brl(item.custo_unitario) }}/un.{% endif %}</span>
+            {%- if item.custo_unitario is not none %}<span class="plano-acao-fazer">Preço mínimo para não ter prejuízo: R$ {{ m.brl(item.custo_unitario) }}/un.</span>{% endif %}</li>
+        {%- endfor %}
+    </ul>
+    {%- if abaixo.restantes %}<p class="plano-acao-mais">E mais {{ m.num(abaixo.restantes) }} {{ 'produto' if abaixo.restantes == 1 else 'produtos' }} na lista da Auditoria de custos{% if abaixo.alem_da_lista %}, que traz os {{ m.num(abaixo.na_lista) }} de maior perda, de {{ m.num(abaixo.quantidade) }} no total{% endif %}.</p>{% endif %}
+    {{ _lista_completa(('#abaixoTitulo' if na_auditoria else url_for('onboarding.auditoria') ~ '#abaixoTitulo'), 'Ver todos os produtos vendidos com prejuízo') }}
+    {%- endif %}
+</div>
+{%- if alertas.quantidade %}
+<div class="plano-acao-grupo">
+    <p class="plano-acao-grupo-titulo">Alertas de cadastro: <strong>{{ m.num(alertas.quantidade) }} {{ 'item com custo distorcido' if alertas.quantidade == 1 else 'itens com custo distorcido' }}</strong> (custo de {{ razao }} vezes o preço de venda ou mais)</p>
+    {%- if alertas.bloqueado %}
+    {{ _bloqueio('dos itens', plano_auditoria, url_upgrade) }}
+    {%- elif alertas.itens %}
+    <ul class="plano-acao-itens">
+        {%- for item in alertas.itens %}
+        <li>{{ _produto(item) }}
+            <span class="plano-acao-dado">{% if item.custo_unitario is not none %}Custo no sistema R$ {{ m.brl(item.custo_unitario) }}/un.{% endif %}{% if item.preco_unitario is not none %} · preço médio R$ {{ m.brl(item.preco_unitario) }}/un.{% endif %}{% if item.vezes is not none %} ({{ ('%.1f'|format(item.vezes))|replace('.', ',') }} vezes){% endif %}</span>
+            <span class="plano-acao-fazer">Confira se o custo é de uma caixa ou embalagem cadastrada como unidade.</span></li>
+        {%- endfor %}
+    </ul>
+    {%- if alertas.restantes %}<p class="plano-acao-mais">E mais {{ m.num(alertas.restantes) }} {{ 'item' if alertas.restantes == 1 else 'itens' }} nos alertas de cadastro da Auditoria de custos{% if alertas.alem_da_lista %}, que trazem os {{ m.num(alertas.na_lista) }} de maior custo, de {{ m.num(alertas.quantidade) }} no total{% endif %}.</p>{% endif %}
+    {{ _lista_completa(('#alertasCadastroResumo' if na_auditoria else url_for('onboarding.auditoria') ~ '#alertasCadastroResumo'), 'Ver todos os alertas de cadastro') }}
+    {%- endif %}
+</div>
+{%- endif %}
+{%- endmacro -%}
+
+{%- macro _etapa_travar(etapa, pagina) -%}
+<div class="plano-acao-grupo">
+    <p class="plano-acao-grupo-titulo">Dinheiro deixado na mesa em vendas abaixo do preço normal: <strong>R$ {{ m.brl(etapa.vazamento) }}</strong> no período</p>
+    {%- if etapa.itens %}
+    <ul class="plano-acao-itens">
+        {%- for item in etapa.itens %}
+        <li>{{ _produto(item) }}
+            <span class="plano-acao-dado">R$ {{ m.brl(item.vazamento) }} deixados na mesa{% if item.preco_referencia is not none %} · preço normal R$ {{ m.brl(item.preco_referencia) }} ({{ 'de tabela' if item.referencia_tabela else 'o que mais saiu' }}){% endif %} · menor preço cobrado R$ {{ m.brl(item.preco_min) }}</span>
+            {%- if item.preco_referencia is not none %}<span class="plano-acao-fazer">Defina um preço mínimo perto de R$ {{ m.brl(item.preco_referencia) }} e trave o desconto deste produto.</span>{% endif %}</li>
+        {%- endfor %}
+    </ul>
+    {{ _lista_completa(('#scannerTitulo' if pagina == 'raio_x' else url_for('onboarding.diagnostico') ~ '#scannerTitulo'), 'Ver todos os produtos vendidos fora do preço normal') }}
+    {%- endif %}
+</div>
+{%- endmacro -%}
+
+{%- macro _etapa_controle(etapa) -%}
+{%- set pendente, feito = 'bi-circle', 'bi-check-circle-fill' -%}
+{%- set arquivos = etapa.arquivos_sem_coluna or [] -%}
+{%- set rotulos = etapa.arquivos_sem_coluna_rotulos or arquivos -%}
+<ul class="plano-acao-metas">
+    {%- if arquivos %}
+    <li>
+        <i class="bi {{ pendente }}" aria-hidden="true"></i> <span>{% if rotulos | length == 1 %}O arquivo {{ rotulos[0] }} enviado veio{% else %}Os arquivos {{ rotulos[:-1] | join(', ') }} e {{ rotulos[-1] }} enviados vieram{% endif %} sem a <strong>coluna de custo</strong>: exporte {{ 'esse relatório' if arquivos | length == 1 else 'esses relatórios' }} com ela e refaça o Raio-X; se o seu sistema não tem o custo desses produtos, cadastre-o.</span>
+    </li>
+    {%- endif %}
+    <li class="{{ 'is-ok' if etapa.meta_custo in ('ok', 'ok_nos_com_coluna') }}">
+        {%- if etapa.meta_custo == 'sem_coluna' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Enviar o relatório com a <strong>coluna de custo</strong>: se o seu sistema tem o custo dos produtos, exporte o relatório com ela e refaça o Raio-X; se não tem, cadastre o custo {{ 'do produto vendido' if etapa.itens_vendidos == 1 else 'dos ' ~ m.num(etapa.itens_vendidos) ~ ' produtos vendidos' }}.</span>
+        {%- elif etapa.meta_custo == 'cadastrar_nos_com_coluna' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Cadastrar ou conferir o custo dos produtos vendidos sem custo nos relatórios que trazem a coluna: <strong>R$ {{ m.brl(etapa.venda_sem_custo_nos_com_coluna) }}</strong> das vendas desses relatórios saíram sem custo informado.</span>
+        {%- elif etapa.meta_custo == 'ok_nos_com_coluna' %}<i class="bi {{ feito }}" aria-hidden="true"></i> <span>Nos relatórios que trazem a coluna de custo, todo produto vendido teve custo informado.</span>
+        {%- elif etapa.meta_custo == 'cadastrar' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Cadastrar o custo em <strong>{{ m.num(etapa.sem_custo) }} {{ 'produto vendido sem custo' if etapa.sem_custo == 1 else 'produtos vendidos sem custo' }}</strong>{% if etapa.itens_vendidos %} (de {{ m.num(etapa.itens_vendidos) }} {{ 'vendido' if etapa.itens_vendidos == 1 else 'vendidos' }} no período){% endif %}.</span>
+        {%- elif etapa.meta_custo == 'conferir' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Conferir o custo dos produtos com venda sem custo informado: <strong>R$ {{ m.brl(etapa.venda_sem_custo) }}</strong>{% if etapa.pct_sem_custo is not none %} ({{ pl.pct(etapa.pct_sem_custo) }} das vendas){% endif %} saíram sem custo no período, embora esses produtos tenham custo em outras vendas.</span>
+        {%- else %}<i class="bi {{ feito }}" aria-hidden="true"></i> <span>Todo produto vendido teve custo informado.</span>{% endif %}
+    </li>
+    <li class="{{ 'is-ok' if etapa.meta_estoque == 'ok' }}">
+        {%- if etapa.meta_estoque == 'negativo' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Regularizar o lançamento de notas de <strong>{{ m.num(etapa.estoque_negativo) }} {{ 'produto com estoque negativo' if etapa.estoque_negativo == 1 else 'produtos com estoque negativo' }}</strong> (saiu mais do que entrou no sistema).</span>
+        {%- elif etapa.meta_estoque == 'sem_estoque' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Os relatórios enviados não trazem o estoque: envie o relatório com o estoque para conferir os produtos com estoque negativo.</span>
+        {%- elif etapa.meta_estoque == 'desconhecido' %}<i class="bi {{ pendente }}" aria-hidden="true"></i> <span>Este Raio-X não diz se os relatórios trazem o estoque: refaça o Raio-X, com o estoque, para conferir os produtos com estoque negativo.</span>
+        {%- else %}<i class="bi {{ feito }}" aria-hidden="true"></i> <span>Nenhum produto com estoque negativo nos relatórios.</span>{% endif %}
+    </li>
+</ul>
+{%- endmacro -%}
+
+{# ---- O modal do Plano de Ação. `pagina`: 'raio_x' ou 'auditoria' (para onde levam os links das listas). ---- #}
+{%- macro modal(pa, linha, empresa, url_upgrade, plano_auditoria, pagina, ev=none, plano_margem=none) -%}
+{%- set plano, hz = pa.plano, pa.horizonte -%}
+{%- set feitas = plano.etapas | selectattr('concluida_sozinha') | list | length -%}
+{%- set total = plano.etapas | length -%}
+<div class="modal fade nexo-modal plano-acao" id="planoAcao" tabindex="-1" aria-labelledby="planoAcaoTitulo" aria-hidden="true"
+     data-plano-acao data-plano-chave="nexo.planoAcao.{{ empresa.id_empresa }}" data-plano-diagnostico="{{ linha.gerado_em|iso_utc }}">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-lg-down">
+        <div class="modal-content">
+            <div class="modal-header plano-acao-cabeca">
+                <div class="plano-acao-titulos">
+                    <h2 class="modal-title" id="planoAcaoTitulo"><span aria-hidden="true">🎯</span> Plano de Ação (12 meses)</h2>
+                    <p class="plano-acao-sub">{{ empresa.nome_fantasia or empresa.razao_social }} · Raio-X de {{ m.horario(linha.gerado_em) }}{% if hz.meses %} · vendas: {{ hz.texto }}{% endif %}</p>
+                </div>
+                <div class="plano-acao-acoes plano-acao-nao-imprime">
+                    <button type="button" class="btn-ghost" data-plano-imprimir><i class="bi bi-printer" aria-hidden="true"></i> Imprimir / Salvar PDF</button>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar o Plano de Ação"></button>
+                </div>
+            </div>
+            <div class="modal-body">
+                {# ---------------- Etapa 3: Evolução & Conquistas (Marco Zero x último fechamento) ---------------- #}
+                {%- if ev %}
+                <div class="plano-acao-bloco plano-acao-evolucao">{{ evo.painel(ev, plano_margem, url_upgrade, nivel=3, sufixo='Plano') }}</div>
+                {%- endif %}
+                {# ---------------- Bloco 1: comparativo de 12 meses ---------------- #}
+                <section class="plano-acao-bloco" aria-labelledby="planoBloco1">
+                    <h3 class="plano-acao-bloco-titulo" id="planoBloco1"><span class="plano-acao-num" aria-hidden="true">1</span> Comparativo executivo (12 meses)</h3>
+                    {%- if plano.inacao %}
+                    <div class="plano-acao-comparativo">
+                        <div class="plano-acao-card is-inacao">
+                            <span class="plano-acao-rotulo">Custo da Inação (12 meses)</span>
+                            <strong class="plano-acao-valor"><small>R$</small> {{ m.brl(plano.inacao.anual) }}</strong>
+                            <p class="plano-acao-texto">O que a loja deixa de ganhar em 12 meses se nada for corrigido: R$ {{ m.brl(plano.inacao.mensal) }} por mês, no ritmo do período analisado ({{ hz.meses_texto }}).</p>
+                            {%- if plano.inacao.escuro_anual %}
+                            <p class="plano-acao-texto plano-acao-escuro"><strong>No escuro:</strong> R$ {{ m.brl(plano.inacao.escuro_anual) }} do faturamento de 12 meses sai sem custo informado{% if plano.inacao.pct_sem_custo is not none %} ({{ pl.pct(plano.inacao.pct_sem_custo) }} das vendas){% endif %}: nessas vendas, não dá para saber se houve lucro ou prejuízo.</p>
+                            {%- elif plano.inacao.escuro_anual is not none %}
+                            <p class="plano-acao-texto plano-acao-escuro"><strong>No escuro:</strong> nenhuma venda saiu sem custo informado no período analisado.</p>
+                            {%- endif %}
+                        </div>
+                        <div class="plano-acao-card is-retorno">
+                            <span class="plano-acao-rotulo">Retorno Projetado (12 meses)</span>
+                            <strong class="plano-acao-valor"><small>R$</small> {{ m.brl(plano.retorno.conservador) }} <span class="plano-acao-a">a</span> <small>R$</small> {{ m.brl(plano.retorno.otimizado) }}</strong>
+                            <dl class="plano-acao-cenarios">
+                                <div><dt>Cenário Conservador</dt><dd><strong>R$ {{ m.brl(plano.retorno.conservador) }}</strong> <span>{{ pa.percentual_conservador }} da sangria anualizada recuperada.</span></dd></div>
+                                <div><dt>Cenário Otimizado</dt><dd><strong>R$ {{ m.brl(plano.retorno.otimizado) }}</strong> <span>100% da sangria anualizada{% if plano.retorno.ganho_margem is not none %}, mais {{ pa.percentual_ganho_de_margem }} de ganho de margem sobre R$ {{ m.brl(plano.retorno.base_anual) }} de vendas por ano de produtos com variação de preço ou sem custo (R$ {{ m.brl(plano.retorno.ganho_margem) }}){% endif %}.</span></dd></div>
+                            </dl>
+                            {%- if plano.retorno.sem_base %}
+                            <p class="plano-acao-nota">Este Raio-X é de antes do Plano de Ação: refaça o Raio-X para somar ao cenário otimizado o ganho de {{ pa.percentual_ganho_de_margem }} de margem.</p>
+                            {%- endif %}
+                            <p class="plano-acao-destaque">{{ pa.explicacao_do_retorno }}</p>
+                        </div>
+                    </div>
+                    {%- else %}
+                    <p class="plano-acao-aviso"><i class="bi bi-calendar-x" aria-hidden="true"></i> {{ pa.sem_projecao }}</p>
+                    {%- endif %}
+                    {%- if pa.amostra %}
+                    <p class="plano-acao-nota"><span class="selo-amostra">Amostra parcial ({{ pa.amostra.percentual }}% dos itens ativos)</span> O potencial da loja completa tende a ser maior.</p>
+                    {%- endif %}
+                </section>
+
+                {# ---------------- Bloco 2: roteiro em 3 etapas ---------------- #}
+                <section class="plano-acao-bloco" aria-labelledby="planoBloco2">
+                    <h3 class="plano-acao-bloco-titulo" id="planoBloco2"><span class="plano-acao-num" aria-hidden="true">2</span> Roteiro prático em 3 etapas</h3>
+                    <ol class="plano-acao-etapas">
+                        {%- for etapa in plano.etapas %}
+                        <li class="plano-acao-etapa is-{{ etapa.estado }}{{ ' is-concluida' if etapa.concluida_sozinha }}" data-plano-etapa-cartao="{{ etapa.numero }}">
+                            <div class="plano-acao-etapa-cabeca">
+                                <h4 id="planoEtapaTitulo{{ etapa.numero }}">Etapa {{ etapa.numero }} <span class="plano-acao-prazo">({{ etapa.prazo }} — {{ etapa.titulo }})</span></h4>
+                                <span class="nexo-badge {{ 'b-green' if etapa.concluida_sozinha else 'b-amber' }} plano-acao-status" data-plano-status="{{ etapa.numero }}">{{ 'Concluída' if etapa.concluida_sozinha else 'Pendente' }}</span>
+                            </div>
+                            {%- if etapa.estado == 'pendente' %}
+                            <p class="plano-acao-orientacao">{{ etapa.orientacao }}</p>
+                            {%- if etapa.id == 'estancar' %}{{ _etapa_estancar(etapa, pagina, url_upgrade, plano_auditoria, pa.razao_a_confirmar) }}
+                            {%- elif etapa.id == 'travar' %}{{ _etapa_travar(etapa, pagina) }}
+                            {%- else %}{{ _etapa_controle(etapa) }}{% endif %}
+                            {%- else %}
+                            <p class="plano-acao-etapa-msg"><i class="bi {{ 'bi-check-circle-fill' if etapa.estado == 'regularizada' else 'bi-info-circle' }}" aria-hidden="true"></i> <span>{{ etapa.mensagem }}</span></p>
+                            {%- endif %}
+                        </li>
+                        {%- endfor %}
+                    </ol>
+                </section>
+
+                {# ---------------- Bloco 3: checklist de execução ---------------- #}
+                <section class="plano-acao-bloco" aria-labelledby="planoBloco3">
+                    <h3 class="plano-acao-bloco-titulo" id="planoBloco3"><span class="plano-acao-num" aria-hidden="true">3</span> Checklist de execução</h3>
+                    <div class="plano-acao-progresso">
+                        <div class="plano-acao-barra" role="progressbar" aria-labelledby="planoProgressoTexto" aria-valuemin="0" aria-valuemax="{{ total }}" aria-valuenow="{{ feitas }}" data-plano-barra><span class="plano-acao-barra-cheia" style="width: {{ (100 * feitas / total) | round(0) | int if total else 0 }}%"></span></div>
+                        <p class="plano-acao-progresso-texto" id="planoProgressoTexto" data-plano-progresso-texto>{{ feitas }} de {{ total }} etapas concluídas</p>
+                    </div>
+                    <ul class="plano-acao-checklist">
+                        {%- for etapa in plano.etapas %}
+                        <li>
+                            <span class="plano-acao-checklist-etapa" id="planoChecklistEtapa{{ etapa.numero }}">Etapa {{ etapa.numero }} — {{ etapa.titulo }}{% if etapa.concluida_sozinha %} <span class="t-mut">(já regularizada)</span>{% endif %}</span>
+                            <span class="form-check plano-acao-check">
+                                <input class="form-check-input" type="checkbox" id="planoEtapa{{ etapa.numero }}" data-plano-etapa="{{ etapa.numero }}" aria-describedby="planoChecklistEtapa{{ etapa.numero }}"{{ ' checked disabled' if etapa.concluida_sozinha }}>
+                                <label class="form-check-label" for="planoEtapa{{ etapa.numero }}"><span class="visually-hidden">Etapa {{ etapa.numero }}: </span>Concluída</label>
+                            </span>
+                        </li>
+                        {%- endfor %}
+                    </ul>
+                    <p class="plano-acao-nota plano-acao-nao-imprime">As marcações ficam salvas neste navegador, para este Raio-X. Um Raio-X novo começa um checklist novo.</p>
+                </section>
+
+                <p class="plano-acao-rodape">Estimativas feitas com os relatórios do Raio-X de {{ m.horario(linha.gerado_em, 'data') }}: os valores de 12 meses repetem o ritmo do período analisado. Sangria anualizada (o custo da inação) = dinheiro recuperável ÷ meses analisados (no mínimo 1) × 12; no escuro = vendas sem custo informado ÷ meses analisados (no mínimo 1) × 12.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{%- endmacro -%}

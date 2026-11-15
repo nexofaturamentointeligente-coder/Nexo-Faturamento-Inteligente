@@ -1,6 +1,6 @@
 # Indicadores executivos do NEXO (21) e as cinco refatorações do motor
 
-Este documento descreve a expansão do motor ETL pedida em 11/2026: 21 indicadores executivos, dois modos de leitura (analítico e acumulado) e cinco refatorações. Versões das regras: Raio-X `raio-x-2026-11.6`, triagem do lead `triagem-2026-11.4` e indicadores `indicadores-2026-11.2` (era a 11.1 até a auditoria matemática de 11/2026, seção 14). A migração nova é a `c5f8a1d3e7b9`, sobre a `9b3e5d7f1a28`.
+Este documento descreve a expansão do motor ETL pedida em 11/2026: 21 indicadores executivos, dois modos de leitura (analítico e acumulado) e cinco refatorações. Versões das regras: Raio-X `raio-x-2026-11.6` (a `11.7`, do Plano de Ação de 14/11/2026, só acrescentou ao scanner a venda dos produtos com variação de preço ou sem custo; `Docs/PLANOS_E_RAIO_X.md`, seção 4.2), triagem do lead `triagem-2026-11.4` e indicadores `indicadores-2026-11.2` (era a 11.1 até a auditoria matemática de 11/2026, seção 14). A migração nova é a `c5f8a1d3e7b9`, sobre a `9b3e5d7f1a28`.
 
 ## 1. Onde os indicadores ficam
 

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% import "_auditoria.html" as audit %}
+{% import "_evolucao.html" as evo %}
 {# WhatsApp comercial no card "Contato NEXO" e na faixa de renovação; sem número válido, como antes. #}
 {% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
 
@@ -83,6 +84,13 @@
             </div>
         </div>
     </div>
+</div>
+{% endif %}
+
+{# ---------------- Etapa 3: Evolução & Conquistas (Raio-X do PDV, Marco Zero x último fechamento) ---------------- #}
+{% if evolucao %}
+<div class="nexo-card mb-4">
+    <div class="nexo-card-body">{{ evo.painel(evolucao, plano_margem, url_upgrade, nivel=2, sufixo='Visao', link_historico=true) }}</div>
 </div>
 {% endif %}
 

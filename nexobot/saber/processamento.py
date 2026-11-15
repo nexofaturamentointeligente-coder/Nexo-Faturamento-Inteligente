@@ -66,7 +66,10 @@ REGISTROS = (
         ),
         explicacao=(
             "Linhas que não representam produto (descontos, frete, troco, taxas, totais) são removidas para não "
-            "distorcer o ranking. Quando não há coluna de total, o valor da linha é derivado de quantidade "
+            "distorcer o ranking, mas só pelo nome exato da linha (\"Desconto\", \"Descontos\", \"Frete\", "
+            "\"Troco\", \"Taxa\", \"Total\"; maiúsculas, acentos e pontuação não importam): com outro nome, como "
+            "\"Desconto concedido\", a linha entra como produto e deve sair do relatório antes do envio. Quando não "
+            "há coluna de total, o valor da linha é derivado de quantidade "
             "vezes preço unitário, uma conta sobre dados reais, nunca um dado inventado. A coluna de lucro é "
             "reconhecida apenas para não confundir o mapeamento e descartada. A coluna de custo das vendas não "
             "entra em nenhum indicador: serve só para um alerta de qualidade (itens vendidos abaixo do custo "
@@ -77,9 +80,36 @@ REGISTROS = (
             "Como os nomes dos produtos são tratados?", "Como funciona a normalização de produtos?",
             "Como o sistema cruza compras e vendas?", "O que é a transformação dos dados?",
             "O sistema soma produtos repetidos?", "Descontos entram no faturamento?",
+            "Por que descontos aparece como produto?",
         ),
         termos="transformacao normalizacao padronizacao produtos nomes cruzamento compras vendas descontos frete",
         relacionados=("nexo.indicadores.saldo_parado", "nexo.processamento.validacao"),
+        fontes=("etl_processor.py",),
+    ),
+    registro(
+        id="nexo.processamento.sangria_de_caixa",
+        titulo="Sangria e suprimento de caixa entram nas contas?",
+        categoria="Processamento",
+        resumo=(
+            "Depende do nome da linha. A sangria e o suprimento de caixa (a retirada e o reforço de dinheiro no "
+            "caixa) não são venda de produto: no relatório de vendas, a linha chamada só \"Sangria\" ou "
+            "\"Suprimento\" fica de fora do faturamento, das análises e do Raio-X do PDV. Com outro nome, como "
+            "\"Sangria de caixa\", a linha entra como produto, com o valor no faturamento: tire-a do relatório antes "
+            "de enviar."
+        ),
+        explicacao=(
+            "O NEXO reconhece essas linhas pelo nome exato, como faz com \"Descontos\", \"Frete\", \"Troco\" e "
+            "\"Total\" (maiúsculas, acentos e pontuação não importam), para não derrubar um produto de verdade. No "
+            "Plano de Ação do Raio-X, a \"sangria anualizada\" é outra coisa: o dinheiro que a loja deixa de ganhar "
+            "em 12 meses se nada for corrigido (o custo da inação)."
+        ),
+        perguntas=(
+            "O que é sangria de caixa?", "A sangria do caixa entra no faturamento?", "O NEXO conta a sangria como venda?",
+            "Sangria e suprimento entram nas contas?", "O relatório com sangria entra na análise?",
+            "A sangria de caixa entra no Raio-X do PDV?", "O fechamento de caixa entra no faturamento?",
+        ),
+        termos="sangria suprimento caixa retirada reforco dinheiro linha nao produto faturamento",
+        relacionados=("nexo.processamento.transformacao", "nexo.indicadores.plano_de_acao"),
         fontes=("etl_processor.py",),
     ),
     registro(

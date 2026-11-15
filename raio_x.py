@@ -74,7 +74,10 @@ from etl_processor import (
 # 11.6: indicadores executivos de 11/2026. O resultado ganha o nó indicadores_executivos (21 indicadores,
 # indicadores_executivos.py), e o Raio-X do cliente também fatia por mês a venda item a item com a data de cada
 # venda (sem recusar a data inconsistente: o arquivo continua um relatório só).
-VERSAO_REGRAS = "raio-x-2026-11.6"
+# 11.7: Plano de Ação de 11/2026 (Etapa 2). O scanner ganha faturamento_variacao_ou_sem_custo, a venda dos produtos
+# com variação de preço ou sem custo (a base do ganho de margem do cenário otimizado, plano_acao.py). Nenhum valor
+# antigo muda; o Raio-X gravado antes continua valendo, sem esse campo.
+VERSAO_REGRAS = "raio-x-2026-11.7"
 MAX_ARQUIVOS = 36
 # Relatórios do envio depois de fatiar por mês o arquivo que traz a data de cada venda: 10 anos de meses. O
 # teto de arquivos enviados continua sendo MAX_ARQUIVOS.
@@ -1561,6 +1564,12 @@ def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict
                             for indice, linha in somas.iterrows()}
 
     com_variacao = produtos[produtos["variacao"]].sort_values(["vazamento", "faturamento"], ascending=False)
+    # A venda dos produtos com variação de preço ou sem custo (Plano de Ação, 11.7): toda a venda do produto com
+    # variação e, dos demais, a parte vendida sem custo. Em centavos inteiros, como o fechamento das linhas.
+    sem_variacao = produtos[~produtos["variacao"]]
+    variacao_ou_sem_custo = int((com_variacao["faturamento"] * 100).round().sum()
+                                + ((sem_variacao["faturamento"] - sem_variacao["faturamento_com_custo"]) * 100)
+                                .round().sum()) / 100
     abaixo = produtos[(produtos["perda"] > 0) & ~a_confirmar].sort_values(["perda", "faturamento"], ascending=False)
     com_margem = produtos[produtos["custo_total"] > 0].sort_values("faturamento_com_custo", ascending=False)
     precificacao_visivel, precificacao = _precificacao(por_arquivo, resumos)
@@ -1613,6 +1622,7 @@ def _combinar(por_arquivo: pd.DataFrame, resumos: list, envolvidos: set) -> dict
             "itens_com_variacao": int(com_variacao.shape[0]),
             "faturamento_envolvido": _dinheiro(com_variacao["faturamento"].sum()),
             "vazamento_preco": _dinheiro(com_variacao["vazamento"].sum()),
+            "faturamento_variacao_ou_sem_custo": _dinheiro(variacao_ou_sem_custo),
             "itens": [_item(linha, ("linhas", "quantidade", "faturamento", "preco_min", "preco_max",
                                     "preco_referencia", "referencia_tabela", "vazamento", "custo_medio",
                                     "margem_valor", "margem_percentual"))

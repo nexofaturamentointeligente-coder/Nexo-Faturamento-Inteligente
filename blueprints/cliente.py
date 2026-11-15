@@ -58,10 +58,12 @@ from contract_policy import (
     agora, analise_coberta, data_local, filtrar_analises_consultaveis, obter_situacao_contratual,
     pode_consultar_analise, pode_enviar_relatorio, pode_exportar_pdf,
 )
+import entitlements
 from insights import gerar_semaforos
 from notifications import notificar_admins
 from preferencias_usuario import salvar_preferencias
 from pdf_export import gerar_pdf_analise
+import raio_x_servico
 import storage
 
 cliente_bp = Blueprint("cliente", __name__)
@@ -198,6 +200,30 @@ def _divergencias_pdv(situacao, analises) -> list:
     ]
 
 
+def _evolucao_do_cliente(empresa) -> tuple:
+    """Etapa 3 (14/11/2026): o painel Evolução & Conquistas e o plano que libera a sobra bruta (o cadeado do selo
+    Margem em Alta). Só com o Raio-X do PDV no plano e com Raio-X; só leitura, e uma falha aqui (banco ou um
+    retrato fora do formato) não derruba a página, que abre sem o painel."""
+    try:
+        liberadas = entitlements.funcionalidades_da_empresa(empresa.id_empresa)
+        evolucao = raio_x_servico.evolucao_da_empresa(empresa.id_empresa, liberadas)
+        if evolucao is None:
+            return None, None
+        return evolucao, entitlements.catalogo().plano_necessario("margem_bruta")
+    except SQLAlchemyError as erro:
+        # Tabela removida ou conexão perdida: desfaz, e as próximas leituras conferem de novo os esquemas.
+        current_app.logger.warning("Evolução não montada (%s).", type(erro).__name__)
+        try:
+            db.session.rollback()
+            raio_x_servico.esquecer_fechamentos()
+            entitlements.esquecer_esquema_planos()
+        except Exception:  # noqa: BLE001 - a página precisa sair mesmo com o banco fora
+            pass
+    except (ArithmeticError, KeyError, TypeError, ValueError, AttributeError) as erro:
+        current_app.logger.warning("Evolução não montada (%s).", type(erro).__name__)
+    return None, None
+
+
 @cliente_bp.route("/dashboard")
 @cliente_required
 def dashboard():
@@ -242,9 +268,13 @@ def dashboard():
 
     # Auditoria de origem dos dados (COM QUE BASE/ARQUIVO/PERÍODO foi gerado).
     auditoria = _auditoria(analise)
+    evolucao, plano_margem = _evolucao_do_cliente(empresa)
 
     return render_template(
         "cliente/dashboard.html",
+        evolucao=evolucao,
+        plano_margem=plano_margem,
+        url_upgrade=entitlements.url_upgrade,
         empresa=empresa,
         analise=analise,
         analises=analises,
@@ -505,8 +535,9 @@ def historico():
         .order_by(Analise.data_conclusao.desc().nullslast(), Analise.id_analise.desc())
         .options(selectinload(Analise.indicador), selectinload(Analise.relatorio))
     ).scalars().all())
+    evolucao, _ = _evolucao_do_cliente(empresa)
     return render_template("cliente/historico.html", empresa=empresa, analises=analises,
-                           situacao=situacao)
+                           situacao=situacao, evolucao=evolucao)
 
 
 @cliente_bp.route("/analise/<int:id_analise>")

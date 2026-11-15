@@ -1,0 +1,198 @@
+{#- Etapa 3 (14/11/2026): Evolução & Conquistas mensais.
+    `ev`: evolucao.comparar() (estado "inicial", com um Raio-X só, ou "comparado"); `plano_margem`: o plano que libera
+    a sobra bruta (o cadeado do selo Margem em Alta); `url_upgrade`: entitlements.url_upgrade.
+    O painel aparece na Visão Geral e no Plano de Ação; a linha do tempo, no Histórico. -#}
+{%- import "_macros.html" as m -%}
+
+{%- macro _classe_status(status) -%}
+{{- {'sanado': 'b-green', 'evolucao': 'b-info', 'pendente': 'b-amber', 'partida': 'b-purple'}.get(status, 'b-muted') -}}
+{%- endmacro -%}
+
+{%- macro _bloqueio_margem(plano_margem, url_upgrade) -%}
+<i class="bi bi-lock-fill" aria-hidden="true"></i> A sobra bruta aparece a partir do plano {{ plano_margem.nome if plano_margem else 'superior' }}.{% if plano_margem and url_upgrade %} <a href="{{ url_upgrade(plano_margem) }}">Conhecer o plano</a>{% endif %}
+{%- endmacro -%}
+
+{%- macro _avisos(ev) -%}
+{%- if ev.avisos %}
+<ul class="evolucao-avisos">
+    {%- for aviso in ev.avisos %}
+    <li><i class="bi bi-info-circle" aria-hidden="true"></i> <span>{{ aviso }}</span></li>
+    {%- endfor %}
+</ul>
+{%- endif %}
+{%- endmacro -%}
+
+{# ---- Um Raio-X só: o Marco Zero e a ativação no próximo fechamento ---- #}
+{%- macro inicial(ev) -%}
+<div class="evolucao-inicial">
+    <span class="evolucao-inicial-icone" aria-hidden="true"><i class="bi bi-flag-fill"></i></span>
+    <div class="evolucao-inicial-corpo">
+        <p class="evolucao-inicial-titulo">Seu Marco Zero está registrado</p>
+        <p class="evolucao-texto">Raio-X de {{ ev.marco.data }}{% if ev.marco.periodo %} · {{ ev.marco.periodo }}{% endif %}.{% if ev.marco.recuperavel_mensal_plano is not none %} Hoje, a loja deixa escapar <strong>R$ {{ m.brl(ev.marco.recuperavel_mensal_plano) }} por mês</strong> em vendas abaixo do custo ou do preço normal.{% endif %}</p>
+        <p class="evolucao-texto"><strong>{{ ev.mensagem }}</strong></p>
+        <p class="evolucao-texto evolucao-foco">Foco até lá: {{ ev.foco }}.</p>
+        {{ _avisos(ev) }}
+    </div>
+</div>
+{%- endmacro -%}
+
+{# ---- O painel (Visão Geral e Plano de Ação). `nivel`: o nível do título (2 na página, 3 no modal). ---- #}
+{%- macro painel(ev, plano_margem=none, url_upgrade=none, nivel=2, sufixo='Painel', link_historico=false) -%}
+{%- set h = 'h' ~ nivel -%}
+{%- set h_sub = 'h' ~ (nivel + 1) -%}
+{%- set eco = ev.economia -%}
+{%- set conta = eco and not eco.motivo -%}
+<section class="evolucao" aria-labelledby="evolucaoTitulo{{ sufixo }}" data-evolucao="{{ ev.estado }}">
+    <div class="evolucao-cabeca">
+        <div class="evolucao-cabeca-texto">
+            <{{ h }} class="evolucao-titulo" id="evolucaoTitulo{{ sufixo }}"><i class="bi bi-award" aria-hidden="true"></i> Evolução &amp; Conquistas</{{ h }}>
+            <p class="evolucao-sub">{% if ev.estado == 'comparado' %}Marco Zero: Raio-X de {{ ev.marco.data }} · último fechamento: Raio-X de {{ ev.atual.data }}{% else %}Marco Zero: Raio-X de {{ ev.marco.data }}{% endif %}</p>
+        </div>
+        {%- if link_historico %}
+        <a class="btn-ghost evolucao-link" href="{{ url_for('cliente.historico') }}#evolucaoLinhaDoTempo"><i class="bi bi-clock-history" aria-hidden="true"></i> Linha do tempo</a>
+        {%- endif %}
+    </div>
+    {%- if ev.estado == 'inicial' %}
+    {{ inicial(ev) }}
+    {%- else %}
+    <div class="evolucao-cartoes">
+        <div class="evolucao-cartao{{ ' is-positivo' if conta and eco.positiva }}{{ ' is-negativo' if conta and eco.negativa }}">
+            <span class="evolucao-rotulo">Economia Gerada no Mês</span>
+            {%- if conta and eco.positiva %}
+            <div class="evolucao-valor"><small>R$</small> {{ m.brl(eco.mensal) }}</div>
+            <p class="evolucao-texto">a menos escapando por mês do que no Marco Zero: o dinheiro recuperável caiu de R$ {{ m.brl(eco.marco_mensal) }}{{ ' (estimado)' if ev.marco.parcial }} para R$ {{ m.brl(eco.atual_mensal) }}{{ ' (estimado)' if ev.atual.parcial }} por mês.</p>
+            {%- elif conta and eco.negativa %}
+            <div class="evolucao-valor is-negativo"><small>R$</small> {{ m.brl(eco.mensal_absoluto) }}</div>
+            <p class="evolucao-texto">a mais escapando por mês do que no Marco Zero: o dinheiro recuperável subiu de R$ {{ m.brl(eco.marco_mensal) }}{{ ' (estimado)' if ev.marco.parcial }} para R$ {{ m.brl(eco.atual_mensal) }}{{ ' (estimado)' if ev.atual.parcial }} por mês.</p>
+            {%- elif conta %}
+            <div class="evolucao-valor"><small>R$</small> 0,00</div>
+            <p class="evolucao-texto">O dinheiro que escapa por mês está no mesmo ritmo do Marco Zero (R$ {{ m.brl(eco.atual_mensal) }} por mês{{ ', estimado' if ev.atual.parcial }}).</p>
+            {%- elif eco.motivo == 'cobertura' and ev.causa_cobertura == 'sem_coluna' %}
+            <p class="evolucao-texto">Sem conta de economia: no último fechamento, um relatório veio sem a coluna de custo, e a perda dele não é medida. Envie os relatórios com a coluna de custo.</p>
+            {%- elif eco.motivo == 'cobertura' %}
+            <p class="evolucao-texto">Sem conta de economia: o último fechamento mede a perda em menos venda que o Marco Zero (mais venda sem custo informado ou um relatório sem a coluna de custo). Envie os relatórios com a coluna de custo e cadastre o custo dos produtos.</p>
+            {%- else %}
+            <p class="evolucao-texto">Sem o período de algum dos Raio-X (relatório sem as datas ou com período depois da data do Raio-X), não dá para calcular a economia por mês.</p>
+            {%- endif %}
+            {%- if ev.regressoes %}
+            <div class="evolucao-regressoes">
+                <p class="evolucao-regressoes-titulo"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> Onde houve regressão</p>
+                <ul>
+                    {%- for r in ev.regressoes %}
+                    <li><strong>{{ r.rotulo }}</strong>: de {{ r.antes }} para {{ r.depois }} {{ r.contra_texto }}.</li>
+                    {%- endfor %}
+                </ul>
+            </div>
+            {%- endif %}
+        </div>
+        <div class="evolucao-cartao{{ ' is-positivo' if conta and eco.positiva }}{{ ' is-negativo' if conta and eco.negativa }}">
+            <span class="evolucao-rotulo">Projeção Anual no Ritmo Atual</span>
+            {%- if conta and eco.positiva %}
+            <div class="evolucao-valor"><small>R$</small> {{ m.brl(eco.anual) }}</div>
+            <p class="evolucao-texto">de ganho em 12 meses, mantendo o ritmo do último fechamento (a economia por mês vezes 12).</p>
+            {%- elif conta and eco.negativa %}
+            <div class="evolucao-valor is-negativo"><small>R$</small> {{ m.brl(eco.anual_absoluto) }}</div>
+            <p class="evolucao-texto">a mais escapando em 12 meses, se o ritmo do último fechamento continuar.</p>
+            {%- elif conta %}
+            <div class="evolucao-valor"><small>R$</small> 0,00</div>
+            <p class="evolucao-texto">Sem ganho projetado: o ritmo é o mesmo do Marco Zero.</p>
+            {%- else %}
+            <p class="evolucao-texto">Sem projeção de 12 meses enquanto a economia por mês não puder ser calculada.</p>
+            {%- endif %}
+        </div>
+    </div>
+    {{ _avisos(ev) }}
+
+    <{{ h_sub }} class="evolucao-subtitulo">Marco Zero x último fechamento</{{ h_sub }}>
+    <ul class="evolucao-indicadores">
+        {%- for i in ev.indicadores %}
+        {%- set situacao = {'melhorou': ('Melhorou', 'b-green'), 'piorou': ('Piorou', 'b-red'), 'igual': ('Estável', 'b-muted'), 'sem_dados': ('Sem dados', 'b-muted'), 'nao_comparavel': ('Não comparável', 'b-muted')}[i.vs_marco] %}
+        <li class="evolucao-indicador is-{{ i.vs_marco }}">
+            <div class="evolucao-indicador-topo"><span class="evolucao-indicador-nome">{{ i.rotulo }}</span><span class="nexo-badge {{ situacao[1] }}">{{ situacao[0] }}</span></div>
+            <div class="evolucao-indicador-valor">{{ i.atual_texto }}</div>
+            <p class="evolucao-indicador-de">Marco Zero: {{ i.marco_texto }}{% if ev.rotulo_anterior %} · {{ ev.rotulo_anterior }}: {{ i.anterior_texto }}{% endif %}</p>
+            {%- if i.variacao_marco_texto %}
+            <p class="evolucao-indicador-variacao">{{ i.variacao_marco_texto }} desde o Marco Zero</p>
+            {%- endif %}
+        </li>
+        {%- endfor %}
+        {%- if not ev.margem_liberada %}
+        <li class="evolucao-indicador is-bloqueado">
+            <div class="evolucao-indicador-topo"><span class="evolucao-indicador-nome">Sobra bruta ajustada</span></div>
+            <p class="evolucao-indicador-de">{{ _bloqueio_margem(plano_margem, url_upgrade) }}</p>
+        </li>
+        {%- endif %}
+    </ul>
+
+    <{{ h_sub }} class="evolucao-subtitulo">Conquistas <span class="evolucao-contagem">{{ ev.conquistados }} de {{ ev.selos|length }}</span></{{ h_sub }}>
+    <ul class="evolucao-selos">
+        {%- for s in ev.selos %}
+        <li class="evolucao-selo{{ ' is-conquistado' if s.conquistado }}{{ ' is-bloqueado' if s.bloqueado }}">
+            <span class="evolucao-selo-emoji" aria-hidden="true">{{ s.emoji }}</span>
+            <div class="evolucao-selo-corpo">
+                <div class="evolucao-selo-topo"><strong>{{ s.titulo }}</strong><span class="nexo-badge {{ 'b-green' if s.conquistado else 'b-muted' }}">{{ 'Conquistado' if s.conquistado else ('Bloqueado' if s.bloqueado else 'A conquistar') }}</span></div>
+                <p class="evolucao-selo-regra">{{ s.regra }}</p>
+                <p class="evolucao-selo-texto">{% if s.bloqueado %}{{ _bloqueio_margem(plano_margem, url_upgrade) }}{% else %}{{ s.texto }}{% endif %}</p>
+            </div>
+        </li>
+        {%- endfor %}
+    </ul>
+
+    <p class="evolucao-resumo"><i class="bi bi-chat-quote" aria-hidden="true"></i> <span>{{ ev.resumo }}</span></p>
+    {%- endif %}
+</section>
+{%- endmacro -%}
+
+{# ---- Histórico: a linha do tempo mês a mês, com as metas do plano original ---- #}
+{%- macro linha_do_tempo(ev) -%}
+<section class="nexo-card evolucao-linha mb-4" id="evolucaoLinhaDoTempo" aria-labelledby="evolucaoLinhaTitulo" tabindex="-1">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="evolucaoLinhaTitulo"><i class="bi bi-award" aria-hidden="true"></i> Evolução mês a mês</h2>
+            <p class="sub">Um fechamento por mês (o Raio-X do PDV feito no mês), comparado ao Marco Zero: as metas do Plano de Ação original.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {%- if ev.estado == 'inicial' %}
+        {{ inicial(ev) }}
+        {%- else %}
+        <div class="table-responsive-x">
+            <table class="nexo-table evolucao-tabela">
+                <caption class="visually-hidden">Fechamentos mensais do Raio-X do PDV e o status das metas do Plano de Ação</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Fechamento</th>
+                        <th scope="col">Dinheiro escapando</th>
+                        {%- for meta in ev.metas %}
+                        <th scope="col">Etapa {{ meta.numero }}: {{ meta.titulo }}</th>
+                        {%- endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {%- for linha in ev.linha_do_tempo %}
+                    <tr{% if linha.marco_zero %} class="is-marco"{% endif %}>
+                        <td class="evolucao-fechamento">
+                            <span class="t-strong">{{ linha.mes|capitalize }}</span>{% if linha.marco_zero %} <span class="nexo-badge b-purple">Marco Zero</span>{% endif %}
+                            <small class="evolucao-fechamento-sub">Raio-X de {{ linha.data }}{% if linha.periodo %} · {{ linha.periodo }}{% endif %}</small>
+                        </td>
+                        <td class="t-mono">{{ linha.recuperavel_texto }}{% if linha.parcial %} <small class="evolucao-fechamento-sub">estimado: menos de 1 mês</small>{% endif %}</td>
+                        {%- for meta in linha.metas %}
+                        <td><span class="nexo-badge {{ _classe_status(meta.status) }}">{{ meta.rotulo }}</span></td>
+                        {%- endfor %}
+                    </tr>
+                    {%- endfor %}
+                </tbody>
+            </table>
+        </div>
+        <ul class="evolucao-legenda">
+            {%- for meta in ev.metas %}
+            <li><strong>Etapa {{ meta.numero }}</strong>: {{ meta.medida|lower }}.</li>
+            {%- endfor %}
+            <li><span class="nexo-badge b-green">Sanado</span> zerado · <span class="nexo-badge b-info">Em evolução</span> menor que no Marco Zero · <span class="nexo-badge b-amber">Pendente</span> igual ou pior que no Marco Zero · <span class="nexo-badge b-purple">Ponto de partida</span> o próprio Marco Zero · <span class="nexo-badge b-muted">Sem dados</span> os relatórios do mês não permitem avaliar.</li>
+        </ul>
+        {{ _avisos(ev) }}
+        <p class="evolucao-resumo"><i class="bi bi-chat-quote" aria-hidden="true"></i> <span>{{ ev.resumo }}</span></p>
+        {%- endif %}
+    </div>
+</section>
+{%- endmacro -%}
