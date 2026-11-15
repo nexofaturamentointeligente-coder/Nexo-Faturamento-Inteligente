@@ -45,10 +45,12 @@ Não havia rotina de avisos no sistema. O cliente só envia arquivos para uma an
 São desenhados pela macro `link_whatsapp` de `templates/_macros.html`, só com `WHATSAPP_EMPRESA_NUMERO` válido. Sem ele, cada tela sai idêntica à de antes, byte a byte (`tests/test_whatsapp_telas.py`).
 - O link abre em nova aba, com `rel="noopener noreferrer"` e sem JavaScript.
 - A mensagem pré-preenchida nunca leva dado do cliente: nem nome, nem empresa, nem o assunto do chamado, só o número dele.
+- **Exceção (decisão do dono, 15/11/2026): o pré-cadastro da landing.** Com JavaScript, o CONTRATAR abre um formulário (`static/js/landing-precadastro.js`), e a mensagem das saídas "Preciso de ajuda com os relatórios" e "Finalizar sem Raio-X" leva os dados que o próprio visitante digitou: nome, empresa, WhatsApp, plano de interesse e, se preenchidos, e-mail, faixa de faturamento e dificuldade. Nada disso vai ao servidor nessas saídas, e o visitante confere a mensagem no WhatsApp antes de enviá-la. O número continua vindo só de `WHATSAPP_EMPRESA_NUMERO`, entregue ao script pelo atributo `data-numero`. A LGPD do lead (logo abaixo) continua pendente. Detalhes em [PRE_CADASTRO_LANDING.md](PRE_CADASTRO_LANDING.md).
 
 | Tela | Contexto da mensagem |
 | :--- | :--- |
-| Landing: os três "Contrate Agora" (deixam de ser botões desabilitados), o "Falar com a equipe NEXO" e o rodapé "Contatos" | Contratar o plano BRONZE, PRATA ou OURO; dúvidas comerciais |
+| Landing: o CONTRATAR único abaixo dos planos (desde 15/11/2026, no lugar dos três "Contrate Agora"), o "Falar com a equipe NEXO" e o rodapé "Contatos" | Contratar um plano (sem JavaScript) ou a mensagem do pré-cadastro; dúvidas comerciais |
+| Raio-X público (`/avaliacao-inicial/resultado`, desligado por padrão): "Desbloquear Relatório Completo" | A mensagem do pré-cadastro com "Situação do Raio-X: Realizado" e o protocolo do lead (mesma exceção registrada acima). O autocadastro não tem gatilho ativo: nada é enviado ao lead pela Evolution. |
 | Como aderir, que faz as vezes da tela de cadastro (não há autocadastro) | Contratar um plano; dúvidas comerciais |
 | Planos e upgrade do cliente | Mudar de plano (ao lado do pedido por chamado, que continua); dúvidas comerciais; atendimento |
 | Painel do cliente: card Contato NEXO e faixa de renovação | Atendimento; renovar o contrato |

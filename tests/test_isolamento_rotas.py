@@ -13,6 +13,11 @@
   4. Leads não se misturam: o diagnóstico (tela e JSON) de um lead só traz as linhas dele, mesmo com
      os mesmos relatórios num segundo lead, com o cache do diagnóstico ativo e com os dois sem linhas.
 
+Exceção deliberada (decisão do dono em 15/11/2026): o Raio-X público (blueprints/avaliacao_publica.py) é a
+única rota fora de /admin que grava e lê lead, e só o da própria sessão. Ele entra em MODULOS_DO_LEAD, a
+varredura do item 3 roda com ele LIGADO (o pedido sem dados válidos não pode tocar nas tabelas de lead) e o
+teste estrutural fixa as rotas dele, sem parâmetro na URL (tests/test_avaliacao_publica.py cobre o resto).
+
 Dados fictícios.
 """
 
@@ -187,7 +192,11 @@ PASTAS_FORA_DA_ESTRUTURA = {"tests", "migrations", "venv", ".venv", "env", "__py
 # Módulos que podem ler as tabelas de lead: os da Avaliação de Cenário e os modelos. Rota de cliente nova
 # que importe um deles (ou cite as tabelas) faz o teste estrutural falhar.
 MODULOS_DO_LEAD = {"avaliacao_cenario.py", "avaliacao_motor.py", "blueprints/leads.py", "diagnostico_cenario.py",
-                   "etl_runtime.py", "inteligencia_estoque.py", "leads_avaliacao.py", "models.py", "triagem_cenario.py"}
+                   "etl_runtime.py", "inteligencia_estoque.py", "leads_avaliacao.py", "models.py", "triagem_cenario.py",
+                   "blueprints/avaliacao_publica.py"}
+# As rotas do Raio-X público (método e caminho), todas sem parâmetro: o resultado só sai pela sessão.
+ROTAS_DO_RAIO_X_PUBLICO = {("GET", "/avaliacao-inicial"), ("POST", "/avaliacao-inicial"),
+                           ("GET", "/avaliacao-inicial/resultado"), ("POST", "/avaliacao-inicial/sair")}
 CITACOES_DO_LEAD = ("LeadAvaliacao", "BrainstormingDadosPdv", "lead_avaliacao", "brainstorming_dados_pdv",
                     "avaliacao_cenario", "diagnostico_cenario", "inteligencia_estoque", "triagem_cenario")
 
@@ -230,6 +239,8 @@ class ClienteSemDadoDeLeadTests(_IsolamentoCase):
         # O id lido antes do ouvinte: ler lead.id de um objeto expirado recarrega o lead (SQL fora de pedido).
         lead_id = self.lead_exclusivo().id
         valores = self._conteudo_do_cliente()
+        # O Raio-X público ligado: as rotas dele entram na varredura (sem dados válidos, nada de SQL de lead).
+        self.app.config["AVALIACAO_PUBLICA_ATIVA"] = True
         self.login()
         token = self.csrf_token("/cliente/dashboard")
         rotas = [r for r in self.app.url_map.iter_rules()
@@ -282,11 +293,17 @@ class ClienteSemDadoDeLeadTests(_IsolamentoCase):
     def test_so_o_blueprint_dos_leads_le_as_tabelas_de_lead(self):
         from tests.deploy_support import ROOT
         # Toda rota do blueprint dos leads fica sob /admin (a matriz do teste 1 cobre as permissões).
+        publicas = set()
         for regra in self.app.url_map.iter_rules():
             if regra.endpoint.startswith("leads."):
                 self.assertTrue(regra.rule.startswith("/admin/"), regra.rule)
             if "lead" in regra.rule.lower():
                 self.assertTrue(regra.rule.startswith("/admin/"), regra.rule)
+            if regra.endpoint.startswith("avaliacao_publica."):
+                # A exceção pública é exatamente esta: rota nova, ou com o id na URL, reprova.
+                self.assertEqual(regra.arguments, set(), regra.rule)
+                publicas |= {(metodo, regra.rule) for metodo in regra.methods - {"HEAD", "OPTIONS"}}
+        self.assertEqual(publicas, ROTAS_DO_RAIO_X_PUBLICO)
         # Nenhum outro módulo do projeto (rotas, auxiliares, assistente, tempo real) cita as tabelas ou os
         # módulos de lead.
         candidatos = [caminho for caminho in sorted(ROOT.rglob("*.py"))

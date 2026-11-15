@@ -96,28 +96,24 @@ def _barra_de_upgrade(destino=None, rotulo=None):
 
 TRECHOS_DE_HOJE = {
     "landing": (
-        (('<article class="plan bronze">', "</ul>"), "</article>",
-         '</ul>\n'
-         '        <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled'
-         ' aria-describedby="contratacao-status">Contrate Agora</button>\n'
-         '      </article>'),
-        (('<article class="plan prata">', "</ul>"), "</article>",
-         '</ul>\n'
-         '        <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled'
-         ' aria-describedby="contratacao-status">Contrate Agora</button>\n'
-         '      </article>'),
-        (('<article class="plan ouro featured">', "</ul>"), "</article>",
-         '</ul>\n'
-         '        <button type="button" class="btn-nexo btn-nexo-primary w-100" disabled'
-         ' aria-describedby="contratacao-status">Contrate Agora</button>\n'
-         '      </article>'),
-        ('<div class="plan-availability text-center mt-4" id="contratacao">', "</div>",
-         '<div class="plan-availability text-center mt-4" id="contratacao">\n'
+        # Contratação (decisão do dono, 15/11/2026): os cards só apresentam os planos, e um CONTRATAR
+        # único abaixo da grade substitui os três "Contrate Agora". Com número, o trecho ganha o link
+        # wa.me e o diálogo do pré-cadastro (#precadastro), que tem <section> dentro: por isso o
+        # trecho vai até o começo da seção seguinte, e não até o primeiro </section>.
+        ('<div class="plans-cta text-center" data-precadastro-gatilho>', '<section aria-labelledby="final-cta-title">',
+         '<div class="plans-cta text-center" data-precadastro-gatilho>\n'
+         '      <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled'
+         ' aria-describedby="contratacao-status">CONTRATAR</button>\n'
+         '    </div>\n'
+         '    <div class="plan-availability text-center mt-4" id="contratacao">\n'
          '      <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta'
          ' página. Os canais oficiais serão divulgados aqui.</p>\n'
          '      <a href="/como-aderir" class="text-link">Como obter acesso ao NEXO <svg class="inline-icon"'
          ' viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h16M13 5l7 7-7 7"/></svg></a>\n'
-         '    </div>'),
+         '    </div>\n'
+         '  </div>\n'
+         '</section>\n'
+         '<section aria-labelledby="final-cta-title">'),
         ('<div class="cta-buttons">', "</p>",
          '<div class="cta-buttons">\n'
          '        <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled'
@@ -470,31 +466,34 @@ class ComNumeroTests(_WhatsAppCase):
         super().setUp()
         self.com_numero()
 
-    def test_landing_contrata_cada_plano_e_tira_duvidas_pelo_whatsapp(self):
+    def test_landing_contrata_pelo_contratar_unico_e_tira_duvidas_pelo_whatsapp(self):
         html, dom = self.pagina("/", cliente=self.anonimo)
+        # Os cards só apresentam os planos (decisão do dono, 15/11/2026): nada de botão ou link neles.
         for plano in ("BRONZE", "PRATA", "OURO"):
             with self.subTest(plano=plano):
                 cartao = _trecho(html, f'<article class="plan {plano.lower()}', "</article>")
-                [link] = _Pagina(cartao).whatsapp()
-                cor = "primary" if plano == "OURO" else "secondary"
-                self.assert_link(link, mensagem_plano(plano), "Contrate Agora",
-                                 classe=f"btn-nexo btn-nexo-{cor} w-100", descrito_por="contratacao-status",
-                                 nome=f"Contrate Agora o plano {plano} {NOVA_ABA}")
+                self.assertEqual(_Pagina(cartao).links, [])
                 self.assertNotIn("<button", cartao)
+        # O CONTRATAR único: sem JavaScript, leva direto ao WhatsApp com a mensagem de contratação.
+        [contratar] = _Pagina(_trecho(html, '<div class="plans-cta', "</div>")).whatsapp()
+        self.assert_link(contratar, MENSAGENS["contratar"], "CONTRATAR",
+                         classe="btn-nexo btn-nexo-primary btn-nexo-lg", descrito_por="contratacao-status")
         [cta] = _Pagina(_trecho(html, 'aria-labelledby="final-cta-title"', "</section>")).whatsapp()
         self.assert_link(cta, MENSAGENS["duvidas"], "Falar com a equipe NEXO",
                          classe="btn-nexo btn-nexo-primary btn-nexo-lg", descrito_por="contact-availability")
         [rodape] = _Pagina(_trecho(html, "<footer", "</footer>")).whatsapp()
         # Sem classe: o mesmo estilo de .footer-col a do vizinho "Entenda como obter acesso".
         self.assert_link(rodape, MENSAGENS["duvidas"], "Fale conosco no WhatsApp", classe=None)
-        self.assertEqual(len(dom.whatsapp()), 5)
+        # As saídas do pré-cadastro não têm href no HTML: o script as monta com o que o visitante digita.
+        self.assertEqual(len(dom.whatsapp()), 3)
         # Os textos dizem a verdade: nada de "canal ainda não divulgado" ao lado do link.
         self.assertIn("Contrate pelo WhatsApp: a equipe NEXO responde e combina o início com você.", dom.texto)
         self.assertIn("Atendimento comercial pelo WhatsApp", dom.texto)
         for frase in ("A contratação ainda não está disponível", "será divulgado nesta página",
                       "serão divulgados nesta página"):
             self.assertNotIn(frase, dom.texto)
-        self.assertEqual(dom.texto.count("Contrate Agora"), 3)
+        self.assertEqual(dom.texto.count("CONTRATAR"), 1)
+        self.assertNotIn("Contrate Agora", dom.texto)
         self.assertNotIn('disabled aria-describedby="contratacao-status"', html)
         self.assertNotIn('aria-describedby="contact-availability">Falar', html)
         # O que não é contato continua igual: avaliação desabilitada e cabeçalho com um só link de portal.
@@ -504,13 +503,57 @@ class ComNumeroTests(_WhatsAppCase):
         self.assertNotIn("wa.me", cabecalho)
         # A landing não carrega o Bootstrap Icons: o ícone é SVG inline, escondido do leitor de tela.
         self.assertNotIn("bi-whatsapp", html)
-        self.assertEqual(html.count('<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5'), 4)
+        self.assertEqual(html.count('<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5'), 2)
         identificadores = dom.ids()
         self.assertEqual(len(identificadores), len(set(identificadores)))
         for _, attrs in dom.elementos:
             for nome in ("aria-controls", "aria-describedby", "aria-labelledby"):
                 for alvo in attrs.get(nome, "").split():
                     self.assertIn(alvo, identificadores, (nome, alvo))
+
+    def test_precadastro_so_com_numero_e_sem_envio_ao_servidor(self):
+        """O diálogo do pré-cadastro: número do config (nunca fixo), Etapa 1 pronta mas oculta, nada
+        de formulário que poste no servidor e nenhum link legal ou de Raio-X que não exista."""
+        html, dom = self.pagina("/", cliente=self.anonimo)
+        dialogo = _trecho(html, '<dialog id="precadastro"', "</dialog>")
+        pagina = _Pagina(dialogo)
+        [raiz] = [attrs for tag, attrs in dom.elementos if tag == "dialog"]
+        self.assertEqual(raiz.get("data-numero"), NUMERO)
+        self.assertEqual(html.count("<dialog"), 1)
+        etapas = {attrs["id"]: (attrs.get("class") or "").split() for tag, attrs in pagina.elementos
+                  if attrs.get("id", "").startswith("step-")}
+        self.assertEqual(etapas, {"step-1": ["precadastro-etapa", "hidden"], "step-2": ["precadastro-etapa"],
+                                  "step-3": ["precadastro-etapa", "hidden"]})
+        # Etapa 1 (termos): as caixas e o texto do dono estão lá, mas sem link para página inexistente.
+        self.assertIn("Li e aceito os", dialogo)
+        self.assertIn("Política de Privacidade", dialogo)
+        for link in pagina.links:
+            href = link["attrs"].get("href", "")
+            self.assertNotIn("termos", href.casefold())
+            self.assertNotIn("privacidade", href.casefold())
+        # Formulário só no navegador: sem action, sem method, sem campo escondido nem token.
+        [formulario] = [attrs for tag, attrs in pagina.elementos if tag == "form"]
+        self.assertEqual(formulario, {"id": "form-pre-cadastro", "class": "precadastro-form"})
+        self.assertFalse(any(tag == "input" and attrs.get("type") in ("hidden", "file")
+                             for tag, attrs in pagina.elementos))
+        obrigatorios = {attrs["id"] for tag, attrs in pagina.elementos if "required" in attrs}
+        self.assertEqual(obrigatorios, {"lead-nome", "lead-empresa", "lead-whatsapp", "lead-plano"})
+        self.assertIn('<option value="Custom / Enterprise">Custom / Enterprise</option>', dialogo)
+        # As saídas pelo WhatsApp: nova aba, sem on*, e o href só nasce no script.
+        saidas = [link for link in pagina.links if link["attrs"].get("data-raiox-situacao")]
+        self.assertEqual([link["attrs"]["id"] for link in saidas], ["btn-raiox-ajuda", "btn-raiox-pular"])
+        for link in saidas:
+            attrs = link["attrs"]
+            self.assertNotIn("href", attrs)
+            self.assertEqual((attrs.get("target"), attrs.get("rel")), ("_blank", "noopener noreferrer"))
+            self.assertEqual([nome for nome in attrs if nome.lower().startswith("on")], [])
+            self.assertTrue(link["nome"].endswith(NOVA_ABA), link["nome"])
+        # O script lê o número do data-numero; não há número nem link wa.me fixo nele.
+        script = (ROOT / "static" / "js" / "landing-precadastro.js").read_text(encoding="utf-8")
+        self.assertIn("data-numero", script)
+        self.assertNotRegex(script, r"wa\.me/\d")
+        self.assertNotRegex(script, r"\b55\d{10,11}\b")
+        self.assertIn('src="/static/js/landing-precadastro.js"', html)
 
     def test_como_aderir_contrata_e_tira_duvidas_com_e_sem_sessao(self):
         self.login()
@@ -647,7 +690,7 @@ class NumeroDoAmbienteTests(_WhatsAppCase):
                 self.assertEqual(self.app.config["WHATSAPP_EMPRESA_NUMERO"], NUMERO)
                 _, dom = self.pagina("/", cliente=self.anonimo)
                 links = dom.whatsapp()
-                self.assertEqual(len(links), 5)
+                self.assertEqual(len(links), 3)  # CONTRATAR, "Falar com a equipe NEXO" e o rodapé
                 for link in links:
                     self.assertTrue(link["attrs"]["href"].startswith(PREFIXO), link["attrs"]["href"])
 

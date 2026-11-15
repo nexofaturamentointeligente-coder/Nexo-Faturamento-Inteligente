@@ -56,10 +56,12 @@ class LeadIndisponivel(ValueError):
     """Lead inexistente, convertido, expirado ou sem as linhas que a operação precisa."""
 
 
-def processar(arquivos, *, limits=None) -> dict:
-    """Resultado do motor para os relatórios do lead (processo isolado). Não grava nada."""
+def processar(arquivos, *, limits=None, executar=None) -> dict:
+    """Resultado do motor para os relatórios do lead (processo isolado). Não grava nada. `executar` troca o
+    executor (padrão: etl_runtime.run_avaliacao_cenario); o Raio-X público passa um que conta a tentativa só
+    quando o processo isolado é de fato chamado, depois das recusas feitas no processo web."""
     resultado, _nomes = raio_x_servico.processar_envio(
-        arquivos, limits, executar=etl_runtime.run_avaliacao_cenario, origem="lead")
+        arquivos, limits, executar=executar or etl_runtime.run_avaliacao_cenario, origem="lead")
     return resultado
 
 
@@ -254,6 +256,9 @@ def _gravar(registros, triagem, resultado, contato, lead_id, registrado_por, ago
             lead.consentimento_em = agora
             if registrado_por is not None:
                 lead.registrado_por = registrado_por
+                # Quem autorizou o novo envio foi o consultor: o texto que o visitante do Raio-X público marcou
+                # (revisão e7a1c3f5b9d2) valia para os relatórios de antes, que este envio apaga.
+                lead.versao_autorizacao = None
         # Um único instante para o envio inteiro: o expurgo de 30 dias leva o lote junto.
         if registros:
             db.session.execute(insert(BrainstormingDadosPdv),

@@ -287,6 +287,9 @@ def create_app(config_name: str = None) -> Flask:
     # Avaliação de Cenário dos leads, só para consultores: rotas /admin/leads/*.
     from blueprints.leads import leads_bp
     app.register_blueprint(leads_bp)
+    # Raio-X público (captação pelo site): /avaliacao-inicial*, desligado por padrão (AVALIACAO_PUBLICA_ATIVA).
+    from blueprints.avaliacao_publica import avaliacao_publica_bp
+    app.register_blueprint(avaliacao_publica_bp)
 
     # Gestão contratual: prazos exibidos no fuso da política (nunca no do
     # navegador) e comandos `flask contratos` / `flask planos` (simulação padrão).
@@ -498,8 +501,12 @@ def create_app(config_name: str = None) -> Flask:
         limite = app.config.get("MAX_CONTENT_LENGTH")
         teto = (f"{limite // 1048576} MB" if limite and limite >= 1048576
                 else f"{limite // 1024} KB" if limite else "o limite do servidor")
-        if request.endpoint in ("onboarding.diagnostico_enviar", "onboarding.api_diagnostico_enviar",
-                                "leads.avaliar", "leads.reenviar"):
+        if request.endpoint == "avaliacao_publica.enviar":
+            # O Raio-X público tem teto próprio, menor que o do corpo inteiro: a mensagem é a mesma da rota.
+            from blueprints.avaliacao_publica import mensagem_de_tamanho
+            mensagem = mensagem_de_tamanho()
+        elif request.endpoint in ("onboarding.diagnostico_enviar", "onboarding.api_diagnostico_enviar",
+                                  "leads.avaliar", "leads.reenviar"):
             mensagem = f"Os relatórios enviados passam de {teto} somados. Nada foi gravado: envie menos meses por vez."
         else:
             mensagem = f"O envio passa de {teto}. Nada foi gravado: envie um arquivo menor."

@@ -1016,3 +1016,194 @@ section { padding: 88px 0; position: relative; }
   .motion-demo-sound-enable, .review-controls button { border: 1px solid ButtonText; }
   :focus-visible { outline: 3px solid Highlight; }
 }
+
+/* ============================================================
+   18. Contratação: CONTRATAR único e pré-cadastro (<dialog>)
+   ============================================================
+   O diálogo só existe com o WhatsApp comercial configurado e só abre por
+   static/js/landing-precadastro.js. Classes com prefixo próprio: .modal-content
+   e .btn-block são do Bootstrap e trariam estilos dele. Fechado, o <dialog> fica
+   com o display: none do navegador; nada aqui o mostra sem o atributo open. */
+.plans-cta { margin: 40px auto 0; }
+.plans-cta .btn-nexo { min-width: min(100%, 280px); letter-spacing: 0.06em; }
+
+html.precadastro-aberto { overflow: hidden; }
+
+.precadastro {
+  width: min(600px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--nexo-text);
+  background: var(--nexo-surface);
+  border: 1px solid var(--nexo-border-strong);
+  border-radius: var(--nexo-radius);
+  box-shadow: var(--nexo-shadow-lg);
+  color-scheme: dark;
+}
+.precadastro::backdrop {
+  background: rgba(8, 8, 13, 0.8);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.precadastro[open] { animation: precadastro-entrada 180ms ease-out; }
+@keyframes precadastro-entrada { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.precadastro-caixa { position: relative; padding: 36px 32px 32px; }
+.precadastro-fechar {
+  position: absolute; top: 10px; right: 10px; z-index: 1;
+  display: grid; place-items: center;
+  width: 44px; height: 44px; padding: 0;
+  font-size: 1.2rem;
+  color: var(--nexo-text-2); background: transparent;
+  border: 1px solid transparent; border-radius: 10px;
+  cursor: pointer;
+}
+.precadastro-fechar:hover { color: var(--nexo-text); background: var(--nexo-surface-2); border-color: var(--nexo-border-strong); }
+
+/* Sem suporte a <dialog> (navegador antigo), o elemento fechado continuaria visível: o atributo open manda. */
+.precadastro:not([open]) { display: none; }
+/* As etapas são <section>: sem o padding e sem o position da regra global de section da landing (com
+   position: relative, a etapa seria pintada por cima do canto do botão de fechar). */
+.precadastro-etapa { padding: 0; position: static; }
+/* As etapas ocultas usam a classe "hidden" (a Etapa 1 nasce com ela; ver landing.html). */
+.precadastro-etapa.hidden { display: none !important; }
+.precadastro-titulo { font-size: 1.3rem; margin: 0 52px 10px 0; }
+.precadastro-titulo:focus { outline: none; }
+.precadastro-etapa > p { font-size: 0.93rem; line-height: 1.7; margin-bottom: 22px; }
+
+.precadastro-form { display: grid; gap: 14px; }
+.precadastro-linha { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.precadastro-campo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.precadastro-campo label { color: var(--nexo-text-2); font-size: 0.86rem; font-weight: 500; line-height: 1.45; }
+.precadastro-campo input,
+.precadastro-campo select,
+.precadastro-campo textarea {
+  width: 100%; min-height: 44px; padding: 10px 12px;
+  font: inherit; font-size: 0.95rem;
+  color: var(--nexo-text); background: var(--nexo-bg-2);
+  border: 1px solid var(--nexo-border-strong); border-radius: var(--nexo-radius-xs);
+}
+.precadastro-campo textarea { min-height: 76px; resize: vertical; }
+.precadastro-campo input::placeholder,
+.precadastro-campo textarea::placeholder { color: var(--nexo-text-3); opacity: 1; }
+.precadastro-campo input:focus-visible,
+.precadastro-campo select:focus-visible,
+.precadastro-campo textarea:focus-visible { outline: 3px solid #d4b1ff; outline-offset: 2px; border-color: var(--nexo-accent); }
+.precadastro-campo input:user-invalid,
+.precadastro-campo select:user-invalid { border-color: var(--nexo-danger); }
+.precadastro-dica { color: var(--nexo-text-3); font-size: 0.78rem; }
+.precadastro-nota { color: var(--nexo-text-3); font-size: 0.82rem; line-height: 1.65; margin: 2px 0 0; }
+
+.precadastro-aceites { display: grid; gap: 14px; margin-bottom: 22px; }
+.precadastro-aceite {
+  display: flex; align-items: flex-start; gap: 12px;
+  color: var(--nexo-text-2); font-size: 0.9rem; line-height: 1.6; cursor: pointer;
+}
+.precadastro-aceite input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: var(--nexo-action); }
+
+.precadastro-acoes { display: grid; gap: 12px; }
+.precadastro .btn-nexo { white-space: normal; text-align: center; line-height: 1.35; }
+.btn-nexo-ghost { background: transparent; border-color: var(--nexo-border-strong); color: var(--nexo-text-2); }
+.btn-nexo-ghost:hover { color: var(--nexo-text); border-color: var(--nexo-accent); }
+
+@media (max-width: 600px) {
+  .precadastro-caixa { padding: 34px 20px 24px; }
+  .precadastro-linha { grid-template-columns: 1fr; }
+  .precadastro-titulo { font-size: 1.15rem; }
+}
+@media (forced-colors: active) {
+  .precadastro, .precadastro-fechar, .precadastro-campo input,
+  .precadastro-campo select, .precadastro-campo textarea { border: 1px solid ButtonText; }
+}
+
+/* ============================================================
+   19. Raio-X público (/avaliacao-inicial; templates/avaliacao_publica)
+   ============================================================
+   Mesmo visual da landing e os campos do pré-cadastro (.precadastro-*). As linhas
+   bloqueadas do resultado são texto FIXO desfocado: o desfoque é só desenho, e o
+   HTML nunca traz o dado real (diagnostico_cenario.visao_publica). */
+.publica-secao { padding: 56px 0 72px; }
+.publica-container { max-width: 880px; }
+.publica-cabecalho { margin-bottom: 28px; }
+.publica-cabecalho h1 { font-size: clamp(1.8rem, 1.2rem + 2vw, 2.5rem); margin-bottom: 12px; }
+.publica-cabecalho .section-tag { margin-bottom: 16px; }
+
+.publica-avisos { display: grid; gap: 10px; margin-bottom: 24px; }
+.publica-aviso {
+  margin: 0; padding: 14px 18px; border-radius: var(--nexo-radius-sm);
+  border: 1px solid var(--nexo-border-strong); background: var(--nexo-surface); color: var(--nexo-text);
+}
+.publica-aviso.is-danger { border-color: rgba(239, 68, 68, 0.55); background: rgba(239, 68, 68, 0.1); }
+.publica-aviso.is-warning { border-color: rgba(245, 158, 11, 0.55); background: rgba(245, 158, 11, 0.1); }
+.publica-aviso.is-info, .publica-aviso.is-success { border-color: var(--nexo-accent); background: var(--nexo-accent-soft); }
+
+.publica-form { display: grid; gap: 22px; }
+.publica-grupo {
+  display: grid; gap: 14px; margin: 0; padding: 22px;
+  background: var(--nexo-surface); border: 1px solid var(--nexo-border); border-radius: var(--nexo-radius);
+}
+.publica-grupo legend {
+  float: left; width: 100%; margin: 0 0 4px; padding: 0;
+  font-size: 1rem; font-weight: 700; color: var(--nexo-text);
+}
+.publica-erro { margin: 4px 0 0; color: #fca5a5; font-size: 0.86rem; }
+.publica-autorizacao { margin: 0; }
+.publica-form .btn-nexo-lg { justify-self: start; letter-spacing: 0.04em; }
+
+/* Campo isca: fora da tela para pessoas e leitores de tela (aria-hidden), visível para robôs. */
+.campo-isca { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+
+.publica-destaque {
+  margin-bottom: 24px; padding: 24px;
+  background: linear-gradient(135deg, var(--nexo-surface-2), var(--nexo-surface));
+  border: 1px solid var(--nexo-border-strong); border-radius: var(--nexo-radius);
+}
+.publica-destaque h2 { font-size: 1rem; margin-bottom: 6px; color: var(--nexo-text-2); }
+.publica-valor { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 2rem; font-weight: 700; color: var(--nexo-success); margin-bottom: 8px; }
+.publica-destaque p:last-child { margin: 0; font-size: 0.9rem; }
+
+.publica-blocos { display: grid; gap: 18px; }
+.publica-bloco {
+  padding: 22px; background: var(--nexo-surface);
+  border: 1px solid var(--nexo-border); border-left: 4px solid var(--nexo-accent);
+  border-radius: var(--nexo-radius);
+}
+.publica-bloco.is-urgencia { border-left-color: var(--nexo-danger); }
+.publica-bloco.is-atencao { border-left-color: var(--nexo-warning); }
+.publica-bloco.is-eletiva { border-left-color: var(--nexo-info); }
+.publica-bloco h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 1.15rem; margin-bottom: 8px; }
+.publica-contagem { color: var(--nexo-text-3); font-size: 0.88rem; font-weight: 500; }
+.publica-totais { font-size: 0.88rem; margin-bottom: 14px; }
+.publica-item {
+  padding: 14px 16px; margin-bottom: 12px;
+  background: var(--nexo-surface-2); border: 1px solid var(--nexo-border); border-radius: var(--nexo-radius-sm);
+}
+.publica-produto { margin: 0 0 4px; color: var(--nexo-text); font-weight: 600; }
+.publica-categoria { margin: 0 0 6px; color: var(--nexo-text-3); font-size: 0.84rem; }
+.publica-impacto { margin: 0 0 8px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.92rem; color: var(--nexo-text); }
+.publica-motivos { margin: 0; padding-left: 18px; color: var(--nexo-text-2); font-size: 0.86rem; }
+.publica-vazio { margin: 0; color: var(--nexo-text-3); font-size: 0.9rem; }
+.publica-bloqueados { display: grid; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
+.publica-bloqueado {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px;
+  padding: 12px 16px; border: 1px dashed var(--nexo-border-strong); border-radius: var(--nexo-radius-sm);
+}
+.publica-borrao { filter: blur(5px); user-select: none; -webkit-user-select: none; pointer-events: none; color: var(--nexo-text-2); font-size: 0.9rem; }
+.publica-mais { margin: 0; color: var(--nexo-accent-text); font-size: 0.88rem; font-weight: 600; }
+.publica-estimativa { margin: 18px 0 0; }
+.publica-desbloqueio { display: grid; justify-items: start; gap: 8px; margin-top: 26px; }
+.publica-desbloqueio .btn-nexo { white-space: normal; text-align: center; }
+.publica-sair { margin-top: 18px; }
+.publica-rodape { margin-top: 0; padding-top: 0; }
+
+@media (max-width: 600px) {
+  .publica-secao { padding: 40px 0 56px; }
+  .publica-grupo, .publica-bloco, .publica-destaque { padding: 18px; }
+  .publica-valor { font-size: 1.6rem; }
+  .publica-form .btn-nexo-lg, .publica-desbloqueio .btn-nexo { width: 100%; justify-self: stretch; }
+}

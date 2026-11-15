@@ -320,6 +320,13 @@ class Config:
     # os botões, e as telas mostram os textos de sempre.
     WHATSAPP_EMPRESA_NUMERO = _env_texto("WHATSAPP_EMPRESA_NUMERO") or ""
 
+    # === Raio-X público (captação pelo site) — blueprints/avaliacao_publica.py ===
+    # DESLIGADO por padrão (decisão do dono em 15/11/2026): desligado, /avaliacao-inicial responde 404 e
+    # o botão "REALIZAR RAIO-X" do pré-cadastro da landing some. Ligar (1) só depois de aplicar a migração
+    # e7a1c3f5b9d2 e das pendências de Docs/PRE_CADASTRO_LANDING.md (texto da autorização revisado, LGPD
+    # do lead e capacidade no Render).
+    AVALIACAO_PUBLICA_ATIVA = _env_booleano("AVALIACAO_PUBLICA_ATIVA", False)
+
 
 class DevelopmentConfig(Config):
     DEBUG = True

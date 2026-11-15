@@ -1,0 +1,76 @@
+{% extends "avaliacao_publica/_base.html" %}
+{#- Recebe só a vitrine (diagnostico_cenario.visao_publica, lista branca), a empresa e a mensagem montadas com o
+    que o próprio visitante digitou, e o protocolo. As linhas bloqueadas são texto FIXO: nenhum dado delas sai
+    do servidor (nem em atributo, nem em script, nem em comentário). -#}
+{% import "_macros.html" as m %}
+{% set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) %}
+
+{% block titulo %}Resultado do Raio-X{% endblock %}
+
+{% block conteudo %}
+<div class="publica-cabecalho">
+  <span class="section-tag">Raio-X NEXO · protocolo {{ protocolo }}</span>
+  <h1 id="publica-titulo">Resultado do Raio-X</h1>
+  <p class="lead text-break">{{ empresa }}</p>
+</div>
+{%- if vitrine.situacao != 'atual' %}
+<p class="publica-aviso is-warning">Os produtos deste Raio-X não estão mais disponíveis nesta página. Fale com a equipe NEXO pelo botão abaixo.</p>
+{%- endif %}
+{%- if vitrine.potencial_recuperavel_total is not none %}
+<section class="publica-destaque" aria-labelledby="publica-potencial">
+  <h2 id="publica-potencial">Potencial recuperável (estimativa)</h2>
+  <p class="publica-valor">R$ {{ m.brl(vitrine.potencial_recuperavel_total) }}</p>
+  <p>Estimativa de quanto a mais teria entrado no caixa se nenhuma venda saísse abaixo do custo nem abaixo do preço normal do produto. Não é lucro nem dinheiro garantido.</p>
+</section>
+{%- endif %}
+<div class="publica-blocos">
+  {%- for bloco in vitrine.blocos %}
+  <section class="publica-bloco is-{{ bloco.bloco }}" aria-labelledby="publica-bloco-{{ bloco.bloco }}">
+    <h2 id="publica-bloco-{{ bloco.bloco }}">{{ bloco.rotulo }}<span class="publica-contagem">{% if bloco.total is not none %}{{ m.num(bloco.total) }} produto{% if bloco.total != 1 %}s{% endif %}{% else %}—{% endif %}</span></h2>
+    {%- if bloco.faturamento is not none %}
+    <p class="publica-totais">Faturamento R$ {{ m.brl(bloco.faturamento) }} · Recuperável R$ {{ m.brl(bloco.recuperavel) }}</p>
+    {%- endif %}
+    {%- if bloco.real %}
+    <div class="publica-item">
+      <p class="publica-produto text-break">{{ bloco.real.produto }}</p>
+      {%- if bloco.real.categoria %}
+      <p class="publica-categoria text-break">{{ bloco.real.categoria }}</p>
+      {%- endif %}
+      <p class="publica-impacto">{% if bloco.real.a_confirmar %}Impacto a confirmar{% else %}Impacto R$ {{ m.brl(bloco.real.impacto) }}{% endif %}</p>
+      {%- if bloco.real.motivos %}
+      <ul class="publica-motivos">
+        {%- for motivo in bloco.real.motivos %}
+        <li>{{ motivo }}</li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+    </div>
+    {%- elif bloco.total == 0 %}
+    <p class="publica-vazio">Nenhum produto neste bloco.</p>
+    {%- endif %}
+    {%- if bloco.bloqueados %}
+    <ul class="publica-bloqueados" aria-hidden="true">
+      {%- for _ in range(bloco.bloqueados) %}
+      <li class="publica-bloqueado"><span class="publica-borrao">Conteúdo bloqueado para leads</span><span class="publica-borrao">R$ 0.000,00</span><span class="publica-borrao">Motivo no relatório completo</span></li>
+      {%- endfor %}
+    </ul>
+    <p class="publica-mais">Mais {{ m.num(bloco.ocultos) }} produto{% if bloco.ocultos != 1 %}s{% endif %} neste bloco no relatório completo.</p>
+    {%- endif %}
+  </section>
+  {%- endfor %}
+</div>
+<p class="precadastro-nota publica-estimativa">Os valores são estimativas feitas com os relatórios que você enviou.</p>
+<div class="publica-desbloqueio">
+  {%- if wa %}
+  {{ m.link_whatsapp(wa, mensagem, 'Desbloquear Relatório Completo', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg', descrito_por='publica-desbloqueio-nota') }}
+  <p id="publica-desbloqueio-nota" class="precadastro-nota">A equipe NEXO vai entrar em contato para apresentar os resultados.</p>
+  {%- else %}
+  <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="publica-desbloqueio-nota">Desbloquear Relatório Completo</button>
+  <p id="publica-desbloqueio-nota" class="precadastro-nota">A contratação ainda não está disponível nesta página. Os canais oficiais serão divulgados aqui.</p>
+  {%- endif %}
+</div>
+<form method="post" action="{{ url_for('avaliacao_publica.sair') }}" class="publica-sair">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn-nexo btn-nexo-ghost">Encerrar esta visualização</button>
+</form>
+{% endblock %}

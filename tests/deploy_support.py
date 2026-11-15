@@ -82,6 +82,8 @@ class DeployTestCase(unittest.TestCase):
                 # Mesmo com EVOLUTION_* no ambiente de quem roda a suíte (o config.py o lê na importação).
                 "EVOLUTION_API_URL": None, "EVOLUTION_API_KEY": None, "EVOLUTION_INSTANCE_NAME": None,
                 "WHATSAPP_EMPRESA_NUMERO": "",
+                # O Raio-X público nasce desligado, mesmo com a variável no ambiente de quem roda a suíte.
+                "AVALIACAO_PUBLICA_ATIVA": False,
             }.items():
                 config_stack.enter_context(patch.object(DevelopmentConfig, key, value, create=True))
             config_stack.enter_context(patch.object(

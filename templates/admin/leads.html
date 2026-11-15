@@ -85,6 +85,16 @@
 <section class="nexo-card" aria-labelledby="leadsTitulo">
     <div class="nexo-card-head"><div><h2 id="leadsTitulo"><i class="bi bi-people text-purple" aria-hidden="true"></i> Leads avaliados</h2></div></div>
     <div class="nexo-card-body">
+        {#- O protocolo que vem na mensagem do Raio-X público acha o lead mesmo fora dos mais recentes. #}
+        <form method="get" action="{{ url_for('leads.lista') }}" class="d-flex flex-wrap align-items-end gap-2 mb-3" role="search" aria-label="Buscar lead pelo protocolo">
+            <div>
+                <label class="form-label mb-1" for="buscaProtocolo">Protocolo do Raio-X público</label>
+                <input class="form-control" type="text" id="buscaProtocolo" name="protocolo" value="{{ protocolo or '' }}" maxlength="8" autocomplete="off" spellcheck="false" aria-describedby="buscaProtocoloDica">
+            </div>
+            <button type="submit" class="btn-ghost"><i class="bi bi-search" aria-hidden="true"></i> Buscar</button>
+            {% if protocolo %}<a class="btn-ghost" href="{{ url_for('leads.lista') }}">Limpar a busca</a>{% endif %}
+            <p class="field-hint mb-0 w-100" id="buscaProtocoloDica">Os 8 caracteres da mensagem do WhatsApp (por exemplo, "protocolo ABCD1234").</p>
+        </form>
         {% if leads %}
         <div class="table-wrap">
         <div class="table-responsive-x">
@@ -107,7 +117,7 @@
                     {% set painel = paineis.get(lead.id, {}) %}
                     {% set triagem = painel.get('triagem', {}) %}
                     <tr>
-                        <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong><br><small class="t-mut text-break">{{ lead.nome_contato }}</small><br><small class="t-mut t-email">{{ lead.email }}</small></td>
+                        <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong><br><small class="t-mut text-break">{{ lead.nome_contato }}</small><br><small class="t-mut t-email">{{ lead.email }}</small>{% if lead.origem == 'site' %}<br><span class="nexo-badge b-purple"><span class="dot"></span>Site</span> <small class="t-mut">protocolo {{ lead.protocolo }}</small>{% endif %}</td>
                         <td>{{ badge_lead(lead.status) }}</td>
                         <td class="text-end fw-num">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}{% else %}—{% endif %}</td>
                         <td><span class="text-nowrap">{% for bloco, sigla in [('urgencia', 'U'), ('atencao', 'A'), ('eletiva', 'E')] %}<abbr title="{{ rotulos_blocos[bloco] }}">{{ sigla }}</abbr> {% if triagem.get(bloco) is not none %}{{ m.num(triagem.get(bloco)) }}{% else %}—{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</span></td>
@@ -124,9 +134,9 @@
             </table>
         </div>
         </div>
-        {% if total_leads > leads | length %}<p class="field-hint mt-2 mb-0">Mostrando as {{ leads | length }} avaliações mais recentes de {{ m.num(total_leads) }}.</p>{% endif %}
+        {% if not protocolo and total_leads > leads | length %}<p class="field-hint mt-2 mb-0">Mostrando as {{ leads | length }} avaliações mais recentes de {{ m.num(total_leads) }}.</p>{% endif %}
         {% else %}
-        <p class="t-mut mb-0">Nenhum lead avaliado ainda.</p>
+        <p class="t-mut mb-0">{% if protocolo %}Nenhum lead com o protocolo {{ protocolo|upper }}.{% else %}Nenhum lead avaliado ainda.{% endif %}</p>
         {% endif %}
     </div>
 </section>

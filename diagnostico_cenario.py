@@ -585,6 +585,99 @@ def resumo_inteligencia_valido(resumo):
     return resumo
 
 
+def _expira_em(registros: list, retencao_dias: int):
+    """Quando os dados de PDV do lead saem: o envio mais antigo das linhas mais a retenção (None sem linhas)."""
+    expira_em = min((r["criado_em"] for r in registros), default=None)
+    return expira_em + timedelta(days=retencao_dias) if expira_em is not None else None
+
+
+def _situacao_dos_dados(lead: dict, registros: list, expira_em, agora):
+    """"expirado" (sem linhas, lead expirado ou além da retenção), "desatualizado" (linhas de outra versão
+    das regras) ou None, quando a triagem pode ser refeita com as linhas."""
+    if not registros or lead["status"] == "expirado" or expira_em <= agora:
+        return "expirado"
+    if {r.get("versao_regras") for r in registros} != {avaliacao_motor.VERSAO_REGRAS_LEAD}:
+        return "desatualizado"
+    return None
+
+
+def _triagem_do_lead(lead: dict, registros: list, limiares_gravados):
+    """(meta, cobertura, limiares, triagem) refeitos das linhas, com os limiares gravados no lead
+    (`limiares_gravados`, já lidos por ler_objeto). Levanta um dos _DADO_ILEGIVEL com meta, limiares ou
+    versão da triagem fora do formato: como avaliacao_cenario.limiares_do_lead, sem gravação valem os
+    padrão, e gravação ilegível ou de outra versão não cai nos padrão em silêncio (a triagem mostrada seria
+    outra que a gravada)."""
+    meta = ler_objeto(lead.get("meta_json")) or {}
+    cobertura = triagem_cenario.Cobertura.do_envio(meta)
+    if lead.get("limiares_triagem_json"):
+        if limiares_gravados is None:
+            raise ValueError("Limiares gravados ilegíveis.")
+        limiares = triagem_cenario.Limiares.de_dict(limiares_gravados)
+    else:
+        limiares = triagem_cenario.LIMIARES_PADRAO
+    if lead.get("versao_triagem") != triagem_cenario.VERSAO_TRIAGEM:
+        raise ValueError("Triagem de outra versão.")
+    return meta, cobertura, limiares, triagem_cenario.triar(registros, cobertura, limiares)
+
+
+# =====================================================================
+# Vitrine pública do Raio-X do lead (blueprints/avaliacao_publica.py; decisão do dono em 15/11/2026)
+# =====================================================================
+VERSAO_VISAO_PUBLICA = "visao-publica-2026-11.1"
+# Linhas desfocadas por bloco: texto fixo no HTML, nunca dado do lead; o teto fixo não deixa o HTML
+# crescer com o catálogo nem contar quantos produtos o bloco tem além do número já mostrado.
+BLOQUEADOS_POR_BLOCO = 3
+# O faturamento e o recuperável do bloco só aparecem com 3 produtos ou mais: com 1 ou 2, a conta (total
+# menos o produto mostrado) revelaria o produto oculto.
+MINIMO_PARA_TOTAIS_DO_BLOCO = 3
+
+
+def visao_publica(lead: dict, registros: list, *, agora, retencao_dias: int) -> dict:
+    """O que a tela pública do Raio-X do lead pode mostrar, montado campo a campo (lista branca), nunca a
+    partir do payload do consultor. `lead` e `registros` como em montar_payload. Por bloco da triagem
+    (Urgência, Atenção, Eletiva): quantos produtos tem, o produto de maior impacto (o mesmo da 1ª linha da
+    tela do consultor: itens_dos_blocos com limite 1) só com nome, categoria, motivos, impacto e se o custo
+    está a confirmar, e o faturamento e o recuperável do bloco quando ele tem 3 produtos ou mais. Dos outros
+    produtos não sai NENHUM campo: só a quantidade de linhas bloqueadas (até 3), que a tela desenha com texto
+    fixo. Também o potencial recuperável total do lead. Sem linhas atuais (expiradas ou de outra versão), as
+    contagens do resumo gravado, sem produto."""
+    if any(r.get("lead_id") != lead["id"] for r in registros):
+        raise ValueError("Há linhas de PDV de outro lead na vitrine.")
+    situacao = _situacao_dos_dados(lead, registros, _expira_em(registros, retencao_dias), agora) or "atual"
+    itens = None
+    if situacao == "atual":
+        try:
+            _meta, cobertura, _limiares, triagem = _triagem_do_lead(
+                lead, registros, ler_objeto(lead.get("limiares_triagem_json")))
+            itens = itens_dos_blocos(registros, cobertura, triagem, limite=1)
+        except _DADO_ILEGIVEL:
+            situacao = "desatualizado"
+    blocos = []
+    for bloco in triagem_cenario.BLOCOS:
+        resumo = resumo_de_bloco_valido(ler_objeto(lead.get("resumos_json", {}).get(bloco)))
+        if itens is not None:
+            total = itens[bloco]["total"]
+            primeiro = itens[bloco]["itens"][0] if itens[bloco]["itens"] else None
+        else:
+            total, primeiro = (resumo["itens"] if resumo else None), None
+        real = None
+        if primeiro is not None:
+            real = {"produto": primeiro["produto"], "categoria": primeiro["categoria"],
+                    "motivos": [motivo["rotulo"] for motivo in primeiro["motivos"]],
+                    "impacto": primeiro["impacto"], "a_confirmar": bool(primeiro["a_confirmar"])}
+        ocultos = max((total or 0) - (1 if real else 0), 0)
+        com_totais = resumo is not None and total is not None and total >= MINIMO_PARA_TOTAIS_DO_BLOCO
+        blocos.append({
+            "bloco": bloco, "rotulo": triagem_cenario.ROTULOS_DOS_BLOCOS[bloco], "total": total, "real": real,
+            "ocultos": ocultos, "bloqueados": min(ocultos, BLOQUEADOS_POR_BLOCO),
+            "faturamento": _dinheiro(Decimal(resumo["faturamento"])) if com_totais else None,
+            "recuperavel": _dinheiro(Decimal(resumo["recuperavel"])) if com_totais else None,
+        })
+    potencial = lead.get("vazamento_total_reais")
+    return {"versao": VERSAO_VISAO_PUBLICA, "situacao": situacao, "blocos": blocos,
+            "potencial_recuperavel_total": _dinheiro(potencial) if potencial is not None else None}
+
+
 def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
                    limite: int = ITENS_POR_BLOCO_PADRAO, parametros_inteligencia=None) -> dict:
     """O payload do consultor. `lead`: os campos do lead (id, status, versões, período, arquivos,
@@ -621,35 +714,23 @@ def montar_payload(lead: dict, registros: list, *, agora, retencao_dias: int,
         "resumo_inteligencia": resumo_inteligencia_valido(ler_objeto(lead.get("resumo_inteligencia_json"))),
         "definicoes": definicoes_da_versao(lead.get("versao_triagem")), "avisos": [], "visualizacoes": None,
     }
-    expira_em = min((r["criado_em"] for r in registros), default=None)
-    expira_em = expira_em + timedelta(days=retencao_dias) if expira_em is not None else None
+    expira_em = _expira_em(registros, retencao_dias)
     payload["dados_pdv_ate"] = expira_em.isoformat() if expira_em is not None else None
-    if not registros or lead["status"] == "expirado" or expira_em <= agora:
+    situacao = _situacao_dos_dados(lead, registros, expira_em, agora)
+    if situacao == "expirado":
         payload["situacao"] = "expirado"
         payload["avisos"].append(f"Os dados de PDV deste lead saem {retencao_dias} dias depois do envio: "
                                  "fica só o resumo. Envie os relatórios de novo para ver itens e categorias.")
         payload["visualizacoes"] = visualizacoes(payload)
         return payload
-    if {r.get("versao_regras") for r in registros} != {avaliacao_motor.VERSAO_REGRAS_LEAD}:
+    if situacao == "desatualizado":
         payload["situacao"] = "desatualizado"
         payload["avisos"].append("Os dados deste lead foram gravados por outra versão das regras: envie os "
                                  "relatórios de novo para ver itens e categorias.")
         payload["visualizacoes"] = visualizacoes(payload)
         return payload
     try:
-        meta = ler_objeto(lead.get("meta_json")) or {}
-        cobertura = triagem_cenario.Cobertura.do_envio(meta)
-        # Como avaliacao_cenario.limiares_do_lead: sem gravação, os padrão; gravação ilegível ou de
-        # outra versão não cai nos padrão em silêncio (a triagem mostrada seria outra que a gravada).
-        if lead.get("limiares_triagem_json"):
-            if payload["limiares"] is None:
-                raise ValueError("Limiares gravados ilegíveis.")
-            limiares = triagem_cenario.Limiares.de_dict(payload["limiares"])
-        else:
-            limiares = triagem_cenario.LIMIARES_PADRAO
-        if lead.get("versao_triagem") != triagem_cenario.VERSAO_TRIAGEM:
-            raise ValueError("Triagem de outra versão.")
-        triagem = triagem_cenario.triar(registros, cobertura, limiares)
+        meta, cobertura, limiares, triagem = _triagem_do_lead(lead, registros, payload["limiares"])
         matriz = matriz_por_categoria(registros, cobertura, triagem, meta)
         blocos = itens_dos_blocos(registros, cobertura, triagem, limite)
     except _DADO_ILEGIVEL:

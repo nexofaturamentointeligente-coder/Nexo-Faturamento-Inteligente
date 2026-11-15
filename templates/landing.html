@@ -17,6 +17,7 @@
   <script id="nexo-plotly" async src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8" integrity="sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7" crossorigin="anonymous"></script>
   <script defer src="{{ url_for('static', filename='js/landing.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/landing-video.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/landing-precadastro.js') }}"></script>
 </head>
 <body>
 <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
@@ -391,11 +392,6 @@
           <li><span aria-hidden="true">✓</span><span>Parecer objetivo</span></li>
           <li><span aria-hidden="true">✓</span><span>Indicadores principais</span></li>
         </ul>
-        {%- if wa %}
-        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('BRONZE'), 'Contrate Agora', classe='btn-nexo btn-nexo-secondary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano BRONZE') }}
-        {%- else %}
-        <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
-        {%- endif %}
       </article>
       <article class="plan prata">
         <h3 class="plan-name">PRATA</h3>
@@ -408,11 +404,6 @@
           <li><span aria-hidden="true">✓</span><span>Parecer completo</span></li>
           <li><span aria-hidden="true">✓</span><span>Pontos positivos, alertas e recomendações</span></li>
         </ul>
-        {%- if wa %}
-        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('PRATA'), 'Contrate Agora', classe='btn-nexo btn-nexo-secondary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano PRATA') }}
-        {%- else %}
-        <button type="button" class="btn-nexo btn-nexo-secondary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
-        {%- endif %}
       </article>
       <article class="plan ouro featured">
         <span class="plan-flag">Mais completo</span>
@@ -427,12 +418,18 @@
           <li><span aria-hidden="true">✓</span><span>Parecer aprofundado</span></li>
           <li><span aria-hidden="true">✓</span><span>Recomendações mais detalhadas</span></li>
         </ul>
-        {%- if wa %}
-        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar_plano|format('OURO'), 'Contrate Agora', classe='btn-nexo btn-nexo-primary w-100', icone='svg', descrito_por='contratacao-status', contexto='o plano OURO') }}
-        {%- else %}
-        <button type="button" class="btn-nexo btn-nexo-primary w-100" disabled aria-describedby="contratacao-status">Contrate Agora</button>
-        {%- endif %}
       </article>
+    </div>
+    {#- Contratação (decisão do dono, 15/11/2026): um CONTRATAR único abaixo da grade, no lugar dos
+        "Contrate Agora" de cada card. Sem JavaScript, ele leva direto ao WhatsApp com a mensagem de
+        contratação (macro intacta); com JavaScript, static/js/landing-precadastro.js abre o
+        pré-cadastro (#precadastro). Sem número válido, sai desabilitado, como os botões de antes. #}
+    <div class="plans-cta text-center" data-precadastro-gatilho>
+      {%- if wa %}
+      {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar, 'CONTRATAR', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg', descrito_por='contratacao-status') }}
+      {%- else %}
+      <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="contratacao-status">CONTRATAR</button>
+      {%- endif %}
     </div>
     <div class="plan-availability text-center mt-4" id="contratacao">
       {%- if wa %}
@@ -442,6 +439,104 @@
       {%- endif %}
       <a href="{{ url_for('como_aderir') }}" class="text-link">Como obter acesso ao NEXO <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h16M13 5l7 7-7 7"/></svg></a>
     </div>
+    {%- if wa %}
+    {#- Pré-cadastro comercial (Docs/PRE_CADASTRO_LANDING.md). Só existe com número válido: sem ele,
+        a landing sai como antes (tests/test_whatsapp_telas.py). Fica fechado até o
+        static/js/landing-precadastro.js abri-lo; sem JavaScript, ninguém chega aqui e o CONTRATAR
+        vai direto ao WhatsApp. As etapas 1 a 3 não enviam nada ao servidor: os dados vão só no
+        texto da mensagem que o próprio visitante confere e envia pelo WhatsApp. #}
+    <dialog id="precadastro" class="precadastro" aria-labelledby="precadastro-titulo-2" data-numero="{{ wa }}">
+      <div class="precadastro-caixa">
+        <button type="button" class="precadastro-fechar" data-precadastro-fechar aria-label="Fechar o pré-cadastro"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        {#- ETAPA 1 (aceite dos Termos de Uso e da Política de Privacidade): pronta, mas DESLIGADA
+            nesta entrega, com a classe "hidden" (decisão do dono, 15/11/2026): os textos ainda não
+            foram publicados e não existe página pública para eles. Para REATIVAR no futuro:
+            1. Publicar os textos revisados (Admin > Configurações > Documentos Legais) e criar as
+               páginas públicas que os mostram.
+            2. Pôr esses endereços no href dos dois links abaixo. Eles ficam sem href de propósito:
+               /termos e /privacidade não existem. Link local que não responde reprova
+               tests/test_avaliacao_publica.py (destinos do diálogo), e link com "termos" ou "privacidade"
+               reprova tests/test_whatsapp_telas.py: atualize os dois junto.
+            3. Trocar ETAPA_TERMOS_ATIVA para true em static/js/landing-precadastro.js. O script tira
+               a classe "hidden" desta etapa e passa a abrir o modal por ela.
+            4. Decidir como registrar o aceite no servidor (a caixa marcada no navegador não fica
+               gravada) e atualizar os testes dos links legais e do aviso do rodapé. #}
+        <section id="step-1" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-1">
+          <h2 id="precadastro-titulo-1" class="precadastro-titulo" tabindex="-1">Antes de continuar</h2>
+          <p>Para prosseguir com sua solicitação, leia e aceite nossos Termos de Uso e nossa Política de Privacidade.</p>
+          <div class="precadastro-aceites">
+            <label class="precadastro-aceite"><input type="checkbox" id="check-termos"><span>Li e aceito os <a class="text-link">Termos de Uso</a>.</span></label>
+            <label class="precadastro-aceite"><input type="checkbox" id="check-privacidade"><span>Li e estou ciente da <a class="text-link">Política de Privacidade</a> e das condições de tratamento dos meus dados.</span></label>
+          </div>
+          <button type="button" id="btn-next-1" class="btn-nexo btn-nexo-primary w-100" disabled>Continuar</button>
+        </section>
+        <section id="step-2" class="precadastro-etapa" aria-labelledby="precadastro-titulo-2">
+          <h2 id="precadastro-titulo-2" class="precadastro-titulo" tabindex="-1">Vamos conhecer sua empresa</h2>
+          <p>Preencha algumas informações para que nossa equipe compreenda melhor suas necessidades.</p>
+          <form id="form-pre-cadastro" class="precadastro-form">
+            <div class="precadastro-linha">
+              <div class="precadastro-campo">
+                <label for="lead-nome">Nome do responsável *</label>
+                <input type="text" id="lead-nome" name="nome" required maxlength="120" autocomplete="name">
+              </div>
+              <div class="precadastro-campo">
+                <label for="lead-empresa">Nome da empresa *</label>
+                <input type="text" id="lead-empresa" name="empresa" required maxlength="120" autocomplete="organization">
+              </div>
+            </div>
+            <div class="precadastro-linha">
+              <div class="precadastro-campo">
+                <label for="lead-whatsapp">WhatsApp para contato *</label>
+                <input type="tel" id="lead-whatsapp" name="whatsapp" required inputmode="tel" autocomplete="tel-national" placeholder="(00) 00000-0000" maxlength="60" aria-describedby="lead-whatsapp-dica">
+                <small id="lead-whatsapp-dica" class="precadastro-dica">Com DDD.</small>
+              </div>
+              <div class="precadastro-campo">
+                <label for="lead-plano">Plano de interesse *</label>
+                <select id="lead-plano" name="plano" required>
+                  <option value="">Selecione um plano</option>
+                  <option value="Bronze">Bronze</option>
+                  <option value="Prata">Prata</option>
+                  <option value="Ouro">Ouro</option>
+                  <option value="Custom / Enterprise">Custom / Enterprise</option>
+                </select>
+              </div>
+            </div>
+            <div class="precadastro-linha">
+              <div class="precadastro-campo">
+                <label for="lead-email">E-mail (Opcional)</label>
+                <input type="email" id="lead-email" name="email" maxlength="254" autocomplete="email">
+              </div>
+              <div class="precadastro-campo">
+                <label for="lead-faturamento">Faixa de faturamento (Opcional)</label>
+                <select id="lead-faturamento" name="faturamento">
+                  <option value="">Selecione</option>
+                  <option value="Até R$ 50 mil">Até R$ 50 mil</option>
+                  <option value="R$ 50 mil a R$ 200 mil">R$ 50 mil a R$ 200 mil</option>
+                  <option value="Acima de R$ 200 mil">Acima de R$ 200 mil</option>
+                </select>
+              </div>
+            </div>
+            <div class="precadastro-campo">
+              <label for="lead-desafio">Qual é a principal dificuldade que sua empresa enfrenta atualmente? (Opcional)</label>
+              <textarea id="lead-desafio" name="desafio" rows="2" maxlength="400" placeholder="Conte brevemente o que você gostaria de melhorar..."></textarea>
+            </div>
+            <p class="precadastro-nota">Até aqui, nada é gravado no site: os dados entram só na mensagem que você vai conferir e enviar pelo seu WhatsApp para a equipe NEXO.</p>
+            <button type="submit" id="btn-next-2" class="btn-nexo btn-nexo-primary w-100">Avançar</button>
+          </form>
+        </section>
+        <section id="step-3" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-3">
+          <h2 id="precadastro-titulo-3" class="precadastro-titulo" tabindex="-1">Quer conhecer melhor a situação da sua empresa?</h2>
+          <p>Você também pode realizar uma avaliação inicial para ajudar nossa equipe a compreender melhor o cenário do seu negócio.</p>
+          <div class="precadastro-acoes">
+            {#- O Raio-X público (/avaliacao-inicial) só com AVALIACAO_PUBLICA_ATIVA ligado; sem destino, o script esconde o botão. #}
+            <a id="btn-raiox-fazer" class="btn-nexo btn-nexo-primary w-100" data-raiox-destino{% if config.AVALIACAO_PUBLICA_ATIVA is sameas true %} href="{{ url_for('avaliacao_publica.formulario') }}"{% endif %}>REALIZAR RAIO-X</a>
+            <a id="btn-raiox-ajuda" class="btn-nexo btn-nexo-secondary w-100" target="_blank" rel="noopener noreferrer" data-raiox-situacao="ajuda">PRECISO DE AJUDA COM OS RELATÓRIOS<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a>
+            <a id="btn-raiox-pular" class="btn-nexo btn-nexo-ghost w-100" target="_blank" rel="noopener noreferrer" data-raiox-situacao="pular">FINALIZAR SEM RAIO-X<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a>
+          </div>
+        </section>
+      </div>
+    </dialog>
+    {%- endif %}
   </div>
 </section>
 <section aria-labelledby="final-cta-title">

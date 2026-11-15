@@ -1,0 +1,83 @@
+{% extends "avaliacao_publica/_base.html" %}
+
+{% block titulo %}Raio-X: avaliação inicial{% endblock %}
+
+{% block scripts %}<script defer src="{{ url_for('static', filename='js/avaliacao-publica.js') }}"></script>{% endblock %}
+
+{% block conteudo %}
+<div class="publica-cabecalho">
+  <span class="section-tag">Raio-X NEXO</span>
+  <h1 id="publica-titulo">Raio-X: avaliação inicial</h1>
+  <p class="lead">Você também pode realizar uma avaliação inicial para ajudar nossa equipe a compreender melhor o cenário do seu negócio.</p>
+</div>
+<form class="publica-form" method="post" action="{{ url_for('avaliacao_publica.enviar') }}" enctype="multipart/form-data"
+      data-avaliacao-publica data-max-arquivos="{{ max_arquivos }}" data-max-bytes="{{ max_mb * 1048576 }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <fieldset class="publica-grupo">
+    <legend>Sua empresa</legend>
+    <div class="precadastro-linha">
+      <div class="precadastro-campo">
+        <label for="publica-nome">Nome do responsável *</label>
+        <input type="text" id="publica-nome" name="nome" required maxlength="120" autocomplete="name" value="{{ formulario.get('nome', '') }}">
+      </div>
+      <div class="precadastro-campo">
+        <label for="publica-empresa">Nome da empresa *</label>
+        <input type="text" id="publica-empresa" name="empresa" required maxlength="120" autocomplete="organization" value="{{ formulario.get('empresa', '') }}">
+      </div>
+    </div>
+    <div class="precadastro-linha">
+      <div class="precadastro-campo">
+        <label for="publica-whatsapp">WhatsApp para contato *</label>
+        <input type="tel" id="publica-whatsapp" name="whatsapp" required inputmode="tel" autocomplete="tel-national" placeholder="(00) 00000-0000" maxlength="60" aria-describedby="publica-whatsapp-dica" value="{{ formulario.get('whatsapp', '') }}">
+        <small id="publica-whatsapp-dica" class="precadastro-dica">Com DDD.</small>
+      </div>
+      <div class="precadastro-campo">
+        <label for="publica-email">E-mail *</label>
+        <input type="email" id="publica-email" name="email" required maxlength="254" autocomplete="email" value="{{ formulario.get('email', '') }}">
+      </div>
+    </div>
+    <div class="precadastro-linha">
+      <div class="precadastro-campo">
+        <label for="publica-plano">Plano de interesse *</label>
+        <select id="publica-plano" name="plano_interesse" required>
+          <option value="">Selecione um plano</option>
+          {%- for codigo, rotulo in planos.items() %}
+          <option value="{{ codigo }}"{% if formulario.get('plano_interesse') == codigo %} selected{% endif %}>{{ rotulo }}</option>
+          {%- endfor %}
+        </select>
+      </div>
+      <div class="precadastro-campo">
+        <label for="publica-faixa">Faixa de faturamento (Opcional)</label>
+        <select id="publica-faixa" name="faixa_faturamento">
+          <option value="">Selecione</option>
+          {%- for codigo, rotulo in faixas.items() %}
+          <option value="{{ codigo }}"{% if formulario.get('faixa_faturamento') == codigo %} selected{% endif %}>{{ rotulo }}</option>
+          {%- endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="precadastro-campo">
+      <label for="publica-dificuldade">Qual é a principal dificuldade que sua empresa enfrenta atualmente? (Opcional)</label>
+      <textarea id="publica-dificuldade" name="dificuldade" rows="2" maxlength="{{ dificuldade_maximo }}" placeholder="Conte brevemente o que você gostaria de melhorar...">{{ formulario.get('dificuldade', '') }}</textarea>
+    </div>
+  </fieldset>
+  <fieldset class="publica-grupo">
+    <legend>Relatórios</legend>
+    <div class="precadastro-campo">
+      <label for="publica-arquivos">Relatórios de vendas *</label>
+      <input type="file" id="publica-arquivos" name="arquivos" accept=".csv,.xlsx,.xls,.xml" multiple required aria-describedby="publica-arquivos-dica">
+      <small id="publica-arquivos-dica" class="precadastro-dica">De 1 a {{ max_arquivos }} arquivos .csv, .xlsx, .xls ou .xml (Planilha XML 2003), até {{ max_mb }} MB somados.</small>
+      <p class="publica-erro" data-arquivos-erro role="alert" hidden></p>
+    </div>
+  </fieldset>
+  {#- Campo isca: fora da tela e da ordem de tabulação; quem o preenche é robô (o servidor recusa). #}
+  <div class="campo-isca" aria-hidden="true">
+    <label for="publica-campo-isca">Deixe este campo em branco</label>
+    <input type="text" id="publica-campo-isca" name="campo_isca" tabindex="-1" autocomplete="off">
+  </div>
+  <label class="precadastro-aceite publica-autorizacao"><input type="checkbox" name="autorizacao" value="1" required><span>{{ texto_autorizacao }}</span></label>
+  <p class="precadastro-nota">Ao enviar, o nome, a empresa, o e-mail, o WhatsApp e as respostas acima ficam registrados para a equipe NEXO. Os arquivos são lidos num processo isolado e descartados em seguida, sem guardar nem o nome deles: o NEXO grava os totais por produto e ano, por {{ retencao_dias }} dias, e o resumo da avaliação. Com muitos meses, a leitura pode levar até um minuto.</p>
+  <button type="submit" class="btn-nexo btn-nexo-primary btn-nexo-lg" data-enviar>REALIZAR RAIO-X</button>
+  <p class="precadastro-nota" data-enviando role="status" hidden>Lendo os relatórios. Isso pode levar até um minuto: não feche esta página.</p>
+</form>
+{% endblock %}

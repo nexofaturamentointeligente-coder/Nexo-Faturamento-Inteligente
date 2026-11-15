@@ -127,15 +127,22 @@ class LandingCommercialHTTPTests(DeployTestCase):
     def test_contracting_and_review_buttons_do_not_promise_unavailable_flows(self):
         html, dom = self.landing()
         pending = [attrs for tag, attrs in dom.elements if tag == "button" and "disabled" in attrs]
-        self.assertGreaterEqual(len(pending), 5)  # 3 planos, contato e avaliação.
-        for title in ("BRONZE", "PRATA", "OURO", "Contrate Agora", "Sob consulta"):
+        # CONTRATAR único (decisão do dono, 15/11/2026), contato, avaliação e as setas do carrossel.
+        self.assertGreaterEqual(len(pending), 5)
+        described = {attrs.get("aria-describedby") for attrs in pending}
+        self.assertTrue({"contratacao-status", "contact-availability", "reviews-availability"} <= described)
+        for title in ("BRONZE", "PRATA", "OURO", "CONTRATAR", "Sob consulta"):
             self.assertIn(title, dom.text)
-        self.assertEqual(dom.text.count("Contrate Agora"), 3)
+        self.assertEqual(dom.text.count("CONTRATAR"), 1)
+        self.assertNotIn("Contrate Agora", dom.text)
         self.assertIn("A contratação ainda não está disponível nesta página", dom.text)
         self.assertIn("O envio de avaliações ainda não está disponível", dom.text)
         plans = html.split('id="planos"', 1)[1].split("</section>", 1)[0]
         self.assertNotIn('href="/auth/login"', plans)
         self.assertIn('href="/como-aderir"', plans)
+        # Sem canal confirmado não há pré-cadastro: nem o diálogo, nem formulário na página.
+        self.assertNotIn("<dialog", html)
+        self.assertFalse(any(tag in ("dialog", "form") for tag, _ in dom.elements))
 
     def test_no_unconfirmed_contacts_corporate_data_or_legal_links_are_published(self):
         _, dom = self.landing()

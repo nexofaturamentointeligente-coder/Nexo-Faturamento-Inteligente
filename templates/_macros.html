@@ -291,7 +291,10 @@
    sem o DDI viraria link para outro país (62... é a Indonésia). Vazio ou qualquer outra coisa
    não desenha nada, e a tela mostra o que mostrava antes (COM-001).
    Os textos pré-preenchidos nunca levam dado do cliente: nem nome, nem empresa, nem o
-   assunto do chamado (só o número dele). Cadastro e recuperação de senha seguem por e-mail. ---- #}
+   assunto do chamado (só o número dele). Cadastro e recuperação de senha seguem por e-mail.
+   Exceção decidida pelo dono em 15/11/2026: o pré-cadastro da landing monta no navegador
+   (static/js/landing-precadastro.js) a mensagem com o que o próprio visitante digitou;
+   ver Docs/PRE_CADASTRO_LANDING.md. ---- #}
 {%- set whatsapp_textos = {
     'contratar': 'Olá! Quero contratar um plano do NEXO Faturamento Inteligente.',
     'contratar_plano': 'Olá! Quero contratar o plano %s do NEXO Faturamento Inteligente.',

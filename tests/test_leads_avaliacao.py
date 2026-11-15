@@ -79,7 +79,9 @@ class EsquemaTests(_LeadsCase):
             # 9b3e5d7f1a28
             "resumo_inteligencia_json",
             # c5f8a1d3e7b9
-            "indicadores_executivos_json"})
+            "indicadores_executivos_json",
+            # e7a1c3f5b9d2 (captação pelo site)
+            "origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao"})
         colunas = {c["name"] for c in inspetor.get_columns("brainstorming_dados_pdv")}
         self.assertEqual(colunas, {
             "id", "lead_id", "ano_exercicio", "codigo_produto", "descricao_produto", "quantidade",
@@ -136,6 +138,19 @@ class EsquemaTests(_LeadsCase):
         self.assertEqual(status, "pendente")
         self.assertIsNotNone(criado)
 
+    def test_lead_do_site_aceita_os_codigos_da_lista_e_o_padrao_e_consultor(self):
+        """e7a1c3f5b9d2: cada plano de interesse (inclusive CUSTOM) e cada faixa passam nos CHECKs, nos limites de
+        tamanho; sem informar a origem, o lead é do consultor."""
+        from models import FAIXAS_DE_FATURAMENTO, PLANOS_DE_INTERESSE
+        for plano in PLANOS_DE_INTERESSE:
+            for faixa in (*FAIXAS_DE_FATURAMENTO, None):
+                with self.subTest(plano=plano, faixa=faixa):
+                    lead = self.lead(origem="site", plano_interesse=plano, faixa_faturamento=faixa,
+                                     dificuldade="x" * 400, versao_autorizacao="v" * 40)
+                    self.assertEqual((lead.origem, lead.plano_interesse), ("site", plano))
+        self.db.session.commit()
+        self.assertEqual(self.lead().origem, "consultor")
+
     def test_restricoes_recusam_dado_invalido(self):
         invalidos = {
             "status": {"status": "aprovado"},
@@ -153,6 +168,12 @@ class EsquemaTests(_LeadsCase):
             "itens abaixo do custo negativos": {"itens_venda_abaixo_custo": -1},
             "período invertido": {"periodo_inicio": date(2025, 2, 1), "periodo_fim": date(2025, 1, 31)},
             "consultor inexistente": {"registrado_por": 987654321},
+            # e7a1c3f5b9d2 (captação pelo site): no SQLite o VARCHAR não limita o tamanho; os CHECKs, sim.
+            "origem desconhecida": {"origem": "landing"},
+            "plano de interesse fora da lista": {"plano_interesse": "PLATINA"},
+            "faixa fora da lista": {"faixa_faturamento": "MILHAO"},
+            "dificuldade longa": {"dificuldade": "x" * 401},
+            "versão da autorização longa": {"versao_autorizacao": "v" * 41},
         }
         for caso, campos in invalidos.items():
             with self.subTest(caso=caso):

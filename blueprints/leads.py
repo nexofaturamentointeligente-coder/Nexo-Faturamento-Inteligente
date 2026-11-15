@@ -1,8 +1,9 @@
 """
 NEXO - Avaliação de Cenário (blueprint `leads`, só consultores)
 ================================================================
-Rotas (todas admin_required: na fase 1 o consultor envia em nome do lead; a captação pública
-fica para depois da LGPD do lead, do anti-abuso e da capacidade, ver Docs/AVALIACAO_DE_CENARIO.md):
+Rotas (todas admin_required: aqui o consultor envia em nome do lead. A captação pelo site é o Raio-X
+público de blueprints/avaliacao_publica.py, atrás do interruptor AVALIACAO_PUBLICA_ATIVA, desligado por
+padrão; os leads dele aparecem aqui com a origem "site". Ver Docs/PRE_CADASTRO_LANDING.md):
   GET  /admin/leads                  → leads avaliados e o formulário de nova avaliação
   POST /admin/leads                  → lê os relatórios do lead e grava a avaliação
   GET  /admin/leads/<id>             → resumo executivo do caixa resgatável, matriz de triagem, marcas,
@@ -33,6 +34,7 @@ from collections import OrderedDict, namedtuple
 from datetime import timedelta
 from decimal import Decimal
 import json
+import re
 import threading
 import time
 from weakref import WeakKeyDictionary
@@ -40,7 +42,7 @@ from weakref import WeakKeyDictionary
 from flask import (Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template,
                    request, url_for)
 from flask_login import current_user
-from sqlalchemy import func, inspect, select
+from sqlalchemy import String, cast, func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 
 import avaliacao_cenario
@@ -59,7 +61,8 @@ import inteligencia_estoque
 import leads_avaliacao
 from leads_avaliacao import RETENCAO_DIAS
 import whatsapp_service
-from models import BrainstormingDadosPdv, LeadAvaliacao
+from models import (BrainstormingDadosPdv, LeadAvaliacao, ROTULOS_FAIXAS_DE_FATURAMENTO,
+                    ROTULOS_PLANOS_DE_INTERESSE)
 import raio_x
 import triagem_cenario
 
@@ -70,11 +73,13 @@ limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_f
 MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
                     "nenhum arquivo foi lido.")
 MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13, 7c4e2a9b5d31, "
-                        "9b3e5d7f1a28 e c5f8a1d3e7b9, ainda não aplicadas neste banco: nenhum arquivo foi lido.")
-# Colunas das revisões mais novas de que a tela depende: a da staging (9b3e5d7f1a28, Etapa 3) e a dos
-# indicadores executivos do lead (c5f8a1d3e7b9), que o modelo LeadAvaliacao já lê em toda consulta.
+                        "9b3e5d7f1a28, c5f8a1d3e7b9 e e7a1c3f5b9d2, ainda não aplicadas neste banco: nenhum "
+                        "arquivo foi lido.")
+# Colunas das revisões mais novas de que a tela depende: a da staging (9b3e5d7f1a28, Etapa 3), a dos
+# indicadores executivos do lead (c5f8a1d3e7b9) e a da origem do lead (e7a1c3f5b9d2, captação pelo site),
+# que o modelo LeadAvaliacao já lê em toda consulta.
 _COLUNA_DO_ESQUEMA = "fim_ultimo_relatorio_com_venda"
-_COLUNA_DOS_INDICADORES = "indicadores_executivos_json"
+_COLUNAS_DO_LEAD = ("indicadores_executivos_json", "origem")
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada.
 CODIGO_OCUPADO = "busy"
@@ -85,8 +90,8 @@ _esquema_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
 
 
 def esquema_disponivel() -> bool:
-    """True quando a staging da Etapa 3 (revisão 9b3e5d7f1a28, sobre a 7c4e2a9b5d31) e a coluna dos
-    indicadores executivos do lead (c5f8a1d3e7b9) existem neste banco.
+    """True quando a staging da Etapa 3 (revisão 9b3e5d7f1a28, sobre a 7c4e2a9b5d31) e as colunas do lead
+    das revisões c5f8a1d3e7b9 (indicadores executivos) e e7a1c3f5b9d2 (origem) existem neste banco.
 
     O mesmo critério de validacao_pdv: a presença fica fixa para o engine, e a ausência é
     reavaliada a cada 30 s, para a migração aplicada valer sem reiniciar o processo. Vem antes de
@@ -102,7 +107,7 @@ def esquema_disponivel() -> bool:
     inspetor = inspect(db.session.connection())
     disponivel = (inspetor.has_table(BrainstormingDadosPdv.__tablename__) and _COLUNA_DO_ESQUEMA in
                   {coluna["name"] for coluna in inspetor.get_columns(BrainstormingDadosPdv.__tablename__)}
-                  and inspetor.has_table(LeadAvaliacao.__tablename__) and _COLUNA_DOS_INDICADORES in
+                  and inspetor.has_table(LeadAvaliacao.__tablename__) and set(_COLUNAS_DO_LEAD) <=
                   {coluna["name"] for coluna in inspetor.get_columns(LeadAvaliacao.__tablename__)})
     _esquema_por_engine[engine] = True if disponivel else time.monotonic()
     return disponivel
@@ -150,12 +155,21 @@ def expurgo_oportunista() -> None:
 # =====================================================================
 # Contexto
 # =====================================================================
-def _contexto_lista(formulario=None) -> dict:
+PROTOCOLO_VALIDO = re.compile(r"[0-9A-Fa-f]{8}")
+
+
+def _contexto_lista(formulario=None, protocolo=None) -> dict:
     # Ordem da coluna "Avaliado em": a última autorização (renovada a cada reenvio) ou a criação.
     avaliado_em = func.coalesce(LeadAvaliacao.consentimento_em, LeadAvaliacao.criado_em)
-    leads = db.session.scalars(select(LeadAvaliacao).order_by(avaliado_em.desc(), LeadAvaliacao.criado_em.desc())
+    consulta = select(LeadAvaliacao)
+    if protocolo:
+        # O protocolo do Raio-X público (LeadAvaliacao.protocolo) é o começo do id: acha o lead mesmo fora dos
+        # LEADS_NA_LISTA mais recentes (o id em texto: com hífens no PostgreSQL, 32 hexadecimais no SQLite).
+        consulta = consulta.where(cast(LeadAvaliacao.id, String).like(f"{protocolo.lower()}%"))
+    leads = db.session.scalars(consulta.order_by(avaliado_em.desc(), LeadAvaliacao.criado_em.desc())
                                .limit(LEADS_NA_LISTA)).all()
     return {"leads": leads, "formulario": formulario or {}, "max_arquivos": raio_x.MAX_ARQUIVOS,
+            "protocolo": protocolo or "",
             "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS, "retencao_dias": RETENCAO_DIAS,
             "disponivel": True, "paineis": {lead.id: _painel_da_lista(lead) for lead in leads},
             "total_leads": db.session.scalar(select(func.count()).select_from(LeadAvaliacao))}
@@ -304,7 +318,11 @@ class _CacheDoDiagnostico:
 
 def _descartar_do_cache(lead_id=None) -> None:
     """Tira do cache deste processo os diagnósticos de um lead (reenvio e retriagem) ou todos (expurgo):
-    o dado antigo não fica na memória à espera do TTL. Os outros processos só o servem até a validade."""
+    o dado antigo não fica na memória à espera do TTL. Os outros processos só o servem até a validade.
+    Leva junto a vitrine guardada do Raio-X público do mesmo lead (ou todas), que o visitante veria."""
+    # Import tardio: blueprints.avaliacao_publica importa deste módulo.
+    from blueprints import avaliacao_publica
+    avaliacao_publica.descartar_vitrine(lead_id)
     cache = current_app.extensions.get("nexo_diagnostico_leads")
     if cache is None:
         return
@@ -469,6 +487,8 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
         "totais": payload["totais"], "categorias": payload["categorias"],
         "categorias_publicadas": payload["categorias_publicadas"],
         "max_arquivos": raio_x.MAX_ARQUIVOS, "itens_por_bloco": ITENS_POR_BLOCO, "retencao_dias": RETENCAO_DIAS,
+        # O que o visitante escolheu no Raio-X público (lead com origem "site").
+        "rotulos_planos_interesse": ROTULOS_PLANOS_DE_INTERESSE, "rotulos_faixas_faturamento": ROTULOS_FAIXAS_DE_FATURAMENTO,
     }
 
 
@@ -585,7 +605,11 @@ def lista():
                                max_arquivos=raio_x.MAX_ARQUIVOS, leads=[], formulario={},
                                mensagem_sem_esquema=MENSAGEM_SEM_ESQUEMA)
     expurgo_oportunista()
-    return render_template("admin/leads.html", **_contexto_lista())
+    protocolo = (request.args.get("protocolo") or "").strip()
+    if protocolo and not PROTOCOLO_VALIDO.fullmatch(protocolo):
+        flash("Protocolo inválido: use os 8 caracteres que vêm na mensagem do Raio-X público.", "warning")
+        protocolo = ""
+    return render_template("admin/leads.html", **_contexto_lista(protocolo=protocolo or None))
 
 
 @leads_bp.route("", methods=["POST"])

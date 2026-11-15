@@ -1330,6 +1330,21 @@ class DiagnosticoFechamento(db.Model):
 # =====================================================================
 STATUS_LEAD_AVALIACAO = ("pendente", "em_processamento", "concluido", "processamento_manual",
                          "convertido", "expirado")
+# Revisão e7a1c3f5b9d2 (captação pelo site): de onde o lead veio e os códigos fixos do que o próprio
+# visitante escolhe no Raio-X público, com os rótulos de cada código (fonte única do site e do consultor).
+ORIGENS_DO_LEAD = ("consultor", "site")
+# Rótulos do dono (pré-cadastro da landing, 15/11/2026), na ordem em que o formulário os mostra.
+ROTULOS_PLANOS_DE_INTERESSE = {"BRONZE": "Bronze", "PRATA": "Prata", "OURO": "Ouro",
+                               "CUSTOM": "Custom / Enterprise"}
+ROTULOS_FAIXAS_DE_FATURAMENTO = {"ATE_50K": "Até R$ 50 mil", "DE_50K_A_200K": "R$ 50 mil a R$ 200 mil",
+                                 "ACIMA_200K": "Acima de R$ 200 mil"}
+PLANOS_DE_INTERESSE = tuple(ROTULOS_PLANOS_DE_INTERESSE)
+FAIXAS_DE_FATURAMENTO = tuple(ROTULOS_FAIXAS_DE_FATURAMENTO)
+DIFICULDADE_MAXIMO = 400
+
+
+def _lista_sql(valores) -> str:
+    return ", ".join(f"'{valor}'" for valor in valores)
 
 
 class LeadAvaliacao(db.Model):
@@ -1390,9 +1405,25 @@ class LeadAvaliacao(db.Model):
     # Revisão c5f8a1d3e7b9: os indicadores executivos do envio (o nó indicadores_executivos do Raio-X,
     # indicadores_executivos.py). Trazem nome de produto: saem com as linhas de PDV no expurgo de 30 dias.
     indicadores_executivos_json: Mapped[Optional[str]] = mapped_column(Text)
+    # Revisão e7a1c3f5b9d2 (captação pelo site, decisão do dono em 15/11/2026): "consultor" (POST
+    # /admin/leads) ou "site" (Raio-X público, blueprints/avaliacao_publica.py); o que o próprio visitante
+    # informou (plano de interesse e faixa de faturamento por código fixo, dificuldade em texto livre) e a
+    # versão do texto de autorização que ele marcou. Nos leads do consultor: "consultor" e o resto nulo.
+    origem: Mapped[str] = mapped_column(String(20), nullable=False, default="consultor",
+                                        server_default=text("'consultor'"))
+    plano_interesse: Mapped[Optional[str]] = mapped_column(String(20))
+    faixa_faturamento: Mapped[Optional[str]] = mapped_column(String(20))
+    dificuldade: Mapped[Optional[str]] = mapped_column(String(DIFICULDADE_MAXIMO))
+    versao_autorizacao: Mapped[Optional[str]] = mapped_column(String(40))
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)
+
+    @property
+    def protocolo(self) -> str:
+        """Código curto do lead (os 8 primeiros caracteres do id, em maiúsculas): vai na mensagem de
+        WhatsApp do Raio-X público e aparece na lista do consultor, que acha o lead por ele."""
+        return str(self.id).split("-", 1)[0].upper() if self.id else ""
 
     __table_args__ = (
         CheckConstraint("status IN (" + ", ".join(f"'{s}'" for s in STATUS_LEAD_AVALIACAO) + ")",
@@ -1413,6 +1444,15 @@ class LeadAvaliacao(db.Model):
                         name="ck_lead_avaliacao_nomes"),
         CheckConstraint("email LIKE '%_@_%'", name="ck_lead_avaliacao_email"),
         CheckConstraint("whatsapp IS NULL OR length(whatsapp) BETWEEN 10 AND 20", name="ck_lead_avaliacao_whatsapp"),
+        CheckConstraint(f"origem IN ({_lista_sql(ORIGENS_DO_LEAD)})", name="ck_lead_avaliacao_origem"),
+        CheckConstraint(f"plano_interesse IS NULL OR plano_interesse IN ({_lista_sql(PLANOS_DE_INTERESSE)})",
+                        name="ck_lead_avaliacao_plano_interesse"),
+        CheckConstraint(f"faixa_faturamento IS NULL OR faixa_faturamento IN ({_lista_sql(FAIXAS_DE_FATURAMENTO)})",
+                        name="ck_lead_avaliacao_faixa_faturamento"),
+        CheckConstraint(f"dificuldade IS NULL OR length(dificuldade) <= {DIFICULDADE_MAXIMO}",
+                        name="ck_lead_avaliacao_dificuldade"),
+        CheckConstraint("versao_autorizacao IS NULL OR length(versao_autorizacao) <= 40",
+                        name="ck_lead_avaliacao_versao_autorizacao"),
         Index("ix_lead_avaliacao_plano", "plano_recomendado_codigo"),
         Index("ix_lead_avaliacao_status", "status"),
         Index("ix_lead_avaliacao_email", "email"),

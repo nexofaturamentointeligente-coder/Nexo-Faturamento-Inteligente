@@ -1,0 +1,13 @@
+{% extends "avaliacao_publica/_base.html" %}
+{#- Outro pedido está preparando a vitrine deste processo (depois de um reinício): 503 com Retry-After. #}
+
+{% block titulo %}Resultado do Raio-X{% endblock %}
+
+{% block conteudo %}
+<div class="publica-cabecalho">
+  <span class="section-tag">Raio-X NEXO</span>
+  <h1 id="publica-titulo">Resultado do Raio-X</h1>
+  <p class="lead">O resultado está sendo preparado. Atualize a página em alguns segundos.</p>
+</div>
+<a href="{{ url_for('avaliacao_publica.resultado') }}" class="btn-nexo btn-nexo-primary">Atualizar</a>
+{% endblock %}

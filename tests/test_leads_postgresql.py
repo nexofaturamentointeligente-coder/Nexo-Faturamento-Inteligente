@@ -20,6 +20,9 @@ Complementa tests/test_leads_avaliacao.py (SQLite); aqui só o que depende do Po
   4. downgrade recusado com leads, aceito sem eles (levando função e políticas) e novo upgrade;
   5. Etapa 2 (7c4e2a9b5d31): as CHECKs novas no banco e o downgrade dela recusado com dados das
      regras lead-2026-11.3, aceito sem eles (colunas e CHECKs saem; as linhas antigas ficam).
+  6c. Captação pelo site (e7a1c3f5b9d2): o lead do site gravado pelo serviço, o padrão "consultor" do banco,
+     as CHECKs da origem, do plano de interesse e da faixa, e o downgrade recusado com lead do site, aceito
+     sem ele (as colunas saem; as linhas ficam) e o novo upgrade com metadados e políticas iguais.
 """
 
 import contextlib
@@ -46,6 +49,9 @@ REVISAO_ANTERIOR = "b3e9d6c1f7a2"
 # c5f8a1d3e7b9, os indicadores executivos do lead (apagados pela função de expurgo).
 REVISAO_LEADS = "c5f8a1d3e7b9"
 REVISAO_ETAPA_3 = "9b3e5d7f1a28"
+# e7a1c3f5b9d2 (captação pelo site) acrescenta a origem e o que o visitante informou; a d9e4b7a2c6f1 vem antes.
+REVISAO_ANTES_DA_CAPTACAO = "d9e4b7a2c6f1"
+COLUNAS_DA_CAPTACAO = ("origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao")
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 INDICADORES_DE_ENSAIO = '{"versao": "ensaio"}'
 REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
@@ -107,6 +113,9 @@ CHECKS = (
     # 6b. Indicadores executivos
     "indicadores_service_writes_and_purge_clears", "indicadores_downgrade_refused_with_data",
     "indicadores_downgrade_and_upgrade_again",
+    # 6c. Captação pelo site (e7a1c3f5b9d2)
+    "captacao_service_writes_site_lead", "captacao_constraints_enforced",
+    "captacao_downgrade_refused_with_site_lead", "captacao_downgrade_and_upgrade_again",
     # 7. Portal (Etapa 4)
     "portal_lines_isolated_by_lead", "portal_payload_and_cache_on_postgresql",
 )
@@ -169,6 +178,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_avaliacao_etapa_2()
         self._etapa_avaliacao_etapa_3()
         self._etapa_indicadores()
+        self._etapa_captacao()
         self._etapa_portal()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
@@ -312,8 +322,9 @@ class _ClusterDosLeads(_PrivateCluster):
                    fatiado == ("concluido", 37, {"2023": 2, "2024": 12, "2025": 12, "2026": 11}, itens, 15, Decimal("479.48"), 2),
                    f"fatiado={fatiado}")
 
-    def _registrar_pelo_servico(self):
-        """Grava (com commit) um lead pelo serviço, com o motor como o worker: devolve o id."""
+    def _registrar_pelo_servico(self, contato_extra=None):
+        """Grava (com commit) um lead pelo serviço, com o motor como o worker: devolve o id. `contato_extra`:
+        colunas a mais do lead (as da captação pelo site)."""
         import avaliacao_cenario
         from tests.raio_x_support import avaliar_como_o_worker, relatorio_do_mes
         meses = (relatorio_do_mes(2024, 11, ["1;Cafe 500g;10;20,00;200,00;150,00", "2;Acucar 1kg;5;6,00;30,00;"]),
@@ -329,7 +340,8 @@ class _ClusterDosLeads(_PrivateCluster):
         with self.app.app_context():
             lead = avaliacao_cenario.registrar(
                 resultado, contato={"nome_contato": "Contato fictício", "email": "lead@example.invalid",
-                                    "whatsapp": None, "nome_loja": "Loja fictícia"}, meses_prata=24)
+                                    "whatsapp": None, "nome_loja": "Loja fictícia", **(contato_extra or {})},
+                meses_prata=24)
             self.db.session.commit()
             id_lead = lead.id
             self.db.session.remove()
@@ -591,6 +603,81 @@ class _ClusterDosLeads(_PrivateCluster):
                    and self._revisao() == self.head and self._coluna_dos_indicadores() and self._estado() == estado
                    and self._diferencas_metadata() == [] and self._jobs() == [JOB_DO_EXPURGO],
                    f"revisão={revisao_depois} coluna={coluna_depois} expurgo={sem_a_coluna} ficou={ficou}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+    # ------------------------------------------------- 6c. Captação pelo site (e7a1c3f5b9d2)
+    def _colunas_da_captacao(self):
+        return {nome for (nome,) in self._sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'lead_avaliacao' AND column_name = ANY(:nomes)", nomes=list(COLUNAS_DA_CAPTACAO))}
+
+    def _etapa_captacao(self):
+        from flask_migrate import downgrade, upgrade
+        from sqlalchemy.exc import IntegrityError
+
+        self.stage = "lead do site gravado pelo serviço"
+        id_lead = self._registrar_pelo_servico({
+            "origem": "site", "plano_interesse": "OURO", "faixa_faturamento": "DE_50K_A_200K",
+            "dificuldade": "Dificuldade fictícia", "versao_autorizacao": "autorizacao-de-ensaio"})
+        gravado = [tuple(l) for l in self._sql(
+            "SELECT origem, plano_interesse, faixa_faturamento, dificuldade, versao_autorizacao, registrado_por IS NULL "
+            "FROM lead_avaliacao WHERE id = :i", i=str(id_lead))]
+        # Sem informar a origem (o consultor e os leads de antes da revisão): o padrão do banco.
+        self._executar("INSERT INTO lead_avaliacao (id, nome_contato, email, nome_loja) "
+                       "VALUES (:i, 'Contato', 'padrao@example.invalid', 'Loja')", i=str(uuid.uuid4()))
+        padrao = [tuple(l) for l in self._sql(
+            "SELECT origem, plano_interesse, versao_autorizacao FROM lead_avaliacao "
+            "WHERE email = 'padrao@example.invalid'")]
+        self.check("captacao_service_writes_site_lead",
+                   gravado == [("site", "OURO", "DE_50K_A_200K", "Dificuldade fictícia", "autorizacao-de-ensaio", True)]
+                   and padrao == [("consultor", None, None)], f"gravado={gravado} padrao={padrao}")
+
+        self.stage = "CHECKs da captação"
+        violacoes = (
+            ("UPDATE lead_avaliacao SET origem = 'outra'", "ck_lead_avaliacao_origem"),
+            ("UPDATE lead_avaliacao SET plano_interesse = 'PLATINA'", "ck_lead_avaliacao_plano_interesse"),
+            ("UPDATE lead_avaliacao SET faixa_faturamento = 'MILHAO'", "ck_lead_avaliacao_faixa_faturamento"),
+        )
+        recusas = []
+        for comando, _restricao in violacoes:
+            try:
+                self._executar(comando)
+                recusas.append(None)
+            except IntegrityError as erro:
+                recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
+        # Os códigos da lista passam (CUSTOM é o "Custom / Enterprise" do formulário).
+        self._executar("UPDATE lead_avaliacao SET plano_interesse = 'CUSTOM', faixa_faturamento = 'ACIMA_200K' "
+                       "WHERE id = :i", i=str(id_lead))
+        aceitos = [tuple(l) for l in self._sql(
+            "SELECT plano_interesse, faixa_faturamento FROM lead_avaliacao WHERE id = :i", i=str(id_lead))]
+        self.check("captacao_constraints_enforced",
+                   recusas == [r for _c, r in violacoes] and aceitos == [("CUSTOM", "ACIMA_200K")],
+                   f"recusas={recusas} aceitos={aceitos}")
+
+        self.stage = "downgrade da captação com lead do site"
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ANTES_DA_CAPTACAO)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        self.check("captacao_downgrade_refused_with_site_lead",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and self._colunas_da_captacao() == set(COLUNAS_DA_CAPTACAO),
+                   f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade da captação sem lead do site e novo upgrade"
+        self._executar("DELETE FROM lead_avaliacao WHERE origem = 'site'")
+        estado = self._estado()
+        self._migrar(downgrade, REVISAO_ANTES_DA_CAPTACAO)
+        revisao_depois, colunas_depois, ficou = self._revisao(), self._colunas_da_captacao(), self._estado()
+        self._migrar(upgrade, "head")
+        self.check("captacao_downgrade_and_upgrade_again",
+                   revisao_depois == REVISAO_ANTES_DA_CAPTACAO and not colunas_depois and ficou == estado
+                   and self._revisao() == self.head and self._colunas_da_captacao() == set(COLUNAS_DA_CAPTACAO)
+                   and self._estado() == estado and self._diferencas_metadata() == []
+                   and self._politicas() == {t: POLITICAS for t in TABELAS},
+                   f"revisão={revisao_depois} colunas={colunas_depois} ficou={ficou}")
         self._executar("DELETE FROM lead_avaliacao")
 
     # ------------------------------------------------- 7. Portal (Etapa 4)

@@ -151,6 +151,30 @@ def chave_limite_conta() -> str:
     return "conta:" + hmac.new(segredo, email.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
 
 
+def chave_limite_ip() -> str:
+    """Limite por IP de rota pública (o Raio-X do site): HMAC do endereço com a SECRET_KEY, como
+    chave_limite_conta, porque o Flask-Limiter escreve a chave no log quando o limite estoura e o IP do
+    visitante não vai para o log. IPv6 conta pela rede /64 (um assinante troca de endereço dentro dela à
+    vontade); IPv4 mapeado em IPv6 vale como o IPv4."""
+    import ipaddress
+    endereco = get_remote_address() or ""
+    try:
+        ip = ipaddress.ip_address(endereco)
+    except ValueError:
+        agrupado = endereco
+    else:
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            agrupado = str(ip.ipv4_mapped)
+        elif ip.version == 6:
+            agrupado = str(ipaddress.ip_network(f"{ip}/64", strict=False))
+        else:
+            agrupado = str(ip)
+    segredo = current_app.config.get("SECRET_KEY") or ""
+    if isinstance(segredo, str):
+        segredo = segredo.encode("utf-8")
+    return "ip:" + hmac.new(segredo, agrupado.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
+
+
 def chave_limite_usuario() -> str:
     """Limite por usuário autenticado (ações caras ou irreversíveis); anônimo = IP."""
     from flask_login import current_user
