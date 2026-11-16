@@ -81,7 +81,9 @@ class EsquemaTests(_LeadsCase):
             # c5f8a1d3e7b9
             "indicadores_executivos_json",
             # e7a1c3f5b9d2 (captação pelo site)
-            "origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao"})
+            "origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao",
+            # f2b6d8a4c1e9 (microsserviço do Raio-X)
+            "interesse", "status_arquivo", "arquivos_storage", "termos_aceitos_em", "termos_versao"})
         colunas = {c["name"] for c in inspetor.get_columns("brainstorming_dados_pdv")}
         self.assertEqual(colunas, {
             "id", "lead_id", "ano_exercicio", "codigo_produto", "descricao_produto", "quantidade",
@@ -150,6 +152,54 @@ class EsquemaTests(_LeadsCase):
                     self.assertEqual((lead.origem, lead.plano_interesse), ("site", plano))
         self.db.session.commit()
         self.assertEqual(self.lead().origem, "consultor")
+
+    def test_lead_do_microsservico_e_as_colunas_fora_do_orm(self):
+        """f2b6d8a4c1e9: cada interesse e cada situação dos arquivos passam nos CHECKs, com o JSON dos caminhos e a
+        versão dos termos no limite (gravados por SQL, como o microsserviço grava). As cinco colunas estão na
+        tabela do modelo, mas fora do mapeamento do ORM; o lead do consultor fica com elas nulas."""
+        from models import (ARQUIVOS_STORAGE_MAXIMO, COLUNAS_DO_MICROSSERVICO, INTERESSES_DO_LEAD, LeadAvaliacao,
+                            SITUACOES_DOS_ARQUIVOS)
+        lead = self.lead(status="pendente", origem="site")
+        self.db.session.commit()
+        lead_id = lead.id.hex
+        for interesse in INTERESSES_DO_LEAD:
+            for situacao in SITUACOES_DOS_ARQUIVOS:
+                with self.subTest(interesse=interesse, situacao=situacao):
+                    self.db.session.execute(text(
+                        "UPDATE lead_avaliacao SET interesse = :i, status_arquivo = :s, arquivos_storage = :a, "
+                        "termos_aceitos_em = CURRENT_TIMESTAMP, termos_versao = :v WHERE id = :id"),
+                        {"i": interesse, "s": situacao, "a": "x" * ARQUIVOS_STORAGE_MAXIMO, "v": "v" * 40,
+                         "id": lead_id})
+                    self.db.session.commit()
+        consultor = self.lead()
+        self.db.session.commit()
+        self.assertEqual(tuple(self.db.session.execute(text(
+            "SELECT interesse, status_arquivo, arquivos_storage, termos_aceitos_em, termos_versao FROM lead_avaliacao "
+            "WHERE id = :id"), {"id": consultor.id.hex}).one()), (None,) * 5)
+        self.assertTrue(set(COLUNAS_DO_MICROSSERVICO) <= set(LeadAvaliacao.__table__.c.keys()))
+        self.assertFalse(set(COLUNAS_DO_MICROSSERVICO) & set(LeadAvaliacao.__mapper__.attrs.keys()))
+        # Pelo nome qualificado ("interesse" sozinho está dentro de "plano_interesse"): a tabela inteira tem as
+        # cinco, o SELECT do ORM não tem nenhuma.
+        da_tabela = str(select(LeadAvaliacao.__table__).compile(dialect=self.db.engine.dialect))
+        do_orm = str(select(LeadAvaliacao).compile(dialect=self.db.engine.dialect))
+        for coluna in COLUNAS_DO_MICROSSERVICO:
+            with self.subTest(coluna=coluna):
+                self.assertRegex(da_tabela, rf"\blead_avaliacao\.{coluna}\b")
+                self.assertNotRegex(do_orm, rf"\blead_avaliacao\.{coluna}\b")
+
+    def test_restricoes_das_colunas_do_microsservico(self):
+        lead = self.lead()
+        self.db.session.commit()
+        casos = {"interesse fora da lista": ("interesse", "comprar"), "interesse pelo número": ("interesse", "1"),
+                 "situação dos arquivos fora da lista": ("status_arquivo", "pendente"),
+                 "caminhos no Storage longos demais": ("arquivos_storage", "x" * 20001),
+                 "versão dos termos longa": ("termos_versao", "v" * 41)}
+        for caso, (coluna, valor) in casos.items():
+            with self.subTest(caso=caso):
+                with self.assertRaises(IntegrityError):
+                    self.db.session.execute(text(f"UPDATE lead_avaliacao SET {coluna} = :v WHERE id = :id"),
+                                            {"v": valor, "id": lead.id.hex})
+                self.db.session.rollback()
 
     def test_restricoes_recusam_dado_invalido(self):
         invalidos = {
@@ -375,6 +425,46 @@ class DowngradeTests(_LeadsCase):
         self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM brainstorming_dados_pdv")), 1)
         self.assertIsNone(self.db.session.scalar(text(
             "SELECT fim_ultimo_relatorio_com_venda FROM brainstorming_dados_pdv")))
+
+    def test_downgrade_do_microsservico_recusa_com_dado_e_sai_e_volta_sem_ele(self):
+        """f2b6d8a4c1e9: com um lead do microsserviço, o downgrade recusa e nada sai; sem ele, as cinco colunas saem
+        (o lead fica). Sem elas no banco, o ORM da aplicação continua gravando e lendo lead (as colunas estão fora
+        do mapeamento): a aplicação funciona com ou sem a revisão. No novo upgrade, voltam nulas."""
+        from models import COLUNAS_DO_MICROSSERVICO, LeadAvaliacao
+        lead = self.lead(status="pendente", origem="site")
+        self.db.session.commit()
+        # O id antes das migrações: elas trocam a sessão, e o objeto fica desligado dela.
+        lead_id = lead.id.hex
+        self.db.session.execute(text(
+            "UPDATE lead_avaliacao SET interesse = 'raio_x', status_arquivo = 'aprovado', "
+            "arquivos_storage = '[{\"caminho\": \"2026/11/x/01.csv\"}]', termos_aceitos_em = CURRENT_TIMESTAMP, "
+            "termos_versao = 'termos-de-teste' WHERE id = :id"), {"id": lead_id})
+        self.db.session.commit()
+        with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
+            self._migrar("downgrade", "e7a1c3f5b9d2")
+        self.assertIn("Downgrade do microsserviço do Raio-X recusado", registro.output[0])
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
+        self.assertEqual(self.db.session.scalar(text("SELECT interesse FROM lead_avaliacao")), "raio_x")
+        for coluna in COLUNAS_DO_MICROSSERVICO:
+            with self.subTest(coluna=coluna):
+                self.db.session.execute(text(f"UPDATE lead_avaliacao SET {coluna} = NULL"))
+                self.db.session.commit()
+        self._migrar("downgrade", "e7a1c3f5b9d2")
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), "e7a1c3f5b9d2")
+        colunas = {c["name"] for c in inspect(self.db.engine).get_columns("lead_avaliacao")}
+        self.assertFalse(set(COLUNAS_DO_MICROSSERVICO) & colunas)
+        self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM lead_avaliacao")), 1)
+        # O consultor grava e lê lead pelo ORM num banco sem as colunas novas.
+        outro = self.lead(status="concluido")
+        self.db.session.commit()
+        self.db.session.expire_all()
+        self.assertEqual(self.db.session.get(LeadAvaliacao, outro.id).nome_contato, "Contato fictício")
+        self.assertEqual(len(self.db.session.scalars(select(LeadAvaliacao)).all()), 2)
+        self._migrar("upgrade", "head")
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
+        self.assertEqual(tuple(self.db.session.execute(text(
+            "SELECT origem, interesse, status_arquivo, termos_versao FROM lead_avaliacao WHERE id = :id"),
+            {"id": lead_id}).one()), ("site", None, None, None))
 
     def test_data_da_ultima_venda_fora_da_faixa_e_recusada(self):
         lead = self.lead()

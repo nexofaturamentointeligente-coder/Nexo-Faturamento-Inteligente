@@ -23,6 +23,10 @@ Complementa tests/test_leads_avaliacao.py (SQLite); aqui só o que depende do Po
   6c. Captação pelo site (e7a1c3f5b9d2): o lead do site gravado pelo serviço, o padrão "consultor" do banco,
      as CHECKs da origem, do plano de interesse e da faixa, e o downgrade recusado com lead do site, aceito
      sem ele (as colunas saem; as linhas ficam) e o novo upgrade com metadados e políticas iguais.
+  6d. Microsserviço do Raio-X (f2b6d8a4c1e9): o lead gravado como o microservico_raiox/ grava, o teto do dia
+     exato com envios simultâneos (a trava consultiva, com a janela entre a contagem e o INSERT alargada), as
+     CHECKs do interesse, da situação dos arquivos e do tamanho dos caminhos, e o downgrade recusado com esses
+     dados, aceito sem eles e o novo upgrade com metadados e políticas iguais.
 """
 
 import contextlib
@@ -35,6 +39,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -52,6 +58,9 @@ REVISAO_ETAPA_3 = "9b3e5d7f1a28"
 # e7a1c3f5b9d2 (captação pelo site) acrescenta a origem e o que o visitante informou; a d9e4b7a2c6f1 vem antes.
 REVISAO_ANTES_DA_CAPTACAO = "d9e4b7a2c6f1"
 COLUNAS_DA_CAPTACAO = ("origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao")
+# f2b6d8a4c1e9 (microsserviço do Raio-X) vem depois da e7a1c3f5b9d2.
+REVISAO_ANTES_DO_MICROSSERVICO = "e7a1c3f5b9d2"
+COLUNAS_DO_MICROSSERVICO = ("interesse", "status_arquivo", "arquivos_storage", "termos_aceitos_em", "termos_versao")
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 INDICADORES_DE_ENSAIO = '{"versao": "ensaio"}'
 REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
@@ -116,6 +125,9 @@ CHECKS = (
     # 6c. Captação pelo site (e7a1c3f5b9d2)
     "captacao_service_writes_site_lead", "captacao_constraints_enforced",
     "captacao_downgrade_refused_with_site_lead", "captacao_downgrade_and_upgrade_again",
+    # 6d. Microsserviço do Raio-X (f2b6d8a4c1e9)
+    "microsservico_writes_lead", "microsservico_cap_exact_under_concurrency", "microsservico_constraints_enforced",
+    "microsservico_downgrade_refused_with_data", "microsservico_downgrade_and_upgrade_again",
     # 7. Portal (Etapa 4)
     "portal_lines_isolated_by_lead", "portal_payload_and_cache_on_postgresql",
 )
@@ -179,6 +191,7 @@ class _ClusterDosLeads(_PrivateCluster):
         self._etapa_avaliacao_etapa_3()
         self._etapa_indicadores()
         self._etapa_captacao()
+        self._etapa_microsservico()
         self._etapa_portal()
         self._etapa_funcao_de_expurgo()
         self._etapa_comando_e_cascade()
@@ -675,6 +688,135 @@ class _ClusterDosLeads(_PrivateCluster):
         self.check("captacao_downgrade_and_upgrade_again",
                    revisao_depois == REVISAO_ANTES_DA_CAPTACAO and not colunas_depois and ficou == estado
                    and self._revisao() == self.head and self._colunas_da_captacao() == set(COLUNAS_DA_CAPTACAO)
+                   and self._estado() == estado and self._diferencas_metadata() == []
+                   and self._politicas() == {t: POLITICAS for t in TABELAS},
+                   f"revisão={revisao_depois} colunas={colunas_depois} ficou={ficou}")
+        self._executar("DELETE FROM lead_avaliacao")
+
+    # ------------------------------------------------- 6d. Microsserviço do Raio-X (f2b6d8a4c1e9)
+    def _colunas_do_microsservico(self):
+        return {nome for (nome,) in self._sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'lead_avaliacao' AND column_name = ANY(:nomes)", nomes=list(COLUNAS_DO_MICROSSERVICO))}
+
+    def _etapa_microsservico(self):
+        from flask_migrate import downgrade, upgrade
+        from sqlalchemy.exc import IntegrityError
+
+        self.stage = "lead gravado pelo repositório do microsserviço"
+        import importlib.util
+        especificacao = importlib.util.spec_from_file_location(
+            "microservico_raiox_repositorio", ROOT / "microservico_raiox" / "repositorio.py")
+        repositorio_do_microsservico = importlib.util.module_from_spec(especificacao)
+        especificacao.loader.exec_module(repositorio_do_microsservico)
+        with self.app.app_context():
+            # O cluster de ensaio é local, sem SSL; em produção o repositório exige SSL quando a URL não diz nada.
+            url = self.db.engine.url.set(drivername="postgresql").update_query_dict({"sslmode": "disable"})
+            url_do_ensaio = url.render_as_string(hide_password=False)
+            repositorio = repositorio_do_microsservico.RepositorioDeLeads(url_do_ensaio)
+        id_lead = uuid.uuid4()
+        caminhos = json.dumps([{"caminho": f"2026/11/{id_lead}/01-0123456789abcdef.csv", "nome": "vendas.csv",
+                                "bytes": 120, "formato": "csv", "sha256": "0" * 64}])
+        antes_do_lead = datetime.now(timezone.utc) - timedelta(minutes=5)
+        lead = {"id": id_lead, "nome_contato": "Contato", "email": "micro@example.invalid", "whatsapp": "62988881234",
+                "nome_loja": "Loja", "interesse": "raio_x", "status_arquivo": "aprovado", "arquivos_storage": caminhos,
+                "termos_versao": "termos-de-ensaio"}
+        repositorio.gravar(lead, teto=5, desde=antes_do_lead)
+        gravado = [tuple(l) for l in self._sql(
+            "SELECT origem, interesse, status_arquivo, arquivos_storage, status, termos_versao, "
+            "termos_aceitos_em IS NOT NULL, consentimento_em IS NULL, versao_autorizacao IS NULL, "
+            "registrado_por IS NULL FROM lead_avaliacao WHERE id = CAST(:i AS uuid)", i=str(id_lead))]
+        contagem = repositorio.leads_desde(antes_do_lead)
+        # O teto conferido na própria transação: com 1 lead hoje e teto 1, nada entra.
+        try:
+            repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=1, desde=antes_do_lead)
+            barrado = False
+        except repositorio_do_microsservico.TetoDoDiaAtingido:
+            barrado = True
+        self.check("microsservico_writes_lead",
+                   gravado == [("site", "raio_x", "aprovado", caminhos, "pendente", "termos-de-ensaio", True, True,
+                                True, True)]
+                   and contagem == 1 and barrado and repositorio.leads_desde(antes_do_lead) == 1
+                   and repositorio.existe(id_lead) and not repositorio.existe(uuid.uuid4()),
+                   f"gravado={gravado} contagem={contagem} barrado={barrado}")
+
+        self.stage = "teto do microsserviço com envios simultâneos"
+        import psycopg2.extensions
+
+        class CursorLento(psycopg2.extensions.cursor):
+            """O mesmo SQL do repositório, com a janela entre a contagem e o INSERT alargada: sem a trava consultiva,
+            os envios simultâneos passariam juntos do teto."""
+
+            def execute(self, consulta, parametros=None):
+                if str(consulta).startswith("INSERT INTO lead_avaliacao"):
+                    time.sleep(0.2)
+                return super().execute(consulta, parametros)
+
+        lento = repositorio_do_microsservico.RepositorioDeLeads(url_do_ensaio)
+        lento._parametros["cursor_factory"] = CursorLento
+        rodadas = []
+        for rodada in range(3):
+            teto, barreira, resultados = repositorio.leads_desde(antes_do_lead) + 1, threading.Barrier(8), []
+
+            def enviar(indice, teto=teto, barreira=barreira, resultados=resultados, rodada=rodada):
+                barreira.wait()
+                try:
+                    lento.gravar({**lead, "id": uuid.uuid4(), "email": f"micro{rodada}-{indice}@example.invalid"},
+                                 teto=teto, desde=antes_do_lead)
+                    resultados.append("gravado")
+                except repositorio_do_microsservico.TetoDoDiaAtingido:
+                    resultados.append("teto")
+                except Exception as erro:  # noqa: BLE001 - o tipo vai para o relatório do ensaio
+                    resultados.append(type(erro).__name__)
+
+            fios = [threading.Thread(target=enviar, args=(indice,)) for indice in range(8)]
+            for fio in fios:
+                fio.start()
+            for fio in fios:
+                fio.join(30)
+            rodadas.append(tuple(sorted(resultados)))
+        self.check("microsservico_cap_exact_under_concurrency",
+                   rodadas == [("gravado",) + ("teto",) * 7] * 3 and repositorio.leads_desde(antes_do_lead) == 4,
+                   f"rodadas={rodadas}")
+
+        self.stage = "CHECKs do microsserviço"
+        violacoes = (
+            ("UPDATE lead_avaliacao SET interesse = '1'", "ck_lead_avaliacao_interesse"),
+            ("UPDATE lead_avaliacao SET status_arquivo = 'pendente'", "ck_lead_avaliacao_status_arquivo"),
+            ("UPDATE lead_avaliacao SET arquivos_storage = repeat('x', 20001)", "ck_lead_avaliacao_arquivos_storage"),
+        )
+        recusas = []
+        for comando, _restricao in violacoes:
+            try:
+                self._executar(comando)
+                recusas.append(None)
+            except IntegrityError as erro:
+                recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
+        self.check("microsservico_constraints_enforced", recusas == [r for _c, r in violacoes], f"recusas={recusas}")
+
+        self.stage = "downgrade do microsserviço com dado"
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ANTES_DO_MICROSSERVICO)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        self.check("microsservico_downgrade_refused_with_data",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and self._colunas_do_microsservico() == set(COLUNAS_DO_MICROSSERVICO),
+                   f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade do microsserviço sem dado e novo upgrade"
+        self._executar("UPDATE lead_avaliacao SET interesse = NULL, status_arquivo = NULL, arquivos_storage = NULL, "
+                       "termos_aceitos_em = NULL, termos_versao = NULL")
+        estado = self._estado()
+        self._migrar(downgrade, REVISAO_ANTES_DO_MICROSSERVICO)
+        revisao_depois, colunas_depois, ficou = self._revisao(), self._colunas_do_microsservico(), self._estado()
+        self._migrar(upgrade, "head")
+        self.check("microsservico_downgrade_and_upgrade_again",
+                   revisao_depois == REVISAO_ANTES_DO_MICROSSERVICO and not colunas_depois and ficou == estado
+                   and self._revisao() == self.head
+                   and self._colunas_do_microsservico() == set(COLUNAS_DO_MICROSSERVICO)
                    and self._estado() == estado and self._diferencas_metadata() == []
                    and self._politicas() == {t: POLITICAS for t in TABELAS},
                    f"revisão={revisao_depois} colunas={colunas_depois} ficou={ficou}")

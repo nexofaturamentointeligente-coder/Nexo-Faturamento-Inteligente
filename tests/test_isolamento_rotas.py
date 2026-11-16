@@ -186,6 +186,9 @@ POST_FORA_DA_VARREDURA = {"/cliente/configuracoes/solicitar-exclusao", "/api/sup
 # Módulo do caminho do lead que não é rota nem monta tela: o processo isolado, que despacha a operação da
 # Avaliação de Cenário. (O serviço de envio, raio_x_servico, monta o Raio-X do cliente e fica no teste.)
 MODULOS_DO_LEAD_EXTRAS = {"etl_worker.py"}
+# Exceção só para as citações listadas: o repositório do microsserviço do Raio-X (microservico_raiox/, serviço à
+# parte que grava o lead da landing; decisão do dono em 15/11/2026) cita a tabela dos leads e nada mais.
+CITACOES_PERMITIDAS_POR_MODULO = {"microservico_raiox/repositorio.py": {"lead_avaliacao"}}
 # Pastas fora do teste estrutural: os próprios testes, as migrações e o ambiente.
 PASTAS_FORA_DA_ESTRUTURA = {"tests", "migrations", "venv", ".venv", "env", "__pycache__", "node_modules", ".git",
                             "instance", "site-packages"}
@@ -315,6 +318,8 @@ class ClienteSemDadoDeLeadTests(_IsolamentoCase):
                 continue
             fonte = caminho.read_text(encoding="utf-8")
             for citacao in CITACOES_DO_LEAD:
+                if citacao in CITACOES_PERMITIDAS_POR_MODULO.get(relativo, ()):
+                    continue
                 with self.subTest(modulo=relativo, citacao=citacao):
                     self.assertNotIn(citacao, fonte)
 

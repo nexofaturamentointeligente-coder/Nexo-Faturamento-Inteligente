@@ -21,7 +21,7 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
-    String, Integer, Boolean, Date, DateTime, Numeric, Text, LargeBinary, Uuid,
+    Column, String, Integer, Boolean, Date, DateTime, Numeric, Text, LargeBinary, Uuid,
     ForeignKey, ForeignKeyConstraint, CheckConstraint, UniqueConstraint, Index, false, text, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -1341,6 +1341,13 @@ ROTULOS_FAIXAS_DE_FATURAMENTO = {"ATE_50K": "Até R$ 50 mil", "DE_50K_A_200K": "
 PLANOS_DE_INTERESSE = tuple(ROTULOS_PLANOS_DE_INTERESSE)
 FAIXAS_DE_FATURAMENTO = tuple(ROTULOS_FAIXAS_DE_FATURAMENTO)
 DIFICULDADE_MAXIMO = 400
+# Revisão f2b6d8a4c1e9 (microsserviço do Raio-X, microservico_raiox/): o que o visitante escolheu na Etapa 3 do
+# pré-cadastro (1, 2 ou 3 na landing), a situação dos relatórios na triagem de arquivos do microsserviço, o
+# JSON com os caminhos deles no Storage do Supabase e o aceite dos termos (instante e versão).
+INTERESSES_DO_LEAD = ("raio_x", "ajuda_relatorios", "so_contato")
+SITUACOES_DOS_ARQUIVOS = ("sem_arquivo", "aprovado", "parcial", "recusado")
+ARQUIVOS_STORAGE_MAXIMO = 20000
+COLUNAS_DO_MICROSSERVICO = ("interesse", "status_arquivo", "arquivos_storage", "termos_aceitos_em", "termos_versao")
 
 
 def _lista_sql(valores) -> str:
@@ -1415,6 +1422,11 @@ class LeadAvaliacao(db.Model):
     faixa_faturamento: Mapped[Optional[str]] = mapped_column(String(20))
     dificuldade: Mapped[Optional[str]] = mapped_column(String(DIFICULDADE_MAXIMO))
     versao_autorizacao: Mapped[Optional[str]] = mapped_column(String(40))
+    # Revisão f2b6d8a4c1e9 (microsserviço do Raio-X): as cinco colunas que só o microservico_raiox/ grava estão
+    # na tabela (em __table_args__, para o metadata e o compare_metadata), mas FORA do mapeamento do ORM
+    # (exclude_properties): nenhum INSERT, SELECT ou refresh da aplicação as cita, e ela funciona com ou sem a
+    # revisão aplicada no banco. Nos leads do consultor e nos de antes, ficam nulas.
+    __mapper_args__ = {"exclude_properties": list(COLUNAS_DO_MICROSSERVICO)}
 
     dados_pdv = relationship("BrainstormingDadosPdv", back_populates="lead",
                              cascade="all, delete-orphan", passive_deletes=True)
@@ -1453,6 +1465,20 @@ class LeadAvaliacao(db.Model):
                         name="ck_lead_avaliacao_dificuldade"),
         CheckConstraint("versao_autorizacao IS NULL OR length(versao_autorizacao) <= 40",
                         name="ck_lead_avaliacao_versao_autorizacao"),
+        # f2b6d8a4c1e9: as colunas do microsserviço, só na tabela (fora do mapeamento; ver __mapper_args__).
+        Column("interesse", String(20)),
+        Column("status_arquivo", String(20)),
+        Column("arquivos_storage", Text),
+        Column("termos_aceitos_em", InstanteUTC()),
+        Column("termos_versao", String(40)),
+        CheckConstraint(f"interesse IS NULL OR interesse IN ({_lista_sql(INTERESSES_DO_LEAD)})",
+                        name="ck_lead_avaliacao_interesse"),
+        CheckConstraint(f"status_arquivo IS NULL OR status_arquivo IN ({_lista_sql(SITUACOES_DOS_ARQUIVOS)})",
+                        name="ck_lead_avaliacao_status_arquivo"),
+        CheckConstraint(f"arquivos_storage IS NULL OR length(arquivos_storage) <= {ARQUIVOS_STORAGE_MAXIMO}",
+                        name="ck_lead_avaliacao_arquivos_storage"),
+        CheckConstraint("termos_versao IS NULL OR length(termos_versao) <= 40",
+                        name="ck_lead_avaliacao_termos_versao"),
         Index("ix_lead_avaliacao_plano", "plano_recomendado_codigo"),
         Index("ix_lead_avaliacao_status", "status"),
         Index("ix_lead_avaliacao_email", "email"),
