@@ -1,0 +1,34 @@
+{% extends "documentos_publicos/_base.html" %}
+{#- estado: "publicado" (a versão vigente), "nao_publicado" (aviso, sem inventar texto) ou "indisponivel"
+    (banco fora ou esquema incompleto, resposta 503). O texto é puro e sai escapado pelo Jinja; o CSS
+    mantém as quebras de linha. -#}
+
+{% block titulo %}{{ titulo }}{% endblock %}
+{% block descricao %}{{ titulo }} do NEXO Faturamento Inteligente, na versão vigente.{% endblock %}
+
+{% block conteudo %}
+<article class="doc-artigo" aria-labelledby="doc-titulo">
+  <header class="doc-cabecalho">
+    <h1 class="doc-titulo" id="doc-titulo">{{ titulo }}</h1>
+    {%- if estado == "publicado" %}
+    <p class="doc-meta">
+      <span class="doc-versao">Versão vigente: {{ documento.rotulo_versao }}</span>
+      <span>Publicada em <time datetime="{{ documento.publicado_em|iso_utc }}">{{ documento.publicado_em|horario_brasilia }}</time> (horário de Brasília)</span>
+    </p>
+    {%- endif %}
+  </header>
+  {%- if estado == "publicado" %}
+  <div class="doc-texto">{{ documento.conteudo }}</div>
+  {%- elif estado == "nao_publicado" %}
+  <div class="doc-aviso">
+    <p class="doc-aviso-titulo">Este documento ainda não foi publicado.</p>
+    <p>Quando a NEXO publicar o texto, ele aparece nesta página.</p>
+  </div>
+  {%- else %}
+  <div class="doc-aviso is-indisponivel" role="alert">
+    <p class="doc-aviso-titulo">Não foi possível abrir o documento agora.</p>
+    <p>Tente de novo em alguns minutos.</p>
+  </div>
+  {%- endif %}
+</article>
+{% endblock %}

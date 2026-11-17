@@ -108,6 +108,10 @@ class BloqueioTests(_TermosCase):
                 modal = html[html.index('id="modalTermos"'):html.index('class="modal-backdrop show"')]
                 self.assertNotIn("data-bs-dismiss", modal)
                 self.assertNotIn("btn-close", modal)
+                # Regra da rolagem: a caixa e o botão nascem travados; o navegador os libera no fim de cada
+                # texto (tests/test_aceite_rolagem_navegador.py).
+                self.assertRegex(modal, r'id="termosConfirmo"[^>]*\sdisabled\s')
+                self.assertRegex(modal, r'<button type="submit" class="btn-nexo" disabled data-aceite-libera')
                 for ausente in ('id="nexobot"', "socket.io.min.js", 'class="skip-link"'):
                     self.assertNotIn(ausente, html)
 

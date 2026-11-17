@@ -66,22 +66,53 @@ flask contratos lembretes-renovacao --aplicar  # avisa uma vez por pessoa e por 
 
 ## Termos de Uso e Política de Privacidade
 
-As regras ficam em `termos_legais.py` (trava, aceite, auditoria e alerta) e em `configuracoes_conta.py` (texto e
-versões).
+As regras ficam em `termos_legais.py` (trava, aceite, auditoria e alerta), em `configuracoes_conta.py` (texto e
+versões) e em `blueprints/documentos_publicos.py` (páginas públicas e JSON).
 
-- **Publicação:** em Configurações › Documentos Legais, cada envio cria uma versão. A primeira é v1.0; depois o
-  admin escolhe entre revisão (v1.0 → v1.1) e nova versão (v1.0 → v2.0). O rótulo é só informativo: a vigente é
-  sempre a última publicada, a anterior passa a constar como inativa desde a publicação da seguinte, e toda versão
-  nova pede novo aceite. O histórico mostra cada versão com autor, data e texto. Não há flag de “ativa” gravada: com
-  ela, duas publicações ao mesmo tempo poderiam deixar duas versões ativas.
+- **Banco e versionamento:** já existem desde as revisões `c7d41e9a2b60` e `a8d3f6b91c24`, sem migração nova.
+  `documento_legal` guarda uma linha por versão publicada: `tipo` (`TERMOS_USO` ou `POLITICA_PRIVACIDADE`), `versao`
+  (1, 2, 3... por tipo, que define a ordem e a vigência), `versao_maior` e `versao_menor` (o rótulo v1.0, v1.1, v2.0),
+  `conteudo` (o texto completo, puro), `publicado_em` (UTC) e o autor (`id_usuario_admin`). O código nunca faz UPDATE
+  nem DELETE nela. `aceite_documento` guarda cada aceite: a pessoa (`id_usuario`), a versão exata (`id_documento`), a
+  data e a hora (`aceito_em`, UTC) e o IP (`ip_usuario`). O lead da landing não tem usuário: o aceite dele é gravado
+  pelo microsserviço do Raio-X, em tabela própria, com o `id` das versões lidas no JSON abaixo.
+- **Publicação:** em Configurações › Documentos Legais, o texto vigente de cada documento aparece em modo leitura,
+  numa caixa com rolagem, com o link “Ver página pública”. O botão “Editar” abre o formulário, que é um `<details>` e
+  funciona sem JavaScript; ele já vem aberto quando o documento não foi publicado ou quando uma publicação foi recusada
+  (resposta 400, com o texto digitado preservado). “Salvar” nunca sobrescreve: cria a versão seguinte. A primeira é
+  v1.0; depois o admin escolhe entre revisão (v1.0 → v1.1, o padrão) e nova versão (v1.0 → v2.0). O rótulo é só
+  informativo: a vigente é sempre a última publicada, vale na hora na página pública, a anterior passa a constar como
+  inativa desde a publicação da seguinte, e toda versão nova pede novo aceite. O histórico mostra cada versão com
+  autor, data e texto. Não há flag de “ativa” gravada: com ela, duas publicações ao mesmo tempo poderiam deixar duas
+  versões ativas.
+- **Páginas públicas:** `GET /termos-de-uso` e `GET /politica-de-privacidade`, sem login, mostram a versão vigente com
+  o rótulo, a data de publicação e o texto escapado, com as quebras de linha preservadas, no visual da landing. O
+  texto é lido do banco a cada requisição, com `Cache-Control: no-store`. Sem versão publicada, a página diz que o
+  documento ainda não foi publicado (200), sem inventar texto. Com o banco fora ou sem as revisões acima, avisa que
+  está indisponível (503), nunca 500. `GET /documentos-legais/vigentes` devolve, também com `no-store`,
+  `{"documentos": [{"tipo", "id", "rotulo", "publicado_em", "conteudo"}]}`: só a vigente de cada tipo, na ordem
+  TERMOS_USO e POLITICA_PRIVACIDADE, com `id` = `documento_legal.id_documento` e `publicado_em` em ISO 8601 UTC.
+  Sem documento publicado, a lista vem vazia (200); com falha de banco ou esquema, responde 503
+  `{"documentos": [], "erro": "indisponivel"}`. A landing lê esse JSON ao abrir o aceite do lead.
 - **Trava:** um `before_request` do app, depois da troca de senha do primeiro acesso, responde a qualquer página do
   CLIENTE com versão vigente sem aceite com um modal bloqueante, no lugar do conteúdo pedido. O modal sai do
   servidor já aberto, sem botão de fechar, e o resto do portal fica `inert`: Esc, clique fora e JavaScript desligado
   não o fecham. POST de outras rotas vira 303 para o modal sem gravar nada, com um aviso de que a ação não foi
   concluída; a API do NexoBot responde 428 em JSON (401 e 403 o widget lê como sessão expirada) e o PDF também fica
   bloqueado: depois do aceite, a pessoa volta à página da análise. Ficam abertos: sair, aceitar e os direitos do
-  titular (exportar os dados e pedir a exclusão, LGPD art. 18), além da landing e do health check. “Como aderir”, com
-  sessão, é desenhada dentro do portal e também mostra o modal. O admin não passa pela trava.
+  titular (exportar os dados e pedir a exclusão, LGPD art. 18), além da landing, do health check, das páginas
+  públicas dos documentos e do JSON das vigentes. “Como aderir”, com sessão, é desenhada dentro do portal e também
+  mostra o modal. O admin não passa pela trava.
+- **Regra da rolagem:** no modal e no aceite pelas Configurações do cliente, cada texto fica numa caixa própria com
+  `overflow-y: scroll`. A caixa “Li e concordo” e o botão nascem `disabled` no HTML e só liberam quando a pessoa rola
+  CADA texto até o fim (`scrollTop + clientHeight >= scrollHeight - 2`; a folga cobre zoom e medidas fracionárias).
+  Texto curto, que cabe sem rolar, libera na hora; a janela redimensionada é conferida de novo; End e PageDown no
+  texto em foco funcionam; um `IntersectionObserver` num marcador do fim reforça a leitura. Um aviso visível, em
+  `aria-live`, diz o que falta (“Falta rolar até o fim: Política de Privacidade.”). O comportamento fica em
+  `static/js/aceite-rolagem.js`, ligado por atributos `data-aceite-*`, sem script inline, e exposto como
+  `window.NexoAceiteRolagem.observar(conteiner, aoChegarAoFim)` para reuso. Sem JavaScript nada libera, e um
+  `<noscript>` explica. A rolagem não é prova: o servidor continua exigindo `confirmo=1`, e a prova é a versão, o
+  instante e o IP.
 - **Aceite:** a caixa “Li e concordo com os Termos de Uso e a Política de Privacidade” é conferida no servidor, e um
   único envio grava todos os documentos pendentes com o mesmo instante e o mesmo IP. Se o admin publicar outra
   versão enquanto a pessoa lê, nada é gravado e o modal volta com o texto novo. O instante é gravado em UTC
@@ -99,6 +130,29 @@ versões).
   (`lembrete_aceite`) com os nomes e as versões pendentes e o link do portal, sem o texto. A pendência é conferida
   de novo no clique, e o limite é de 30 por hora por admin.
 - **Exportação LGPD:** cada aceite sai com documento, versão, rótulo, instante e IP.
+
+### Como testar a atualização de versão
+
+Num banco de teste (nunca no de produção), com um admin e um cliente ativos e textos de teste no lugar dos textos
+jurídicos:
+
+1. Como admin, abra Configurações › Documentos Legais. Sem versão publicada, o editor de cada documento já vem
+   aberto. Escreva um texto nos Termos de Uso e clique em “Salvar”: nasce a v1.0. Faça o mesmo na Política de
+   Privacidade.
+2. Em outra janela anônima, abra `/termos-de-uso` e `/politica-de-privacidade`: aparecem a v1.0, a data e o texto.
+   `/documentos-legais/vigentes` traz os dois documentos com os `id` da v1.0.
+3. Entre como cliente. O modal aparece no lugar de qualquer página. A caixa e o botão estão travados; role cada texto
+   até o fim (roda do mouse, dedo, End ou PageDown) e veja o aviso mudar. Marque “Li e concordo” e clique em
+   “Aceitar e continuar”: o portal volta. Em Auditoria de aceites, o cliente aparece como ACEITO na v1.0, com data,
+   hora e IP.
+4. Como admin, clique em “Editar” nos Termos de Uso, mude o texto, deixe marcada a “Revisão (v1.1)” e clique em
+   “Salvar”. O aviso confirma a v1.1; o selo passa a “Versão vigente: v1.1”.
+5. Recarregue a página pública na janela anônima: a v1.1 aparece na hora, sem esperar cache.
+6. Volte à sessão do cliente e clique em qualquer item do menu: o modal volta, só com os Termos de Uso v1.1 (a
+   Política continua aceita). Role até o fim, marque a caixa e aceite.
+7. Em Configurações › Documentos Legais, abra “Histórico de versões”: a v1.0 aparece como “Inativa desde” a hora da
+   publicação da v1.1, com o texto original intacto. Em Auditoria de aceites, o cliente aparece com a v1.1 e a nova
+   data e hora.
 
 ## Cópia de novos chamados
 
@@ -171,6 +225,8 @@ autenticado: login, landing e páginas de erro continuam escuros, e a sidebar se
   Política precisa informar a coleta do IP no aceite e a finalidade dele.
 - Retenção da prova de aceite: a exclusão permanente da empresa apaga os aceites e os IPs junto com os usuários
   (ON DELETE CASCADE). Quanto tempo guardar essa prova é decisão jurídica (item 17 do documento 05).
+- Retenção da prova de aceite do lead da landing (`aceite_documento_lead`, revisão `c8e2a4f6b0d1`, com o IP):
+  ela sai com o lead (ON DELETE CASCADE). O prazo de guarda é decisão jurídica, junto com a do cliente.
 - Toda versão nova pede aceite, inclusive revisão. Dispensar o novo aceite em mudança só de redação é decisão
   jurídica.
 - “Li e concordo” vale para os dois documentos. Se a Política deve registrar ciência, e não concordância, é
@@ -179,8 +235,17 @@ autenticado: login, landing e páginas de erro continuam escuros, e a sidebar se
   no serviço real antes de usar o IP como prova.
 - Uma aba que já estava aberta com o tempo real (Socket.IO) conectado continua recebendo os avisos do sininho até
   navegar, quando o modal aparece.
-- A landing informa que os documentos ainda não estão disponíveis nela: a página não lê o que o administrador
-  publica, e exibi-los ali é uma decisão à parte.
+- Os textos da v1.0 virão dos arquivos .docx do dono. Publicá-los em produção leva o modal a todos os clientes no
+  acesso seguinte e cria prova de aceite imutável: publicar só depois da revisão jurídica.
+- O admin não passa pela trava (decisão de desenho: ele recebe o alerta das pendências). Se “usuários logados” deve
+  incluir o admin, a decisão é do dono; o ponto de mudança é `termos_legais.trava_de_aceite`.
+- Sem JavaScript, a caixa e o botão do aceite não liberam: o cliente fica no modal, com as saídas exportar, pedir a
+  exclusão e sair, e o `<noscript>` explica o motivo.
+- O aceite pelas Configurações do cliente (um documento por vez, botão “Li e aceito a vX.Y”) segue a regra da
+  rolagem, mas não tem a caixa “Li e concordo”: o próprio botão é a declaração. Com a trava, esse caminho quase nunca
+  aparece. Retirá-lo ou exigir a caixa também nele é decisão.
+- As páginas públicas e o JSON não têm limite de taxa, como a landing e o “Como aderir”: cada acesso faz até duas
+  consultas pequenas ao banco.
 - O módulo de avaliações, ainda fora desta linha de trabalho, tem uma migração com o mesmo pai (`b6935e8de9d4`) e
   seções numeradas em `models.py`. Ao integrá-lo, reaponte a migração que ainda não tiver sido aplicada, para não
   criar duas cabeças, e renumere as seções.

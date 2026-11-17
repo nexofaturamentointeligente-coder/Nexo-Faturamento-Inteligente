@@ -11,7 +11,6 @@ Demais:
                       <papel>.<projeto> do pooler).
   CORS_ORIGENS        origens da landing de produção, separadas por vírgula (https://host, sem caminho).
   PERMITIR_LOCALHOST  1 para aceitar também http://localhost e http://127.0.0.1, em qualquer porta (testes).
-  TERMOS_VERSAO       versão do texto dos termos que a landing mostra; vai para o lead junto com o aceite.
   SUPABASE_BUCKET     bucket privado dos relatórios (padrão: leads-raio-x).
   LIMITE_POR_HORA     envios por IP em 1 hora (padrão 5).
   LIMITE_POR_DIA      envios por IP em 24 horas (padrão 10).
@@ -21,6 +20,9 @@ Demais:
                       registra quantas entradas o cabeçalho traz) antes de abrir a origem.
   PRAZO_DA_TRIAGEM    segundos de triagem por envio (padrão 30, até 300); o relatório que não termina a tempo é
                       recusado.
+
+TERMOS_VERSAO não é mais usada: a versão aceita vem dos documentos publicados no banco (documento_legal), lida na
+gravação do lead. No ambiente, ela é ignorada, com um aviso no log da subida (sem o valor).
 
 Configuração incompleta não derruba o serviço: o /ping continua respondendo, o envio responde 503 (403 sem
 CORS_ORIGENS, porque a origem é conferida antes) e cada problema vai para o log na subida, sem o valor.
@@ -40,10 +42,11 @@ MEGABYTE = 1024 * 1024
 MAX_BYTES = 15 * MEGABYTE
 MAX_ARQUIVOS = 12
 PRAZO_MAXIMO_DA_TRIAGEM = 300
+AVISO_TERMOS_VERSAO = ("TERMOS_VERSAO não é mais usada e foi ignorada: a versão aceita vem dos documentos publicados "
+                       "em Configurações › Documentos Legais da aplicação principal. Pode tirá-la do ambiente.")
 
 _ORIGEM = re.compile(r"https://[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?")
 _ORIGEM_LOCAL = re.compile(r"http://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?")
-_VERSAO = re.compile(r"[A-Za-z0-9._-]{1,40}")
 _BUCKET = re.compile(r"[a-z0-9][a-z0-9_-]{2,62}")
 _PROJETO = re.compile(r"[a-z0-9]{20}")
 _INTEIRO = re.compile(r"[0-9]{1,9}")
@@ -108,7 +111,6 @@ class Configuracao:
     bucket: str = BUCKET_PADRAO
     origens: tuple = ()
     permitir_localhost: bool = False
-    termos_versao: str = ""
     limite_por_hora: int = 5
     limite_por_dia: int = 10
     teto_diario: int = 100
@@ -117,6 +119,8 @@ class Configuracao:
     max_bytes: int = MAX_BYTES
     max_arquivos: int = MAX_ARQUIVOS
     problemas: tuple = ()
+    # O que vai para o log na subida sem impedir o serviço de ficar pronto.
+    avisos: tuple = ()
 
     def __repr__(self) -> str:
         # Sem as credenciais: a configuração pode aparecer num log ou num erro.
@@ -183,9 +187,8 @@ class Configuracao:
         if not origens and not permitir_localhost:
             problemas.append("CORS_ORIGENS vazia: nenhuma landing pode enviar.")
 
-        termos_versao = str(ambiente.get("TERMOS_VERSAO") or "").strip()
-        if not _VERSAO.fullmatch(termos_versao):
-            problemas.append("TERMOS_VERSAO ausente ou inválida (até 40 letras, números, ponto, hífen ou sublinhado).")
+        # A versão aceita vem do banco; o valor antigo da variável não é lido, nem conferido.
+        avisos = [AVISO_TERMOS_VERSAO] if str(ambiente.get("TERMOS_VERSAO") or "").strip() else []
         bucket = str(ambiente.get("SUPABASE_BUCKET") or BUCKET_PADRAO).strip()
         if not _BUCKET.fullmatch(bucket):
             problemas.append("SUPABASE_BUCKET inválido.")
@@ -193,9 +196,9 @@ class Configuracao:
 
         return cls(
             database_url=database_url, supabase_url=supabase_url, supabase_key=supabase_key, bucket=bucket,
-            origens=origens, permitir_localhost=permitir_localhost, termos_versao=termos_versao,
+            origens=origens, permitir_localhost=permitir_localhost,
             limite_por_hora=inteiro("LIMITE_POR_HORA", 5, 1), limite_por_dia=inteiro("LIMITE_POR_DIA", 10, 1),
             teto_diario=inteiro("TETO_DIARIO", 100, 1), proxies_confiaveis=inteiro("PROXIES_CONFIAVEIS", 2, 0, 5),
             prazo_da_triagem=inteiro("PRAZO_DA_TRIAGEM", 30, 1, PRAZO_MAXIMO_DA_TRIAGEM),
-            problemas=tuple(problemas),
+            problemas=tuple(problemas), avisos=tuple(avisos),
         )

@@ -1,28 +1,35 @@
 """Microsserviço do Raio-X: captação de leads da landing da NEXO (no monorepo, independente da aplicação principal).
 
 Rotas:
-  GET  /  e  GET /ping        {"status": "online", "service": "nexo-raiox"}: keep-alive, sem banco nem Storage.
+  GET  /ping, /health e /     {"status": "alive"} com 200: keep-alive do agendador externo e health check do
+                              Render. Não toca no banco nem no Storage e não passa pelo CORS nem pelo limite por IP.
+                              Só GET e HEAD; outro método, inclusive OPTIONS, recebe 405 com o cabeçalho Allow.
   POST /api/leads/raio-x      multipart/form-data com nome, empresa, whatsapp, email, interesse (1, 2 ou 3),
-                              termos_aceitos e, só no interesse 1, os relatórios no campo "arquivos".
+                              termos_aceitos, documento_termos e documento_privacidade (os ids das versões que a
+                              landing mostrou) e, só no interesse 1, os relatórios no campo "arquivos".
   OPTIONS /api/leads/raio-x   preflight do CORS: só as origens configuradas, só POST.
 
 Ordem do envio: origem (403), limite por IP (429), configuração (503), formato do pedido (415), tamanho (413),
 campo isca, aceite dos termos e campos (400), regra dos arquivos pelo interesse (400), teto diário do serviço
-(429), triagem de cada relatório (uma por vez no processo, com no máximo dois envios na fila e prazo por envio;
-fila cheia, 503 na hora), gravação dos aprovados no Storage e, por último, o lead no banco, onde o teto diário é
-conferido de novo sob trava. Se o Storage ou o banco falham, os arquivos deste envio (inclusive o que estava a
-caminho) são apagados e a resposta é 503; o que estava a caminho e não foi achado para apagar vai para o log,
-porque o Storage pode terminar de gravá-lo depois. Se o banco não confirma a gravação, o serviço confere numa
-conexão nova se o lead ficou gravado antes de apagar qualquer coisa; sem resposta nem assim, os arquivos ficam e
-os caminhos vão para o log, para a conferência. A resposta 201 traz o protocolo (os 8 primeiros caracteres do id
-do lead), a situação dos arquivos e o motivo de cada recusa. O log nunca leva nome, e-mail, WhatsApp, IP nem a
-configuração.
+(429) e versões vigentes dos termos (503 sem documento publicado, 409 se o visitante leu outra versão), triagem de
+cada relatório (uma por vez no processo, com no máximo dois envios na fila e prazo por envio; fila cheia, 503 na
+hora), gravação dos aprovados no Storage e, por último, o lead e o aceite de cada documento no banco, onde o teto
+diário e as versões vigentes são conferidos de novo, na mesma transação, sob trava: a versão publicada durante o
+envio dá 409 sem gravar nada. Se o Storage ou o banco falham, ou se os termos mudam no meio, os arquivos deste
+envio (inclusive o que estava a caminho) são apagados; o que estava a caminho e não foi achado para apagar vai
+para o log, porque o Storage pode terminar de gravá-lo depois. Se o banco não confirma a gravação, o serviço
+confere numa conexão nova se o lead ficou gravado antes de apagar qualquer coisa; sem resposta nem assim, os
+arquivos ficam e os caminhos vão para o log, para a conferência. A resposta 201 traz o protocolo (os 8 primeiros
+caracteres do id do lead), a situação dos arquivos e o motivo de cada recusa. O aceite leva o IP do visitante (o
+mesmo endereço que o limite por IP conta), normalizado. O log da aplicação nunca leva nome, e-mail, WhatsApp, IP nem a
+configuração; o log de acesso do gunicorn sai sem dado pessoal pelo formato do gunicorn.conf.py.
 """
 
 from collections import deque
 from datetime import datetime, time as horario, timedelta, timezone
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -34,12 +41,14 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from armazenamento import ArmazenamentoSupabase, ErroDeArmazenamento
 from configuracao import MEGABYTE, Configuracao
 from limite import LimitePorIp
-from repositorio import ErroDeBanco, RepositorioDeLeads, TetoDoDiaAtingido
+from repositorio import (NOMES_DOS_DOCUMENTOS, ErroDeBanco, RepositorioDeLeads, TermosDesatualizados,
+                         TermosIndisponiveis, TetoDoDiaAtingido, conferir_termos)
 import sanitizacao
 import validacao
 
 ROTA_DO_LEAD = "/api/leads/raio-x"
-SERVICO = {"status": "online", "service": "nexo-raiox"}
+# Resposta do keep-alive (/ping, /health e /): só isto, para o agendador externo e o health check do Render.
+SERVICO = {"status": "alive"}
 # O Brasil não tem horário de verão desde 2019: o dia do teto diário é o de UTC-3.
 BRASILIA = timezone(timedelta(hours=-3), "BRT")
 # Os campos de texto do formulário ficam fora do teto dos relatórios.
@@ -48,19 +57,29 @@ FOLGA_DO_FORMULARIO = 64 * 1024
 # decodificador de multipart, que lê blocos de 64 KB; abaixo de uns 128 KB, qualquer relatório maior que um bloco
 # seria recusado com 413. Os campos de texto têm os próprios limites na validação.
 MEMORIA_DO_FORMULARIO = 256 * 1024
-# Uma triagem por vez no processo (a de pior caso medida passa pouco de 100 MB, somados aos relatórios do envio;
+# Uma triagem por vez no processo (a de pior caso medida fica perto de 120 MB, somados aos relatórios do envio;
 # a instância pequena tem 512 MB), em ordem de chegada. Na fila, no máximo dois envios com relatório esperam a
-# vez: cada um prende uma das 8 threads do gunicorn, e sobram threads para o /ping do health check e para os
-# envios sem relatório, que não entram na fila. O que passa disso recebe 503 na hora, com Retry-After. A espera
-# cobre a triagem em curso e a da frente na fila, cada uma no seu prazo, com folga.
+# vez: cada um prende uma das 8 threads do gunicorn. O que passa disso recebe 503 na hora, com Retry-After. A
+# espera cobre a triagem em curso e a da frente na fila, cada uma no seu prazo, com folga. A fila protege só a
+# triagem: oito pedidos presos ao mesmo tempo em outra fase (corpo chegando devagar, banco ou Storage lentos, ou o
+# corpo não lido que o gunicorn descarta depois da resposta) ocupam as 8 threads, e o /ping espera até um deles
+# soltar. Ver "Limites conhecidos" no README.
 FILA_DA_TRIAGEM = 2
 FOLGA_DA_ESPERA = 10
 # As contagens de entradas do X-Forwarded-For que vão para o log (para conferir PROXIES_CONFIAVEIS no serviço
 # real), cada uma na primeira vez: de 0 a 6, e "7 ou mais". Nenhum cliente enche o log nem gasta as vagas.
 MAIOR_CONTAGEM_DE_PROXY = 7
+# O caminho chega decodificado ao PATH_INFO e vai assim para o log de acesso do gunicorn (o %(U)s do
+# gunicorn.conf.py). Um %0A forjaria linhas inteiras, e aspas e barra invertida (%22, %5C) falsificariam o status e
+# a duração dentro da mesma linha, porque o gunicorn só escapa a aspa. Tudo o que não é ASCII visível (controle,
+# espaço e os bytes 0x80 a 0xFF do PATH_INFO em latin-1), mais aspas, barra invertida e %, vira %XX antes de tudo.
+# Nenhuma rota usa esses caracteres: o pedido dá 404 do mesmo jeito, e a linha do log fica uma só e fiel.
+CONTROLE_NO_CAMINHO = re.compile(r'[^\x21-\x7e]|["%\\]')
 CABECALHOS_PERMITIDOS = {"content-type", "accept", "accept-language"}
 INDISPONIVEL = "Serviço indisponível no momento. Tente de novo em instantes."
 TETO_ATINGIDO = "O limite de envios de hoje foi atingido. Tente de novo amanhã."
+TERMOS_INDISPONIVEIS = "Os termos ainda não estão disponíveis. Tente mais tarde."
+TERMOS_ATUALIZADOS = "Os termos foram atualizados enquanto você lia. Leia a versão atual e confirme de novo."
 MENSAGENS_HTTP = {400: "Pedido inválido.", 404: "Endereço não encontrado.", 405: "Método não permitido.",
                   413: "O envio passa do tamanho permitido.", 415: "Formato de envio não aceito.",
                   429: "Muitos envios. Tente mais tarde.", 500: "Erro interno.", 503: INDISPONIVEL}
@@ -120,6 +139,16 @@ def _indisponivel_por(segundos: int):
     return resposta, status
 
 
+def _recusa_dos_termos(recusa: Exception):
+    """503 sem a versão publicada de algum dos documentos (não há o que aceitar); 409 quando o visitante leu outra
+    versão, no campo dos termos, para a landing mostrar a atual e pedir o aceite de novo."""
+    if isinstance(recusa, TermosIndisponiveis):
+        log.warning("Envio recusado: falta a versão publicada dos Termos de Uso ou da Política de Privacidade.")
+        return _erro(TERMOS_INDISPONIVEIS, 503)
+    log.info("Envio recusado: o visitante leu uma versão dos termos que não é a vigente.")
+    return _erro(TERMOS_ATUALIZADOS, 409, "termos_aceitos")
+
+
 def _situacao_dos_arquivos(interesse: str, resultados: list) -> str:
     if interesse != "raio_x":
         return "sem_arquivo"
@@ -129,17 +158,32 @@ def _situacao_dos_arquivos(interesse: str, resultados: list) -> str:
     return "parcial" if aprovados else "recusado"
 
 
+def _caminho_sem_controle(wsgi_app):
+    """Troca os caracteres de controle do PATH_INFO por %XX no próprio environ, que o gunicorn usa depois para o log
+    de acesso: o caminho forjado não vira linhas a mais no log (ver CONTROLE_NO_CAMINHO)."""
+    def aplicativo(environ, start_response):
+        caminho = environ.get("PATH_INFO", "")
+        if CONTROLE_NO_CAMINHO.search(caminho):
+            environ["PATH_INFO"] = CONTROLE_NO_CAMINHO.sub(lambda achado: "%%%02X" % ord(achado.group()), caminho)
+        return wsgi_app(environ, start_response)
+    return aplicativo
+
+
 def create_app(configuracao: Configuracao = None, repositorio=None, armazenamento=None, limite=None) -> Flask:
     configuracao = configuracao or Configuracao.de_ambiente()
     app = Flask(__name__)
-    # Folga de partes para que o excesso de relatórios caia no 400 da contagem, com a mensagem certa.
+    # Folga de partes para que o excesso de relatórios caia no 400 da contagem, com a mensagem certa (as 22 cobrem
+    # os campos de texto, inclusive os ids dos dois documentos lidos).
     app.config.update(MAX_CONTENT_LENGTH=configuracao.max_bytes + FOLGA_DO_FORMULARIO,
-                      MAX_FORM_MEMORY_SIZE=MEMORIA_DO_FORMULARIO, MAX_FORM_PARTS=3 * configuracao.max_arquivos + 20)
+                      MAX_FORM_MEMORY_SIZE=MEMORIA_DO_FORMULARIO, MAX_FORM_PARTS=3 * configuracao.max_arquivos + 22)
     app.json.ensure_ascii = False
     if configuracao.proxies_confiaveis:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=configuracao.proxies_confiaveis, x_proto=1)
+    app.wsgi_app = _caminho_sem_controle(app.wsgi_app)
     for problema in configuracao.problemas:
         log.error("Configuração incompleta: %s", problema)
+    for aviso in configuracao.avisos:
+        log.warning("Configuração: %s", aviso)
     # Banco e Storage nascem mesmo com outra falta (a origem fica vazia até a LGPD), para a conferência da
     # subida. Um erro aqui não derruba o serviço: o /ping continua no ar e o envio responde 503.
     if repositorio is None and configuracao.database_url:
@@ -193,9 +237,12 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
                 resposta.headers["Access-Control-Expose-Headers"] = "Retry-After"
         return resposta
 
-    @app.get("/")
-    @app.get("/ping")
+    # Só GET (e o HEAD que o Flask deriva dele): sem o OPTIONS automático, outro método recebe 405 com Allow.
+    @app.get("/", provide_automatic_options=False)
+    @app.get("/ping", provide_automatic_options=False)
+    @app.get("/health", provide_automatic_options=False)
     def ping():
+        # Sem banco, Storage, CORS, limite por IP nem regra de negócio: só acorda o serviço e diz que está no ar.
         return jsonify(SERVICO)
 
     def preflight():
@@ -261,6 +308,7 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
             return _erro("Não foi possível enviar.", 400)
         try:
             validacao.termos_aceitos(formulario.get("termos_aceitos"))
+            lidos = validacao.documentos_lidos(formulario)
             nome = validacao.texto_obrigatorio(formulario.get("nome"), "nome", "Informe o nome.")
             empresa = validacao.texto_obrigatorio(formulario.get("empresa"), "empresa", "Informe o nome da empresa.")
             email = validacao.email(formulario.get("email"))
@@ -279,15 +327,21 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
         if len(arquivos) > configuracao.max_arquivos:
             return _erro(f"Envie no máximo {configuracao.max_arquivos} relatórios por vez.", 400, "arquivos")
 
-        # Antes do trabalho pesado; a conferência exata é a da gravação, sob trava.
+        # Antes do trabalho pesado, numa ida ao banco: o teto do dia e as versões vigentes dos termos. A conferência
+        # exata dos dois é a da gravação, sob trava, na transação do INSERT.
         inicio_do_dia = _inicio_do_dia()
         try:
-            if repositorio.leads_desde(inicio_do_dia) >= configuracao.teto_diario:
-                log.warning("Envio recusado: teto diário do serviço atingido.")
-                return _erro(TETO_ATINGIDO, 429)
+            leads_de_hoje, vigentes = repositorio.primeira_conferencia(inicio_do_dia)
         except ErroDeBanco as erro:
-            log.warning("Teto diário não conferido (%s).", erro)
+            log.warning("Teto diário e termos não conferidos (%s).", erro)
             return _erro(INDISPONIVEL, 503)
+        if leads_de_hoje >= configuracao.teto_diario:
+            log.warning("Envio recusado: teto diário do serviço atingido.")
+            return _erro(TETO_ATINGIDO, 429)
+        try:
+            conferir_termos(vigentes, lidos)
+        except (TermosIndisponiveis, TermosDesatualizados) as recusa:
+            return _recusa_dos_termos(recusa)
 
         resultados = []
         if arquivos:  # o envio sem relatório não entra na fila da triagem
@@ -329,13 +383,18 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
             situacao = _situacao_dos_arquivos(interesse, resultados)
             lead = {"id": lead_id, "nome_contato": nome, "email": email, "whatsapp": whatsapp, "nome_loja": empresa,
                     "interesse": interesse, "status_arquivo": situacao,
-                    "arquivos_storage": json.dumps(registros, ensure_ascii=False) if registros else None,
-                    "termos_versao": configuracao.termos_versao}
+                    "arquivos_storage": json.dumps(registros, ensure_ascii=False) if registros else None}
+            # O endereço que o limite por IP contou (o ProxyFix já escolheu o salto confiável), normalizado.
+            ip = validacao.ip_do_visitante(request.remote_addr)
             try:
-                repositorio.gravar(lead, teto=configuracao.teto_diario, desde=inicio_do_dia)
+                repositorio.gravar(lead, teto=configuracao.teto_diario, desde=inicio_do_dia, lidos=lidos, ip=ip)
             except TetoDoDiaAtingido:
                 log.warning("Envio recusado na gravação: teto diário do serviço atingido.")
                 return _erro(TETO_ATINGIDO, 429)
+            except (TermosIndisponiveis, TermosDesatualizados) as recusa:
+                # Os termos mudaram durante o envio (uma versão nova publicada depois da primeira conferência):
+                # nada foi gravado, e os relatórios deste envio saem no finally.
+                return _recusa_dos_termos(recusa)
             except ErroDeBanco as erro:
                 # O COMMIT pode ter sido aplicado e só a resposta ter se perdido: confere antes de apagar.
                 try:
@@ -370,7 +429,12 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
 
     @app.errorhandler(HTTPException)
     def erro_http(erro_http):
-        return _erro(MENSAGENS_HTTP.get(erro_http.code, "Pedido inválido."), erro_http.code or 500)
+        resposta, status = _erro(MENSAGENS_HTTP.get(erro_http.code, "Pedido inválido."), erro_http.code or 500)
+        # O 405 diz quais métodos a rota aceita (RFC 9110, seção 15.5.6), como o Werkzeug diria.
+        metodos = getattr(erro_http, "valid_methods", None)
+        if erro_http.code == 405 and metodos:
+            resposta.headers["Allow"] = ", ".join(metodos)
+        return resposta, status
 
     @app.errorhandler(Exception)
     def erro_inesperado(erro):
@@ -381,17 +445,23 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
 
 
 def conferir_dependencias(app: Flask) -> None:
-    """Na subida (o wsgi.py chama numa thread à parte, para não atrasar o /ping): o banco, lendo a tabela pelas
-    colunas da migração, e o bucket, que tem de ser privado. Só o resultado vai para o log, sem URL nem chave; o
+    """Na subida (o gancho post_worker_init do gunicorn.conf.py chama numa thread à parte, já no worker, depois do
+    fork, para não atrasar o /ping): o banco, lendo as tabelas pelas
+    colunas das migrações, travando a dos documentos como a gravação trava e conferindo se há versão publicada
+    de cada documento, e o bucket, que tem de ser privado. Só o resultado vai para o log, sem URL nem chave; o
     que não está configurado já apareceu como problema de configuração."""
     repositorio, armazenamento = app.extensions["nexo_raiox_dependencias"]
     if repositorio is not None:
         try:
-            repositorio.conferir_tabela()
+            vigentes = repositorio.conferir_tabela()
         except ErroDeBanco as erro:
             log.error("Conferência da subida: banco com problema (%s); os envios vão responder 503.", erro)
         else:
-            log.info("Conferência da subida: banco ok, com as colunas da migração f2b6d8a4c1e9.")
+            log.info("Conferência da subida: banco ok, com as tabelas das migrações f2b6d8a4c1e9 e c8e2a4f6b0d1.")
+            faltando = [nome for tipo, nome in NOMES_DOS_DOCUMENTOS.items() if tipo not in vigentes]
+            if faltando:
+                log.warning("Conferência da subida: documento sem versão publicada (%s); os envios respondem 503 até "
+                            "a publicação.", ", ".join(faltando))
     if armazenamento is not None:
         try:
             privado = armazenamento.conferir_bucket()

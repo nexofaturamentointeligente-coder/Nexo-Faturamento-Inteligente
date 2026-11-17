@@ -100,7 +100,9 @@ TABELAS_CONTRATUAIS = (
 # (a migração até "head" também as traz; nascem vazias como as contratuais).
 TABELAS_POSTERIORES = ("sessao_autenticada", "preferencia_usuario", "documento_legal", "aceite_documento",
                        "configuracao_sistema", "validacao_pdv", "diagnostico_entrada",
-                       "lead_avaliacao", "brainstorming_dados_pdv", "diagnostico_fechamento")
+                       "lead_avaliacao", "brainstorming_dados_pdv", "diagnostico_fechamento",
+                       "aceite_documento_lead", "avaliacao_cliente", "sugestao_melhoria", "evento_avaliacao",
+                       "solicitacao_avaliacao")
 # Catálogo dos planos por nível (b3e9d6c1f7a2): nasce com os dados de referência que a própria
 # revisão grava (níveis, funcionalidades e a matriz cumulativa), nunca com dado de cliente.
 CATALOGO_PLANOS = {"plano_nivel": 4, "funcionalidade": 15, "plano_funcionalidade": 38}

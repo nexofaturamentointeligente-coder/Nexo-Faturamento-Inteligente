@@ -141,6 +141,10 @@
 .avaliacao-identificacao-dados { width: 100%; margin: 0; }
 .avaliacao-identificacao-dados dt { margin-bottom: 2px; color: #b7b2d3; font-size: 0.74rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
 .avaliacao-identificacao-dados dd { margin: 0; font-size: 0.92rem; overflow-wrap: anywhere; }
+.avaliacao-confirmacao { max-width: 860px; margin-bottom: 16px; }
+/* Nota em estrelas, só leitura (macro m.estrelas de _macros.html). */
+.nota-estrelas { display: inline-flex; gap: 2px; font-size: 0.92rem; line-height: 1; color: rgba(255, 255, 255, 0.28); white-space: nowrap; }
+.nota-estrelas .is-cheia { color: #fbbf24; }
 .avaliacao-nota { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 14px; }
 .avaliacao-nota .nota-estrelas { gap: 4px; font-size: 1.3rem; }
 .avaliacao-nota-rotulo { color: #fbd07a; font-size: 0.92rem; font-weight: 600; }
@@ -200,3 +204,39 @@
 @media (prefers-reduced-motion: reduce) {
   .solicitacao-avaliacao { animation: none; }
 }
+
+/* ---- Tema claro do portal (nexo-tema-claro.css define os tokens): as cores fixas acima são do
+   tema escuro e sumiriam sobre o branco. Repouso antes do estado, como na folha clara. ---- */
+html[data-theme="light"] .avaliacao-aviso ul,
+html[data-theme="light"] .avaliacao-situacao > p,
+html[data-theme="light"] .avaliacao-situacao > p.campo-dica,
+html[data-theme="light"] .campo-dica,
+html[data-theme="light"] .contador,
+html[data-theme="light"] .avaliacao-identificacao-dados dt { color: var(--text-muted); }
+html[data-theme="light"] .avaliacao-form .req { color: var(--roxo-texto); }
+html[data-theme="light"] .contador.is-perto,
+html[data-theme="light"] .estrela-texto,
+html[data-theme="light"] .nota-significado,
+html[data-theme="light"] .avaliacao-nota-rotulo { color: var(--ambar-texto); }
+html[data-theme="light"] .contador.is-limite,
+html[data-theme="light"] .campo-erro,
+html[data-theme="light"] .avaliacao-resumo a { color: var(--vermelho-texto); }
+html[data-theme="light"] .avaliacao-form .form-control[aria-invalid="true"]:focus { border-color: var(--danger); }
+html[data-theme="light"] .estrela-icone { fill: rgba(45, 27, 94, 0.04); stroke: var(--campo-borda); }
+html[data-theme="light"] .estrela:has(input:checked) .estrela-icone,
+html[data-theme="light"] .estrela:has(~ .estrela input:checked) .estrela-icone { fill: #d97706; stroke: #b45309; }
+html[data-theme="light"] .estrelas-campo[aria-invalid="true"] .estrela-icone { stroke: var(--danger); }
+@media (hover: hover) {
+  html[data-theme="light"] .estrelas:has(.estrela:hover) .estrela .estrela-icone { fill: rgba(45, 27, 94, 0.04); stroke: var(--campo-borda); }
+  html[data-theme="light"] .estrelas:has(.estrela:hover) .estrela:hover .estrela-icone,
+  html[data-theme="light"] .estrelas:has(.estrela:hover) .estrela:has(~ .estrela:hover) .estrela-icone { fill: #f59e0b; stroke: #b45309; }
+}
+html[data-theme="light"] .estrela:has(input:focus-visible),
+html[data-theme="light"] .avaliacao-check .form-check-input:focus-visible,
+html[data-theme="light"] .avaliacao-resumo a:focus-visible,
+html[data-theme="light"] .solicitacao-avaliacao:focus-visible { outline-color: var(--primary-2); }
+html[data-theme="light"] .avaliacao-identificacao { background: var(--surface-2); }
+html[data-theme="light"] .nota-estrelas { color: var(--campo-borda); }
+html[data-theme="light"] .nota-estrelas .is-cheia { color: #d97706; }
+html[data-theme="light"] .solicitacao-avaliacao { background: var(--surface); }
+html[data-theme="light"] .solicitacao-titulo .bi { color: #d97706; }

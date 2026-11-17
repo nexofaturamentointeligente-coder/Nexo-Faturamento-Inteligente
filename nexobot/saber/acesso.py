@@ -119,7 +119,9 @@ REGISTROS = (
             "Os lembretes de renovação e os alertas de chamados podem ser desligados; os avisos de segurança, não. "
             "O tema claro ou escuro é escolhido no botão do topo da tela e fica guardado no navegador.\n\n"
             "Quando a NEXO publica os Termos de Uso ou a Política de Privacidade, ou uma versão nova deles, o "
-            "portal mostra o texto logo ao entrar e só libera as páginas depois que você marca “Li e concordo”. "
+            "portal mostra o texto logo ao entrar e só libera as páginas depois que você rola cada texto até o fim "
+            "e marca “Li e concordo”. Os textos vigentes também ficam nas páginas /termos-de-uso e "
+            "/politica-de-privacidade. "
             "Enquanto isso, você ainda pode sair, exportar os seus dados ou pedir a exclusão deles."
         ),
         perguntas=(

@@ -8,11 +8,16 @@ import threading
 import unittest
 import uuid
 
-from app import BRASILIA, SERVICO, FilaDaTriagem, conferir_dependencias, create_app
-from configuracao import MEGABYTE
+from werkzeug.test import EnvironBuilder
+
+from app import (BRASILIA, FILA_DA_TRIAGEM, SERVICO, TERMOS_ATUALIZADOS, TERMOS_INDISPONIVEIS, FilaDaTriagem,
+                 conferir_dependencias, create_app)
+from configuracao import AVISO_TERMOS_VERSAO, MEGABYTE, Configuracao
 from limite import LimitePorIp
-from tests.apoio import (CSV, ORIGEM, TIPO_XLSX, ArmazenamentoFalso, RepositorioFalso, configuracao, folha,
-                         xlsx)
+from repositorio import TermosIndisponiveis, Vigente
+from tests.apoio import (CSV, IDS_DA_LANDING, ORIGEM, TIPO_XLSX, VIGENTES, ArmazenamentoFalso, RepositorioFalso,
+                         configuracao, folha, xlsx)
+from validacao import MENSAGEM_TERMOS
 
 ROTA = "/api/leads/raio-x"
 CAMINHO_SEGURO = re.compile(r"[0-9]{4}/[0-9]{2}/[0-9a-f-]{36}/[0-9]{2}-[0-9a-f]{16}\.(?:csv|xlsx)")
@@ -33,15 +38,18 @@ class _RotasCase(unittest.TestCase):
     @staticmethod
     def dados(**troca):
         base = {"nome": "Maria Fictícia", "empresa": "Mercado Exemplo", "email": "Maria@Example.invalid",
-                "whatsapp": "+55 (62) 98888-1234", "interesse": "1", "termos_aceitos": "true"}
+                "whatsapp": "+55 (62) 98888-1234", "interesse": "1", "termos_aceitos": "true", **IDS_DA_LANDING}
         base.update(troca)
         return {chave: valor for chave, valor in base.items() if valor is not None}
 
-    def enviar(self, arquivos=(("vendas.csv", CSV, "text/csv"),), origem=ORIGEM, cliente=None, **troca):
+    def enviar(self, arquivos=(("vendas.csv", CSV, "text/csv"),), origem=ORIGEM, cliente=None, encaminhado=None,
+               **troca):
         dados = self.dados(**troca)
         if arquivos:
             dados["arquivos"] = [(io.BytesIO(conteudo), nome, tipo) for nome, conteudo, tipo in arquivos]
         cabecalhos = {"Origin": origem} if origem else {}
+        if encaminhado:
+            cabecalhos["X-Forwarded-For"] = encaminhado
         return (cliente or self.cliente).post(ROTA, data=dados, content_type="multipart/form-data",
                                               headers=cabecalhos)
 
@@ -50,18 +58,86 @@ class _RotasCase(unittest.TestCase):
         self.assertEqual(self.armazenamento.objetos, {})
 
 
+class _Explosivo:
+    """Dublê que falha em qualquer uso: prova que o keep-alive não toca no banco, no Storage nem no limite por IP."""
+
+    def __init__(self, nome):
+        object.__setattr__(self, "_nome", nome)
+        object.__setattr__(self, "usos", [])
+
+    def __getattr__(self, atributo):
+        self.usos.append(atributo)
+        raise AssertionError(f"o keep-alive usou {self._nome}.{atributo}")
+
+
 class KeepAliveTests(_RotasCase):
-    def test_ping_na_raiz_e_em_ping_sem_banco(self):
-        for caminho in ("/", "/ping"):
+    def test_ping_health_e_raiz_respondem_alive_sem_banco(self):
+        # O contrato do agendador externo: exatamente {"status": "alive"}, com 200 e em JSON compacto.
+        self.assertEqual(SERVICO, {"status": "alive"})
+        for caminho in ("/ping", "/health", "/"):
             with self.subTest(caminho=caminho):
                 resposta = self.cliente.get(caminho)
-                self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
-        self.assertEqual(self.cliente.head("/ping").status_code, 200)
+                self.assertEqual((resposta.status_code, resposta.get_data()), (200, b'{"status":"alive"}\n'))
+                self.assertEqual(resposta.mimetype, "application/json")
+                self.assertEqual(self.cliente.head(caminho).status_code, 200)
         self.assertEqual((self.repositorio.contagens, self.armazenamento.envios), (0, 0))
+        self.assert_nada_gravado()
+
+    def test_keep_alive_nao_toca_em_banco_storage_limite_nem_fila(self):
+        # Dublês que explodem em qualquer uso e a fila da triagem cheia.
+        dubles = [_Explosivo("repositorio"), _Explosivo("armazenamento"), _Explosivo("limite")]
+        app = create_app(configuracao(), *dubles)
+        fila = app.extensions["nexo_raiox_fila"]
+        senhas = [fila.entrar() for _ in range(1 + FILA_DA_TRIAGEM)]
+        self.assertNotIn(None, senhas)
+        self.assertIsNone(fila.entrar())
+        self.addCleanup(lambda: [fila.sair(senha) for senha in senhas])
+        cliente = app.test_client()
+        for caminho in ("/ping", "/health", "/"):
+            with self.subTest(caminho=caminho):
+                resposta = cliente.get(caminho, headers={"Origin": ORIGEM, "X-Forwarded-For": "203.0.113.9"})
+                self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
+                self.assertEqual(cliente.head(caminho).status_code, 200)
+        self.assertEqual([duble.usos for duble in dubles], [[], [], []])
+
+    def test_keep_alive_so_aceita_get_e_head(self):
+        for caminho in ("/ping", "/health", "/"):
+            for metodo in ("post", "put", "delete", "patch", "options"):
+                with self.subTest(caminho=caminho, metodo=metodo):
+                    resposta = getattr(self.cliente, metodo)(caminho)
+                    self.assertEqual((resposta.status_code, resposta.get_json()),
+                                     (405, {"erro": "Método não permitido."}))
+                    self.assertEqual(sorted(metodo.strip() for metodo in resposta.headers["Allow"].split(",")),
+                                     ["GET", "HEAD"])
+        self.assertEqual((self.repositorio.contagens, self.armazenamento.envios), (0, 0))
+
+    def test_ping_responde_200_sem_banco_nem_storage_configurados(self):
+        # O ambiente vazio: nenhuma dependência nasce, e o health check do Render continua passando.
+        with self.assertLogs("nexo_raiox", "ERROR"):
+            app = create_app(Configuracao.de_ambiente({}), limite=LimitePorIp(100, 100))
+        self.assertEqual(app.extensions["nexo_raiox_dependencias"], (None, None))
+        cliente = app.test_client()
+        for caminho in ("/ping", "/health"):
+            with self.subTest(caminho=caminho):
+                resposta = cliente.get(caminho)
+                self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
+                self.assertEqual(cliente.head(caminho).status_code, 200)
+
+    def test_keep_alive_nao_gasta_o_limite_por_ip_do_envio(self):
+        # O agendador chama de 10 em 10 minutos: isso não pode consumir a cota de envios de quem usa o mesmo IP.
+        self.montar(limite=LimitePorIp(1, 1))
+        for _ in range(5):
+            for caminho in ("/ping", "/health"):
+                self.assertEqual(self.cliente.get(caminho).status_code, 200)
+        self.assertEqual(self.enviar().status_code, 201)
+        self.assertEqual(self.enviar().status_code, 429)
 
     def test_ping_responde_mesmo_com_a_configuracao_incompleta(self):
         self.montar(configuracao(problemas=("DATABASE_URL ausente.",)))
-        self.assertEqual(self.cliente.get("/ping").get_json(), SERVICO)
+        for caminho in ("/ping", "/health"):
+            with self.subTest(caminho=caminho):
+                resposta = self.cliente.get(caminho)
+                self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
         resposta = self.enviar()
         self.assertEqual(resposta.status_code, 503)
         self.assert_nada_gravado()
@@ -74,7 +150,9 @@ class KeepAliveTests(_RotasCase):
         self.assertIn("Banco não configurado", registro.output[0])
         self.assertNotIn("isto não é", "\n".join(registro.output))
         cliente = app.test_client()
-        self.assertEqual(cliente.get("/ping").get_json(), SERVICO)
+        for caminho in ("/ping", "/health"):
+            resposta = cliente.get(caminho)
+            self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
         self.assertEqual(self.enviar(cliente=cliente).status_code, 503)
         self.assertEqual(armazenamento.objetos, {})
 
@@ -87,7 +165,11 @@ class KeepAliveTests(_RotasCase):
         repositorio, armazenamento = app.extensions["nexo_raiox_dependencias"]
         self.assertEqual((type(repositorio).__name__, type(armazenamento).__name__),
                          ("RepositorioDeLeads", "ArmazenamentoSupabase"))
-        self.assertEqual(self.enviar(cliente=app.test_client()).status_code, 403)
+        cliente = app.test_client()
+        self.assertEqual(self.enviar(cliente=cliente).status_code, 403)
+        # É o estado da primeira implantação: o health check do Render precisa passar nele.
+        resposta = cliente.get("/ping")
+        self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
 
     def test_storage_mal_configurado_vai_para_o_log_sem_o_valor(self):
         # O urlsplit recusa o host entre colchetes com uma mensagem que traz o valor; o log não pode levá-lo.
@@ -96,20 +178,22 @@ class KeepAliveTests(_RotasCase):
                              LimitePorIp(100, 100))
         self.assertNotIn("SenhaMarcada7Q", "\n".join(registro.output))
         self.assertIsNone(app.extensions["nexo_raiox_dependencias"][1])
+        resposta = app.test_client().get("/ping")
+        self.assertEqual((resposta.status_code, resposta.get_json()), (200, SERVICO))
 
     def test_conferencia_da_subida_so_registra_o_resultado(self):
         self.montar()
         with self.assertLogs("nexo_raiox", "INFO") as registro:
             conferir_dependencias(self.app)
         self.assertEqual([linha.split(":", 2)[2] for linha in registro.output],
-                         ["Conferência da subida: banco ok, com as colunas da migração f2b6d8a4c1e9.",
+                         ["Conferência da subida: banco ok, com as tabelas das migrações f2b6d8a4c1e9 e c8e2a4f6b0d1.",
                           "Conferência da subida: bucket ok, privado."])
         self.montar(repositorio=RepositorioFalso(falhar_ao_contar=True),
                     armazenamento=ArmazenamentoFalso(falhar_no_bucket=True))
         with self.assertLogs("nexo_raiox", "ERROR") as registro:
             conferir_dependencias(self.app)
         texto = "\n".join(registro.output)
-        self.assertIn("UndefinedColumn", texto)
+        self.assertIn("UndefinedTable", texto)
         self.assertIn("bucket inacessível (o Storage respondeu 403)", texto)
         self.montar(armazenamento=ArmazenamentoFalso(bucket_publico=True))
         with self.assertLogs("nexo_raiox", "ERROR") as registro:
@@ -117,15 +201,56 @@ class KeepAliveTests(_RotasCase):
         self.assertIn("NÃO é privado", registro.output[0])
 
     def test_cabecalhos_de_seguranca_e_erros_em_json(self):
-        resposta = self.cliente.get("/ping")
-        for nome, valor in (("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store"),
-                            ("X-Frame-Options", "DENY"), ("Referrer-Policy", "no-referrer"),
-                            ("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")):
-            self.assertEqual(resposta.headers[nome], valor)
+        for caminho in ("/ping", "/health"):
+            resposta = self.cliente.get(caminho, headers={"Origin": ORIGEM})
+            for nome, valor in (("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store"),
+                                ("X-Frame-Options", "DENY"), ("Referrer-Policy", "no-referrer"),
+                                ("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")):
+                with self.subTest(caminho=caminho, cabecalho=nome):
+                    self.assertEqual(resposta.headers[nome], valor)
+            # O keep-alive não abre o CORS: nem a origem da landing recebe permissão de leitura por ele.
+            self.assertNotIn("Access-Control-Allow-Origin", resposta.headers)
         self.assertEqual(self.cliente.get("/nao-existe").status_code, 404)
         self.assertIn("erro", self.cliente.get("/nao-existe").get_json())
         resposta = self.cliente.get(ROTA)
         self.assertEqual((resposta.status_code, resposta.get_json()), (405, {"erro": "Método não permitido."}))
+
+
+class LogDeAcessoTests(_RotasCase):
+    """O gunicorn grava o PATH_INFO (%(U)s do gunicorn.conf.py) no log de acesso depois da resposta, com o mesmo
+    environ: o caminho forjado não pode virar linhas a mais nem falsificar os campos da linha."""
+
+    def chamar(self, caminho_decodificado):
+        environ = EnvironBuilder(path="/x").get_environ()
+        environ["PATH_INFO"] = caminho_decodificado
+        status = []
+        b"".join(self.app.wsgi_app(environ, lambda linha, cabecalhos, *_: status.append(linha)))
+        return status[0], environ["PATH_INFO"]
+
+    def test_caminho_forjado_nao_vira_linha_nem_campo_no_log(self):
+        forjado = ('/api/leads/raio-x\\" 201 0.523811\n2026-11-16 22:00:00,000 INFO nexo_raiox: Conferência da '
+                   'subida: banco ok.\r\x85\x00\x7f\x9b%0A')
+        status, caminho = self.chamar(forjado)
+        self.assertTrue(status.startswith("404"), status)
+        # Só ASCII visível, sem aspas nem barra invertida: uma linha só, com os campos que o gunicorn escreveu.
+        self.assertRegex(caminho, r"^[\x21-\x7e]+$")
+        self.assertNotIn('"', caminho)
+        self.assertNotIn("\\", caminho)
+        for codificado in ("%5C%22", "%0A", "%0D", "%85", "%00", "%7F", "%9B", "%EA", "%20", "%250A"):
+            self.assertIn(codificado, caminho)
+
+    def test_cada_caractere_fora_do_caminho_seguro_vira_porcento(self):
+        status, caminho = self.chamar('/a"b\\c%d e\n\xe9')
+        self.assertTrue(status.startswith("404"), status)
+        self.assertEqual(caminho, "/a%22b%5Cc%25d%20e%0A%E9")
+
+    def test_caminhos_das_rotas_ficam_iguais(self):
+        status, caminho = self.chamar("/ping")
+        self.assertEqual((status, caminho), ("200 OK", "/ping"))
+        status, caminho = self.chamar("/health")
+        self.assertEqual((status, caminho), ("200 OK", "/health"))
+        status, caminho = self.chamar(ROTA)
+        self.assertEqual(caminho, ROTA)
 
 
 class CorsTests(_RotasCase):
@@ -193,7 +318,7 @@ class EnvioTests(_RotasCase):
                                                            "interesse", "status_arquivo", "termos_versao")},
                          {"nome_contato": "Maria Fictícia", "nome_loja": "Mercado Exemplo",
                           "email": "maria@example.invalid", "whatsapp": "62988881234", "interesse": "raio_x",
-                          "status_arquivo": "aprovado", "termos_versao": "termos-teste-v1"})
+                          "status_arquivo": "aprovado", "termos_versao": "TU-v1.0 PP-v1.0"})
         registros = json.loads(lead["arquivos_storage"])
         self.assertEqual([registro["nome"] for registro in registros], ["Vendas Jan.csv", "vendas fev.xlsx"])
         for registro, conteudo in zip(registros, (CSV, planilha)):
@@ -265,7 +390,8 @@ class EnvioTests(_RotasCase):
         for valor in (None, "", "false", "0", "nao", "off"):
             with self.subTest(termos=valor):
                 resposta = self.enviar(termos_aceitos=valor)
-                self.assertEqual((resposta.status_code, resposta.get_json()["campo"]), (400, "termos_aceitos"))
+                self.assertEqual((resposta.status_code, resposta.get_json()),
+                                 (400, {"erro": MENSAGEM_TERMOS, "campo": "termos_aceitos"}))
         self.assert_nada_gravado()
         for valor in ("true", "on", "1", "Sim", "TRUE"):
             with self.subTest(termos=valor):
@@ -548,6 +674,179 @@ class FalhasTests(_RotasCase):
         resposta = self.enviar(arquivos=(("vendas.xlsx", perigosa, TIPO_XLSX),))
         self.assertEqual(resposta.get_json()["status_arquivo"], "recusado")
         self.assertEqual(self.armazenamento.objetos, {})
+
+
+class TermosTests(_RotasCase):
+    """O aceite dos Termos de Uso e da Política de Privacidade: os ids das versões que a landing mostrou,
+    conferidos com as vigentes antes do trabalho pesado e de novo na gravação, e o IP do visitante no aceite."""
+
+    POLITICA_V1_1 = {"POLITICA_PRIVACIDADE": Vigente(15, "v1.1")}
+
+    def test_um_aceite_por_documento_com_a_versao_e_o_ip(self):
+        resposta = self.enviar(arquivos=DOIS_ARQUIVOS)
+        self.assertEqual(resposta.status_code, 201, resposta.get_json())
+        [lead] = self.repositorio.gravados
+        [pedido] = self.repositorio.pedidos_de_gravacao
+        self.assertEqual(pedido["lidos"], {"TERMOS_USO": 11, "POLITICA_PRIVACIDADE": 12})
+        self.assertEqual(lead["termos_versao"], "TU-v1.0 PP-v1.0")
+        # O cliente de teste vem de 127.0.0.1.
+        self.assertEqual(self.repositorio.aceites, [{"id_lead": lead["id"], "id_documento": 11, "ip": "127.0.0.1"},
+                                                    {"id_lead": lead["id"], "id_documento": 12, "ip": "127.0.0.1"}])
+        # Com a revisão da política já vigente quando o visitante leu, o rótulo dela vai para o lead.
+        self.montar(repositorio=RepositorioFalso(vigentes={**VIGENTES, **self.POLITICA_V1_1}))
+        resposta = self.enviar(arquivos=(), interesse="3", documento_privacidade="15")
+        self.assertEqual(resposta.status_code, 201, resposta.get_json())
+        self.assertEqual(self.repositorio.gravados[0]["termos_versao"], "TU-v1.0 PP-v1.1")
+        self.assertEqual([aceite["id_documento"] for aceite in self.repositorio.aceites], [11, 15])
+
+    def test_ids_ausentes_ou_invalidos_recebem_400_no_campo_dos_termos(self):
+        casos = {
+            "sem os dois": {"documento_termos": None, "documento_privacidade": None},
+            "sem o dos termos": {"documento_termos": None},
+            "sem o da política": {"documento_privacidade": None},
+            "vazio": {"documento_termos": ""},
+            "texto": {"documento_termos": "versao-1"},
+            "com casa decimal": {"documento_privacidade": "12.0"},
+            "negativo": {"documento_termos": "-11"},
+            "zero": {"documento_termos": "0"},
+            "zero à esquerda": {"documento_termos": "011"},
+            "dez dígitos": {"documento_termos": "1" * 10},
+            "dígitos de outro alfabeto": {"documento_termos": chr(0x0661) + chr(0x0661)},
+            "o mesmo id nos dois": {"documento_privacidade": "11"},
+        }
+        for caso, troca in casos.items():
+            with self.subTest(caso=caso):
+                resposta = self.enviar(**troca)
+                self.assertEqual((resposta.status_code, resposta.get_json()),
+                                 (400, {"erro": MENSAGEM_TERMOS, "campo": "termos_aceitos"}))
+        self.assert_nada_gravado()
+        # Recusado antes do banco e do Storage.
+        self.assertEqual((self.repositorio.contagens, self.armazenamento.envios), (0, 0))
+
+    def test_sem_documento_publicado_responde_503_antes_da_triagem(self):
+        for vigentes in ({}, {"TERMOS_USO": VIGENTES["TERMOS_USO"]},
+                         {"POLITICA_PRIVACIDADE": VIGENTES["POLITICA_PRIVACIDADE"]}):
+            with self.subTest(publicados=sorted(vigentes)):
+                self.montar(repositorio=RepositorioFalso(vigentes=vigentes))
+                with self.assertLogs("nexo_raiox", "WARNING") as registro:
+                    resposta = self.enviar(arquivos=DOIS_ARQUIVOS)
+                self.assertEqual((resposta.status_code, resposta.get_json()), (503, {"erro": TERMOS_INDISPONIVEIS}))
+                self.assertIn("falta a versão publicada", "\n".join(registro.output))
+                self.assertEqual((self.armazenamento.envios, self.repositorio.pedidos_de_gravacao), (0, []))
+                self.assert_nada_gravado()
+
+    def test_ids_de_outra_versao_recebem_409_antes_da_triagem(self):
+        # A política ganhou a v1.1 (id 15) depois que a landing mostrou a v1.0 (id 12); e um id que não existe.
+        self.montar(repositorio=RepositorioFalso(vigentes={**VIGENTES, **self.POLITICA_V1_1}))
+        for troca in ({}, {"documento_termos": "999", "documento_privacidade": "15"}):
+            with self.subTest(troca=troca):
+                resposta = self.enviar(arquivos=DOIS_ARQUIVOS, **troca)
+                self.assertEqual((resposta.status_code, resposta.get_json()),
+                                 (409, {"erro": TERMOS_ATUALIZADOS, "campo": "termos_aceitos"}))
+                # A landing, em outra origem, lê o corpo do 409.
+                self.assertEqual(resposta.headers["Access-Control-Allow-Origin"], ORIGEM)
+        self.assertEqual((self.armazenamento.envios, self.repositorio.pedidos_de_gravacao), (0, []))
+        self.assert_nada_gravado()
+
+    def test_versao_publicada_durante_o_envio_recebe_409_e_apaga_os_relatorios(self):
+        # A primeira conferência viu a v1.0; a gravação, na transação do INSERT, já vê a v1.1 da política.
+        self.montar(repositorio=RepositorioFalso(publicar_durante_o_envio=self.POLITICA_V1_1))
+        with self.assertLogs("nexo_raiox", "INFO") as registro:
+            resposta = self.enviar(arquivos=DOIS_ARQUIVOS)
+        self.assertEqual((resposta.status_code, resposta.get_json()),
+                         (409, {"erro": TERMOS_ATUALIZADOS, "campo": "termos_aceitos"}))
+        self.assertIn("não é a vigente", "\n".join(registro.output))
+        # Os dois relatórios chegaram a subir e saíram; nem lead nem aceite ficaram.
+        self.assertEqual((self.armazenamento.envios, len(self.armazenamento.apagados)), (2, 2))
+        self.assert_nada_gravado()
+        self.assertEqual(self.repositorio.aceites, [])
+        # O visitante lê a versão atual e confirma de novo.
+        resposta = self.enviar(arquivos=DOIS_ARQUIVOS, documento_privacidade="15")
+        self.assertEqual(resposta.status_code, 201, resposta.get_json())
+        self.assertEqual(self.repositorio.gravados[0]["termos_versao"], "TU-v1.0 PP-v1.1")
+
+    def test_termos_indisponiveis_na_gravacao_tambem_apagam_os_relatorios(self):
+        class SemTermosNaGravacao(RepositorioFalso):
+            def gravar(self, *_argumentos, **_opcoes):
+                raise TermosIndisponiveis()
+
+        self.montar(repositorio=SemTermosNaGravacao())
+        resposta = self.enviar(arquivos=DOIS_ARQUIVOS)
+        self.assertEqual((resposta.status_code, resposta.get_json()), (503, {"erro": TERMOS_INDISPONIVEIS}))
+        self.assertEqual(len(self.armazenamento.apagados), 2)
+        self.assert_nada_gravado()
+
+    def test_ip_do_aceite_e_o_mesmo_endereco_do_limite(self):
+        """Atrás do Cloudflare e do Render (PROXIES_CONFIAVEIS=2): o IP do visitante, nunca o forjado à frente; o
+        IPv4 mapeado em IPv6 vira o IPv4, o IPv6 sai na forma curta e o que não é IP de visitante fica nulo."""
+        self.montar(configuracao(proxies_confiaveis=2))
+        cliente = self.app.test_client()
+        cliente.environ_base["REMOTE_ADDR"] = "10.21.157.68"
+        casos = (("177.10.20.30, 104.22.17.40", "177.10.20.30"),
+                 ("6.6.6.6, 177.99.10.99, 104.22.17.40", "177.99.10.99"),
+                 ("::ffff:203.0.113.9, 104.22.17.40", "203.0.113.9"),
+                 ("2001:0db8:0000:0000:0000:0000:0000:0001, 104.22.17.40", "2001:db8::1"),
+                 ("isto-nao-e-ip, 104.22.17.40", None),
+                 ("fe80::1%eth0, 104.22.17.40", None))
+        for indice, (encaminhado, esperado) in enumerate(casos):
+            with self.subTest(encaminhado=encaminhado):
+                resposta = self.enviar(cliente=cliente, arquivos=(), interesse="3", encaminhado=encaminhado,
+                                       email=f"ip{indice}@exemplo.com.br")
+                self.assertEqual(resposta.status_code, 201, resposta.get_json())
+                self.assertEqual(self.repositorio.pedidos_de_gravacao[-1]["ip"], esperado)
+                self.assertEqual([aceite["ip"] for aceite in self.repositorio.aceites[-2:]], [esperado] * 2)
+        # Sem proxy na frente, o endereço da conexão.
+        self.montar()
+        cliente = self.app.test_client()
+        cliente.environ_base["REMOTE_ADDR"] = "::ffff:198.51.100.7"
+        self.assertEqual(self.enviar(cliente=cliente, arquivos=(), interesse="2").status_code, 201)
+        self.assertEqual(self.repositorio.pedidos_de_gravacao[-1]["ip"], "198.51.100.7")
+
+    def test_ip_nunca_vai_para_o_log(self):
+        self.montar(configuracao(proxies_confiaveis=2),
+                    repositorio=RepositorioFalso(publicar_durante_o_envio=self.POLITICA_V1_1))
+        cliente = self.app.test_client()
+        cliente.environ_base["REMOTE_ADDR"] = "10.21.157.68"
+        with self.assertLogs("nexo_raiox", "INFO") as registro:
+            # Um 409 na gravação (com relatórios apagados) e, com a versão atual, o 201.
+            self.assertEqual(self.enviar(cliente=cliente, arquivos=DOIS_ARQUIVOS,
+                                         encaminhado="177.45.67.89, 104.22.17.40").status_code, 409)
+            self.assertEqual(self.enviar(cliente=cliente, arquivos=DOIS_ARQUIVOS, documento_privacidade="15",
+                                         encaminhado="177.45.67.89, 104.22.17.40").status_code, 201)
+        self.assertEqual(self.repositorio.aceites[-1]["ip"], "177.45.67.89")
+        texto = "\n".join(registro.output)
+        for endereco in ("177.45.67.89", "104.22.17.40", "10.21.157.68"):
+            self.assertNotIn(endereco, texto)
+
+    def test_termos_versao_do_ambiente_e_ignorada_com_aviso(self):
+        ambiente = {"DATABASE_URL": "postgresql://usuario@banco.exemplo/nexo", "SUPABASE_KEY": "sb_secret_teste",
+                    "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co", "CORS_ORIGENS": ORIGEM,
+                    "PROXIES_CONFIAVEIS": "0", "TERMOS_VERSAO": "isto não é uma versão válida"}
+        do_ambiente = Configuracao.de_ambiente(ambiente)
+        self.assertTrue(do_ambiente.pronta, do_ambiente.problemas)
+        with self.assertLogs("nexo_raiox", "WARNING") as registro:
+            self.montar(do_ambiente)
+        texto = "\n".join(registro.output)
+        self.assertIn(AVISO_TERMOS_VERSAO, texto)
+        self.assertNotIn("isto não é", texto)
+        resposta = self.enviar(arquivos=(), interesse="3")
+        self.assertEqual(resposta.status_code, 201, resposta.get_json())
+        self.assertEqual(self.repositorio.gravados[0]["termos_versao"], "TU-v1.0 PP-v1.0")
+
+    def test_conferencia_da_subida_avisa_sem_documento_publicado(self):
+        for vigentes, falta in (({"TERMOS_USO": VIGENTES["TERMOS_USO"]}, "(Política de Privacidade)"),
+                                ({}, "(Termos de Uso, Política de Privacidade)")):
+            with self.subTest(falta=falta):
+                self.montar(repositorio=RepositorioFalso(vigentes=vigentes))
+                with self.assertLogs("nexo_raiox", "INFO") as registro:
+                    conferir_dependencias(self.app)
+                [aviso] = [linha for linha in registro.output if linha.startswith("WARNING")]
+                self.assertIn(f"documento sem versão publicada {falta}; os envios respondem 503", aviso)
+        # Com as duas publicadas, nenhum aviso.
+        self.montar()
+        with self.assertLogs("nexo_raiox", "INFO") as registro:
+            conferir_dependencias(self.app)
+        self.assertFalse([linha for linha in registro.output if linha.startswith("WARNING")])
 
 
 if __name__ == "__main__":

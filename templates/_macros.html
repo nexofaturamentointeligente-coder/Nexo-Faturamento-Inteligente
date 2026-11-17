@@ -204,10 +204,17 @@
    Desenhado pelo servidor e visível sem JavaScript, sem botão de fechar nem
    data-bs-dismiss: Esc e clique fora não o fecham, e a página pedida nem foi
    renderizada (termos_legais.trava_de_aceite). O texto é puro e sai escapado.
+   Regra da rolagem (static/js/aceite-rolagem.js, que o base.html inclui com o modal):
+   cada texto rola na própria caixa, e a caixa "Li e concordo" e o botão nascem
+   disabled e só liberam no fim de CADA texto. Sem JavaScript nada libera, e o
+   <noscript> explica; o servidor continua exigindo confirmo=1.
    Saídas: aceitar, sair e os direitos do titular (exportar e pedir exclusão). ---- #}
 {%- macro modal_termos(documentos, proximo) -%}
+{#- Há dois tipos de documento (CHECK ck_documento_tipo): "varios" quer dizer os dois. -#}
+{%- set varios = documentos|length > 1 -%}
 <div class="modal nexo-modal termos-modal d-block" id="modalTermos" tabindex="-1" role="dialog" aria-modal="true"
-     aria-labelledby="modalTermosTitulo" aria-describedby="modalTermosIntro" data-bs-backdrop="static" data-bs-keyboard="false">
+     aria-labelledby="modalTermosTitulo" aria-describedby="modalTermosIntro" data-bs-backdrop="static" data-bs-keyboard="false"
+     data-aceite-rolagem>
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
         <div class="modal-content">
             <div class="modal-header">
@@ -219,25 +226,31 @@
                 <div class="alert alert-{{ 'danger' if categoria == 'error' else categoria }} termos-aviso" role="alert">{{ mensagem }}</div>
                 {% endfor %}
                 {% endwith %}
-                <p id="modalTermosIntro">Para continuar usando o portal, leia {{ 'o documento abaixo' if documentos|length == 1 else 'os documentos abaixo' }} e confirme.</p>
+                <p id="modalTermosIntro">Para continuar usando o portal, leia {{ 'os dois documentos abaixo' if varios else 'o documento abaixo' }} até o fim e confirme.</p>
                 {% for doc in documentos %}
                 <section class="termos-documento" aria-labelledby="termosDocumento{{ doc.id_documento }}">
                     <h3 id="termosDocumento{{ doc.id_documento }}">{{ doc.rotulo }} <span class="nexo-badge b-purple">{{ doc.rotulo_versao }}</span></h3>
                     <p class="field-hint mb-0">Publicada em {{ horario(doc.publicado_em) }}.</p>
-                    <div class="termos-documento-texto" tabindex="0" aria-label="Texto de {{ doc.rotulo }}, {{ doc.rotulo_versao }}">{{ doc.conteudo }}</div>
+                    <div class="termos-documento-texto" tabindex="0" role="region" aria-labelledby="termosDocumento{{ doc.id_documento }}"
+                         aria-describedby="termosAvisoRolagem" data-aceite-texto data-aceite-nome="{{ doc.rotulo }}">{{ doc.conteudo }}<span class="aceite-fim" data-aceite-fim aria-hidden="true"></span></div>
                 </section>
                 {% endfor %}
             </div>
             <div class="modal-footer termos-rodape">
+                <p class="field-hint aceite-aviso"><i class="bi bi-arrow-down-circle aceite-aviso-pendente" aria-hidden="true"></i><i class="bi bi-check-circle aceite-aviso-pronto" aria-hidden="true"></i>
+                    <span id="termosAvisoRolagem" data-aceite-aviso aria-live="polite"
+                          data-pronto="Você chegou ao fim {{ 'dos textos' if varios else 'do texto' }}. Agora marque a caixa para aceitar.">Role até o fim {{ 'de cada texto' if varios else 'do texto' }} para habilitar.</span></p>
+                <noscript><p class="field-hint aceite-aviso">Para aceitar, ative o JavaScript do navegador: a caixa e o botão só ficam disponíveis depois que você rola {{ 'cada texto' if varios else 'o texto' }} até o fim.</p></noscript>
                 <form method="POST" action="{{ url_for('cliente.aceitar_termos') }}" class="termos-form" data-envio-unico>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="proximo" value="{{ proximo }}">
                     {% for doc in documentos %}<input type="hidden" name="documento" value="{{ doc.id_documento }}">{% endfor %}
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="termosConfirmo" name="confirmo" value="1" required>
+                        <input class="form-check-input" type="checkbox" id="termosConfirmo" name="confirmo" value="1" required disabled
+                               data-aceite-libera aria-describedby="termosAvisoRolagem">
                         <label class="form-check-label" for="termosConfirmo">Li e concordo com os Termos de Uso e a Política de Privacidade</label>
                     </div>
-                    <button type="submit" class="btn-nexo"><i class="bi bi-check2-square" aria-hidden="true"></i> Aceitar e continuar</button>
+                    <button type="submit" class="btn-nexo" disabled data-aceite-libera aria-describedby="termosAvisoRolagem"><i class="bi bi-check2-square" aria-hidden="true"></i> Aceitar e continuar</button>
                 </form>
                 <div class="termos-saidas">
                     <p class="field-hint mb-0">Se não quiser aceitar, você pode exportar os seus dados, pedir a exclusão deles ou sair.</p>
@@ -322,5 +335,42 @@
 <a{% if classe %} class="{{ classe }}"{% endif %} href="https://wa.me/{{ numero }}?text={{ texto|urlencode }}" target="_blank" rel="noopener noreferrer"{% if descrito_por %} aria-describedby="{{ descrito_por }}"{% endif %}>
 {%- if icone == 'bi' %}<i class="bi bi-whatsapp" aria-hidden="true"></i> {% elif icone == 'svg' %}<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 20.5 5.07 15A8 8 0 1 1 8 17.93Z"/></svg> {% endif -%}
 {{ rotulo }}<span class="visually-hidden">{% if contexto %} {{ contexto }}{% endif %} (abre o WhatsApp em nova aba)</span></a>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ==== Avaliações dos clientes (COM-002): portal do cliente e moderação do admin, que carregam o
+   Bootstrap Icons. A landing não carrega e desenha as próprias estrelas (_avaliacao_landing.html). ==== #}
+
+{# ---- Nota de 1 a 5 em estrelas; o valor também vai em texto para leitores de tela ---- #}
+{%- macro estrelas(nota) -%}
+<span class="nota-estrelas" role="img" aria-label="Nota {{ nota }} de 5">
+{%- for i in range(1, 6) %}<i class="bi {{ 'bi-star-fill is-cheia' if i <= nota else 'bi-star' }}" aria-hidden="true"></i>{% endfor -%}
+</span>
+{%- endmacro -%}
+
+{# ---- Badge: moderação da avaliação (AvaliacaoCliente.status_moderacao) ---- #}
+{%- macro badge_moderacao(status) -%}
+{%- if status == 'APROVADA' -%}<span class="nexo-badge b-green"><span class="dot"></span>Aprovada</span>
+{%- elif status == 'REJEITADA' -%}<span class="nexo-badge b-red"><span class="dot"></span>Rejeitada</span>
+{%- elif status == 'PENDENTE' -%}<span class="nexo-badge b-amber"><span class="dot"></span>Pendente</span>
+{%- else -%}<span class="nexo-badge b-muted">{{ status }}</span>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Badge: situação pública da avaliação (aprovação e autorização são independentes) ---- #}
+{%- macro badge_publicacao(avaliacao) -%}
+{%- if avaliacao.no_ar -%}<span class="nexo-badge b-green"><span class="dot"></span>Publicada</span>
+{%- elif avaliacao.retirada_em -%}<span class="nexo-badge b-muted"><span class="dot"></span>Retirada</span>
+{%- elif not avaliacao.autoriza_publicacao -%}<span class="nexo-badge b-muted"><span class="dot"></span>Sem autorização</span>
+{%- else -%}<span class="nexo-badge b-purple"><span class="dot"></span>Autorizada</span>
+{%- endif -%}
+{%- endmacro -%}
+
+{# ---- Badge: acompanhamento da sugestão (SugestaoMelhoria.status_acompanhamento) ---- #}
+{%- macro badge_sugestao(status) -%}
+{%- if status == 'CONCLUIDA' -%}<span class="nexo-badge b-green"><span class="dot"></span>Concluída</span>
+{%- elif status == 'EM_ANALISE' -%}<span class="nexo-badge b-info"><span class="dot"></span>Em análise</span>
+{%- elif status == 'NOVA' -%}<span class="nexo-badge b-amber"><span class="dot"></span>Nova</span>
+{%- else -%}<span class="nexo-badge b-muted">{{ status }}</span>
 {%- endif -%}
 {%- endmacro -%}

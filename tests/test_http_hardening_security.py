@@ -119,6 +119,47 @@ class SecurityHeaderTests(DeployTestCase):
                                  f"{diretiva} libera a origem inteira {fonte}")
         self.assertIn("https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/", diretivas["font-src"])
 
+    def _diretivas(self, caminho):
+        csp = self._csp(self.client.get(caminho))
+        return {d.split(" ", 1)[0]: d.split(" ", 1)[1].split() for d in csp.split("; ") if " " in d}
+
+    def test_only_the_landing_connects_to_the_lead_microservice(self):
+        """Os diálogos de cadastro da landing enviam o lead ao microsserviço do Raio-X por fetch: só a landing
+        recebe a origem dele (MICROSSERVICO_RAIOX_URL) no connect-src; o form-action continua 'self'."""
+        origem = "https://nexo-externo.onrender.com"
+        self.app.config["MICROSSERVICO_RAIOX_URL"] = origem
+        landing = self._diretivas("/")
+        self.assertEqual(landing["connect-src"][0], "'self'")
+        self.assertEqual(landing["connect-src"].count(origem), 1)
+        self.assertEqual(landing["form-action"], ["'self'"])
+        self.assertEqual(landing["default-src"], ["'self'"])
+        for caminho in ("/auth/login", "/como-aderir", "/healthz", "/rota-inexistente"):
+            with self.subTest(caminho=caminho):
+                self.assertNotIn(origem, self._diretivas(caminho)["connect-src"])
+
+    def test_invalid_microservice_url_never_reaches_the_policy(self):
+        """Um valor posto direto no config é conferido de novo antes de ir ao cabeçalho: só https://host[:porta]
+        entra, e nada injeta diretiva nem libera outra origem."""
+        casos = {
+            "https://Nexo-Externo.onrender.com/": "https://nexo-externo.onrender.com",
+            "https://servico.example.invalid:8443": "https://servico.example.invalid:8443",
+            "http://nexo-externo.onrender.com": None,
+            "https://nexo-externo.onrender.com/api/leads": None,
+            "https://servico.example.invalid; script-src *": None,
+            "https://servico.example.invalid script-src": None,
+            "https://usuario@servico.example.invalid": None,
+            "javascript:alert(1)": None,
+            "": None,
+            None: None,
+        }
+        for valor, esperado in casos.items():
+            with self.subTest(valor=valor):
+                self.app.config["MICROSSERVICO_RAIOX_URL"] = valor
+                diretivas = self._diretivas("/")
+                externas = [fonte for fonte in diretivas["connect-src"] if fonte.startswith("https://")]
+                self.assertEqual(externas, [esperado] if esperado else [])
+                self.assertNotIn("*", diretivas["script-src"])
+
     def test_inline_scripts_use_the_request_nonce_and_nonces_rotate(self):
         paginas = []
         for _ in range(2):

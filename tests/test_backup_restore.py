@@ -120,8 +120,10 @@ class PostgreSQLBackupRestoreTests(unittest.TestCase):
         # + as 4 das Configurações da conta + a da trava do total do PDV
         # + as 4 dos planos por nível e do Raio-X (b3e9d6c1f7a2)
         # + as 2 da Avaliação de Cenário (f4c2a8e1d9b6)
-        # + a dos retratos mensais do Raio-X (d9e4b7a2c6f1).
-        self.assertEqual(report.get("tables"), 33)
+        # + a dos retratos mensais do Raio-X (d9e4b7a2c6f1)
+        # + a do aceite dos termos do lead da landing (c8e2a4f6b0d1)
+        # + as 4 das avaliações dos clientes (d3f5b7a9c1e2).
+        self.assertEqual(report.get("tables"), 38)
         self.assertEqual(report.get("uploads"), 4)
         self.assertEqual(report.get("files"), 5)
         not_executed = report.get("not_executed", [])
@@ -211,7 +213,7 @@ class BackupDrillSafetyTests(unittest.TestCase):
             for tool in TOOLS:
                 _tool(Path(fake), tool).write_bytes(b"")
             for platform, approved, accepted in cases:
-                report = {"status": "ok", "tables": 33, "uploads": 4, "files": 5,  # espelha o ensaio real
+                report = {"status": "ok", "tables": 38, "uploads": 4, "files": 5,  # espelha o ensaio real
                           "checks": approved, "not_executed": ["etl"]}
                 completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(report))
                 with self.subTest(platform=platform, checks=approved[-1:], accepted=accepted), \
@@ -299,7 +301,7 @@ class _PrivateDrill(unittest.TestCase):
 
     def fixture(self):
         from extensions import db
-        from models import (AceiteDocumento, Analise, ChamadoSuporte, CoberturaPaga, ConfiguracaoSistema,
+        from models import (AceiteDocumento, AceiteDocumentoLead, Analise, ChamadoSuporte, CoberturaPaga, ConfiguracaoSistema,
                             Contrato, DiagnosticoEntrada, DiagnosticoFechamento, DocumentoLegal, Empresa,
                             EventoContratual, GuiaTopico,
                             HistoricoPrecoPlano, IndicadorAnalise, MensagemSuporte, Notificacao, Plano,
@@ -425,6 +427,9 @@ class _PrivateDrill(unittest.TestCase):
                                              valor_venda_bruto=30, custo_medio_registrado=12.5,
                                              flag_venda_abaixo_custo=True, vazamento_estimado_reais=4.5,
                                              criado_em=instante))
+        # O aceite dos termos do lead da landing (c8e2a4f6b0d1): a versão exata, o instante e o IP.
+        db.session.add(AceiteDocumentoLead(id_lead=lead.id, id_documento=documento.id_documento,
+                                           aceito_em=instante, ip="203.0.113.10"))
         guia_ref = storage.salvar(GUIA, "guia/imagem_ficticia.png")
         db.session.add(GuiaTopico(categoria="Teste", pergunta="Recuperação fictícia?",
                                  resposta="Conteúdo fictício restaurado.", imagem_url=guia_ref))

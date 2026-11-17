@@ -1,10 +1,97 @@
 # NEXO-COM-002 — Avaliações e depoimentos
 
-**Situação: PLANEJADA, NÃO IMPLEMENTADA.** Registro de requisitos em 24/10/2026
-(America/Sao_Paulo). A COM-001 prepara a apresentação da landing, sem criar
-sistema de avaliações, tabelas, migrações ou gatilho de 60 dias.
+**Situação em 16/11/2026: reativada no código (frente R do redesenho da landing), sem migração aplicada em
+banco real.** Pedido do dono: "Reative o botão 'Deixar Avaliação' com o seguinte fluxo: exige estar logado ->
+abre modal com seleção de estrelas e campo de texto". As regras e as telas de 02/11/2026 (`avaliacoes.py`,
+`blueprints/avaliacoes.py` e os templates do portal) foram mantidas; o que faltava para elas rodarem (modelos,
+migração, configuração, macros, registro do blueprint) foi refeito à mão, sem copiar a pasta de guarda. Abaixo
+do resumo fica o registro original de requisitos, de 24/10/2026.
 
-## O que a COM-001 entrega
+## Como funciona agora
+
+1. **Landing, seção #avaliacoes.** A rota `/` chama `avaliacoes.contexto_da_landing(current_user)` e a landing
+   inclui `templates/_avaliacao_landing.html`, com `static/css/landing-avaliacao.css` e
+   `static/js/landing-avaliacao.js` no `<head>`. O que aparece depende de quem visita:
+   - visitante: "Deixar Avaliação" leva a `/avaliar` (funciona sem JavaScript);
+   - cliente que pode avaliar: o botão abre o modal; sem JavaScript, leva ao formulário do portal;
+   - quem já avaliou: "Ver minha avaliação";
+   - empresa sem conta ativa ou termos atualizados a aceitar: o motivo, e no segundo caso o caminho do aceite;
+   - administrador: "Ver as avaliações recebidas";
+   - banco fora ou tabelas ausentes: o botão desabilitado e o aviso. A landing nunca cai por causa das
+     avaliações: a falha é aberta e só o tipo do erro vai para o log.
+2. **Login.** `/avaliar` manda o visitante para `/auth/login?next=/avaliar`. O formulário de login agora preserva
+   o `next`, e o servidor só o segue se for um caminho local que abra por GET. Depois do login, `/avaliar` leva o
+   cliente que pode avaliar a `/?avaliar=1#avaliacoes`, onde o modal abre sozinho; quem já avaliou vai para
+   "Minha avaliação"; quem tem termos a aceitar passa antes pelo aceite e volta.
+3. **Modal.** Estrelas de 1 a 5 (rádios nativos, pelo teclado), comentário de 5 a 1000 caracteres com contador,
+   a caixa de autorização de publicação desmarcada (o `TEXTO_CONSENTIMENTO` de sempre, versão 2026-11-01) e o
+   token CSRF. O foco fica preso no diálogo e volta ao botão; Esc fecha. O envio é por fetch para
+   `/cliente/avaliacao`, e a resposta JSON nunca usa flash: 200 recebida ("Recebemos sua avaliação. Ela será
+   publicada depois da revisão da equipe."; sem a autorização, avisa que ela fica só com a equipe); 409 já
+   avaliou; 422 erros por campo; 429 muitas tentativas (10 por hora); redirecionamento quando a sessão venceu ou
+   há termos a aceitar; 503 indisponível.
+4. **Moderação.** Toda avaliação nasce PENDENTE, com os eventos CRIADA e, com a autorização, CONSENTIMENTO_CONCEDIDO
+   (com a versão do aviso). Os administradores recebem o aviso no sininho, com o link da própria avaliação, e o
+   menu deles ganhou "Avaliações" (`/admin/avaliacoes`). Aprovar publica só com a autorização do cliente; rejeitar
+   exige motivo (3 a 500 caracteres); retirar tira do carrossel; toda decisão vale para a versão que foi lida.
+5. **Carrossel.** `landing_reviews` traz só o DTO mínimo: texto, autor (ou "Cliente NEXO"), empresa só com
+   autorização, nota de 1 a 5 e data. O template escapa tudo; e-mail, ids e sugestão privada nunca saem.
+6. **Exclusão permanente de empresa.** Leva as avaliações da empresa e dos usuários dela, com as sugestões, os
+   eventos, o pedido dos 60 dias e o aviso do sininho que cita a empresa.
+
+## Banco: revisão d3f5b7a9c1e2 (depois da c8e2a4f6b0d1)
+
+- As quatro tabelas (`avaliacao_cliente`, `sugestao_melhoria`, `evento_avaliacao` e `solicitacao_avaliacao`) têm
+  a estrutura exata da antiga c5e8a1f4b7d2, que já as criou no banco do .env.
+- Sem as tabelas, a revisão as cria. Com as quatro, confere colunas, tipos, nulidade, padrões, chaves,
+  restrições e índices contra `models.py` e as adota, acrescentando só índice ausente, RLS e políticas. Só parte
+  delas, qualquer divergência, uma política de mesmo nome com outra definição ou FORCE ROW LEVEL SECURITY
+  interrompem a revisão antes de qualquer mudança. Nunca DROP de tabela nem recriação.
+- A única definição diferente aceita é a `deny_api_access` permissiva de negação pura (`FOR ALL TO anon,
+  authenticated USING (false)`, sem `WITH CHECK` ou com `WITH CHECK (false)`): a revisão a troca pela restritiva
+  na mesma transação. Qualquer outra variação continua interrompendo.
+- No PostgreSQL: RLS ligado, privilégios de anon e authenticated revogados, `deny_api_access` (restritiva) e
+  `acesso_servidor`, como na d9e4b7a2c6f1.
+- O downgrade recusa enquanto houver linha.
+- **Sondagem do banco do .env em 17/11/2026 (só leitura):** as quatro tabelas existem, vazias, com RLS ligado e
+  a `deny_api_access` permissiva de negação pura (criada fora das migrações, como em cerca de 30 tabelas mais
+  antigas, entre elas `documento_legal`), sem `acesso_servidor` e com todos os privilégios de anon e authenticated.
+  A versão anterior da revisão pararia nessa política; a atual adota as quatro, sem criar índice. O deploy do
+  Render não migra sozinho.
+- **Aplicada no banco do .env em 17/11/2026**, junto com a c8e2a4f6b0d1, numa transação só, depois de backup
+  verificado (`nexo_backups_privados/2026-11-17_antes_c8e2a4f6b0d1`, restauração isolada com as contagens do
+  snapshot) e de um ensaio sobre o dump real. Conferência posterior: as quatro com RLS sem FORCE,
+  `deny_api_access` restritiva e `acesso_servidor`, sem privilégio da Data API, restrições e índices iguais aos de
+  antes e nenhuma linha mudada.
+
+## Testes
+
+`tests/test_avaliacoes_clientes.py`: os estados da landing e do parcial, `/avaliar` e o login com `next`, o envio
+(200, 422, 400, 409, 403, 429 e 503), a moderação, o DTO escapado, a migração em SQLite (criação, adoção do SQL
+da c5e8a1f4b7d2, divergências, esquema parcial, downgrade e prévia offline) e a exclusão permanente. Com
+`NEXO_TEST_POSTGRES_BIN`, o mesmo em PostgreSQL real, com RLS, políticas, privilégios e envios simultâneos. Com
+`NEXO_TEST_BROWSER=1`, o modal no navegador: teclado, foco, Esc, 320 a 1366 px e sem JavaScript.
+
+## Pendências do dono
+
+- **Texto jurídico.** O `TEXTO_CONSENTIMENTO` cita a Política de Privacidade, que ainda não tem página publicada.
+  O modal avisa que o link aparecerá quando houver, e ele aparece sozinho quando a página pública existir.
+- **Conteúdo do modal.** Hoje só nota, comentário e autorização; publicada, a avaliação aparece como "Cliente
+  NEXO". Nome de exibição e nome da empresa ficam na edição pelo portal. Decidir se entram no modal.
+- **Pedido automático dos 60 dias.** Continua desligado: o painel não o mostra. Os valores das chaves
+  `AVALIACAO_*` vieram da versão de 02/11 (60, 30, 3 e 24).
+- **Cache da landing.** Com avaliações publicadas, a página `/` precisa de Cache-Control (sugestão: no-store), para
+  uma avaliação retirada não continuar em cache.
+- **Retenção** de avaliações rejeitadas, sugestões e evidências de consentimento (seção "Privacidade" abaixo).
+- **Uma avaliação por usuário**, não por empresa: uma empresa com vários usuários pode ter vários depoimentos.
+
+## Registro original de requisitos (24/10/2026)
+
+Registro de requisitos em 24/10/2026 (America/Sao_Paulo), quando a COM-001 preparou a apresentação da landing
+sem criar sistema de avaliações, tabelas, migrações ou gatilho de 60 dias. Os itens abaixo continuam valendo
+como critérios; o que mudou desde então está no resumo acima.
+
+### O que a COM-001 entrega
 
 - Carrossel reutilizável em `templates/landing.html`, `static/js/landing.js` e
   `static/css/landing.css`, com anterior/próximo, indicadores, operação por
@@ -23,7 +110,7 @@ Os exemplos utilizados nos testes existem apenas durante a execução dos testes
 Alternatintas é uma possibilidade de case mencionada pelo proprietário, sem
 conteúdo ou autorização verificável para publicação nesta entrega.
 
-## Fluxo a implementar na COM-002
+### Fluxo a implementar na COM-002
 
 1. Cliente autenticado e elegível recebe solicitação de avaliação após 60 dias
    de uso ativo. A notificação deve permitir fechar ou adiar e não bloquear o portal.
@@ -42,7 +129,7 @@ conteúdo ou autorização verificável para publicação nesta entrega.
 7. Sugestão privada fica disponível à equipe autorizada em área integrada ao
    suporte. Nunca deve ser copiada automaticamente para comentário público.
 
-## Definição de “60 dias de uso ativo” pendente
+### Definição de “60 dias de uso ativo” pendente
 
 A COM-002 deve definir e documentar a regra antes da implementação: evento inicial,
 contagem de atividade, períodos de suspensão/cancelamento ou lixeira, fuso horário,
@@ -55,7 +142,7 @@ A regra precisa ser persistente e idempotente, funcionar após reinício e imped
 solicitações duplicadas em abas, processos e requisições concorrentes. Adiamento,
 recusa, envio e revogação de consentimento devem ter tratamento explícito.
 
-## Administração e moderação
+### Administração e moderação
 
 - Acesso restrito ao papel administrativo já autorizado, com verificação no
   servidor em cada operação de consulta, aprovação, rejeição e retirada.
@@ -70,7 +157,7 @@ recusa, envio e revogação de consentimento devem ter tratamento explícito.
 - Definir limites de tamanho, frequência e duplicidade. Renderizar texto com
   escape, sem HTML/JavaScript fornecido pelo usuário e sem links ativos arbitrários.
 
-## Privacidade, consentimento e LGPD
+### Privacidade, consentimento e LGPD
 
 Documentos e avisos deverão ser revisados pelo responsável antes de disponibilizar
 o fluxo real. Este planejamento não constitui política jurídica publicada.
@@ -89,7 +176,7 @@ o fluxo real. Este planejamento não constitui política jurídica publicada.
 - Revisar o uso de nomes, marcas e resultados: consentimento não comprova a
   veracidade de uma alegação financeira. Não criar promessa de resultado garantido.
 
-## Isolamento entre empresas e segurança
+### Isolamento entre empresas e segurança
 
 - Cliente pode consultar ou modificar somente registros permitidos da própria
   empresa. Derivar a empresa da sessão/usuário no banco, sem confiar em IDs enviados
@@ -105,7 +192,7 @@ o fluxo real. Este planejamento não constitui política jurídica publicada.
 - Aplicar limites de entrada e frequência compatíveis com os mecanismos existentes;
   validar concorrência e evitar cópias não autorizadas em buscas e exportações.
 
-## Integração futura com a landing
+### Integração futura com a landing
 
 O backend da COM-002 deverá construir um DTO público mínimo e verificado para
 `landing_reviews`, contendo somente texto e identificação cuja publicação seja
@@ -118,7 +205,7 @@ Após autenticar, preservar a política de redirecionamento seguro e verificar
 a elegibilidade no servidor. Não permitir que parâmetros de retorno causem
 redirecionamento aberto ou contornem a autorização.
 
-## Critérios de aceitação da COM-002
+### Critérios de aceitação da COM-002
 
 - Testes de elegibilidade nos limites de 59/60/61 dias com relógio controlado,
   contas legadas, períodos inativos e regra aprovada de uso ativo.
@@ -137,7 +224,7 @@ redirecionamento aberto ou contornem a autorização.
 - Publicação em branch e PR próprias, regressão completa e GitHub Actions verificado,
   sem merge/deploy automático. Liberação depende de revisão específica do proprietário.
 
-## Dependências de conteúdo e decisão
+### Dependências de conteúdo e decisão
 
 Permanecem pendentes: regra de uso ativo; avisos e documentos jurídicos revisados;
 responsáveis pela moderação/suporte; política de retenção e retirada; canal para

@@ -96,37 +96,41 @@ def _barra_de_upgrade(destino=None, rotulo=None):
 
 TRECHOS_DE_HOJE = {
     "landing": (
-        # Contratação (decisão do dono, 15/11/2026): os cards só apresentam os planos, e um CONTRATAR
-        # único abaixo da grade substitui os três "Contrate Agora". Com número, o trecho ganha o link
-        # wa.me e o diálogo do pré-cadastro (#precadastro), que tem <section> dentro: por isso o
-        # trecho vai até o começo da seção seguinte, e não até o primeiro </section>.
-        ('<div class="plans-cta text-center" data-precadastro-gatilho>', '<section aria-labelledby="final-cta-title">',
-         '<div class="plans-cta text-center" data-precadastro-gatilho>\n'
-         '      <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled'
+        # Contratação (decisões do dono, 15 e 16/11/2026): os cards só apresentam os planos, e o CONTRATAR único
+        # fica logo abaixo do título do CTA final. Com número, o trecho ganha o link wa.me e o diálogo do
+        # pré-cadastro (#precadastro), que tem <section> dentro: por isso o trecho vai até o fim do <main>.
+        ('<div class="lp-cta-acao" data-precadastro-gatilho>', '</main>',
+         '<div class="lp-cta-acao" data-precadastro-gatilho>\n'
+         '        <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled'
          ' aria-describedby="contratacao-status">CONTRATAR</button>\n'
-         '    </div>\n'
-         '    <div class="plan-availability text-center mt-4" id="contratacao">\n'
-         '      <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta'
-         ' página. Os canais oficiais serão divulgados aqui.</p>\n'
-         '      <a href="/como-aderir" class="text-link">Como obter acesso ao NEXO <svg class="inline-icon"'
-         ' viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h16M13 5l7 7-7 7"/></svg></a>\n'
+         '        <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta'
+         ' página.</p>\n'
+         '      </div>\n'
          '    </div>\n'
          '  </div>\n'
          '</section>\n'
-         '<section aria-labelledby="final-cta-title">'),
-        ('<div class="cta-buttons">', "</p>",
-         '<div class="cta-buttons">\n'
-         '        <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled'
-         ' aria-describedby="contact-availability">Falar com a equipe NEXO</button>\n'
-         '        <a href="/como-aderir" class="btn-nexo btn-nexo-secondary btn-nexo-lg">Como obter acesso</a>\n'
-         '      </div>\n'
-         '      <p id="contact-availability" class="commercial-note mt-3">Nosso canal oficial de atendimento será'
-         ' divulgado nesta página.</p>'),
-        ("<h3>Contatos</h3>", "</div>",
-         '<h3>Contatos</h3>\n'
-         '        <p>Os canais oficiais de atendimento serão divulgados nesta página.</p>\n'
-         '        <a href="/como-aderir">Entenda como obter acesso</a>\n'
-         '      </div>'),
+         '</main>'),
+        # Rodapé: o e-mail de suporte e o Instagram sempre; com número, a chamada do WhatsApp entre os dois.
+        ('<ul class="lp-rodape-contatos">', "</ul>",
+         '<ul class="lp-rodape-contatos">\n'
+         '          <li><a class="lp-rodape-link" href="mailto:suportenexocolab@gmail.com"><svg class="inline-icon"'
+         ' viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18v12H3z"/><path d="m3 7 9 6 9-6"/>'
+         '</svg> <span>suportenexocolab@gmail.com</span></a></li>\n'
+         '          <li><a class="lp-rodape-link" href="https://www.instagram.com/nexo.faturamento/" target="_blank"'
+         ' rel="noopener noreferrer"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+         '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5"'
+         ' r="1" fill="currentColor" stroke="none"/></svg> <span>Instagram @nexo.faturamento</span><span'
+         ' class="visually-hidden"> (abre em nova aba)</span></a></li>\n'
+         '        </ul>'),
+        # Cadastro do lead frio (#cadastro-lead, existe sem número): a dica do telefone e o link de ajuda com os
+        # relatórios só mencionam o WhatsApp com número.
+        ('<small id="cadastro-lead-telefone-dica"', "</small>",
+         '<small id="cadastro-lead-telefone-dica" class="precadastro-dica">Com DDD.</small>'),
+        ('<p class="lp-upload-apoio" id="cadastro-lead-apoio">', '<div class="lp-arquivos-zona"',
+         '<p class="lp-upload-apoio" id="cadastro-lead-apoio">Envie os relatórios de vendas exportados do sistema da'
+         ' sua loja e, se tiver, os de compras: de um mês ou de vários. Os relatórios aceitos ficam guardados para a'
+         ' equipe NEXO preparar a avaliação.</p>\n'
+         '            <div class="lp-arquivos-zona"'),
     ),
     "como_aderir_visitante": (_ALERTA_COMERCIAL,),
     "como_aderir_cliente": (_ALERTA_COMERCIAL,),
@@ -301,6 +305,10 @@ class _WhatsAppCase(ContratosCase):
     def setUp(self):
         super().setUp()
         self.anonimo = self.app.test_client()
+        # Os outros contatos da landing fixos (os trechos de referência os mostram byte a byte), mesmo com as
+        # variáveis no ambiente de quem roda a suíte.
+        self.app.config.update(EMAIL_SUPORTE="suportenexocolab@gmail.com", CNPJ_EMPRESA="",
+                               MICROSSERVICO_RAIOX_URL="https://nexo-externo.onrender.com")
 
     def com_numero(self, valor=NUMERO):
         # O config do Flask é lido na hora de desenhar a página (o Jinja o tem como global).
@@ -466,44 +474,53 @@ class ComNumeroTests(_WhatsAppCase):
         super().setUp()
         self.com_numero()
 
-    def test_landing_contrata_pelo_contratar_unico_e_tira_duvidas_pelo_whatsapp(self):
+    def test_landing_contrata_pelo_contratar_unico_e_fala_com_a_equipe_pelo_rodape(self):
         html, dom = self.pagina("/", cliente=self.anonimo)
-        # Os cards só apresentam os planos (decisão do dono, 15/11/2026): nada de botão ou link neles.
-        for plano in ("BRONZE", "PRATA", "OURO"):
+        # Os cards só apresentam os planos (decisões do dono, 15 e 16/11/2026): nada de botão ou link neles.
+        for plano in ("bronze", "prata", "ouro", "personalizado"):
             with self.subTest(plano=plano):
-                cartao = _trecho(html, f'<article class="plan {plano.lower()}', "</article>")
+                cartao = _trecho(html, f'<article class="plan {plano}', "</article>")
                 self.assertEqual(_Pagina(cartao).links, [])
                 self.assertNotIn("<button", cartao)
-        # O CONTRATAR único: sem JavaScript, leva direto ao WhatsApp com a mensagem de contratação.
-        [contratar] = _Pagina(_trecho(html, '<div class="plans-cta', "</div>")).whatsapp()
-        self.assert_link(contratar, MENSAGENS["contratar"], "CONTRATAR",
-                         classe="btn-nexo btn-nexo-primary btn-nexo-lg", descrito_por="contratacao-status")
-        [cta] = _Pagina(_trecho(html, 'aria-labelledby="final-cta-title"', "</section>")).whatsapp()
-        self.assert_link(cta, MENSAGENS["duvidas"], "Falar com a equipe NEXO",
-                         classe="btn-nexo btn-nexo-primary btn-nexo-lg", descrito_por="contact-availability")
+        # O CONTRATAR único, logo abaixo do título do CTA final: sem JavaScript, leva direto ao WhatsApp com a
+        # mensagem de contratação; sem aviso ao lado (o "Contrate pelo WhatsApp..." saiu).
+        [contratar] = _Pagina(_trecho(html, '<div class="lp-cta-acao', "</div>")).whatsapp()
+        self.assert_link(contratar, MENSAGENS["contratar"], "CONTRATAR", classe="btn-nexo btn-nexo-primary btn-nexo-lg")
+        cta = _trecho(html, 'aria-labelledby="final-cta-title"', '<dialog id="precadastro"')
+        self.assertEqual(len(_Pagina(cta).whatsapp()), 1)
+        # Rodapé: a chamada do pedido do dono, com o ícone, abrindo a conversa de dúvidas.
         [rodape] = _Pagina(_trecho(html, "<footer", "</footer>")).whatsapp()
-        # Sem classe: o mesmo estilo de .footer-col a do vizinho "Entenda como obter acesso".
-        self.assert_link(rodape, MENSAGENS["duvidas"], "Fale conosco no WhatsApp", classe=None)
-        # As saídas do pré-cadastro não têm href no HTML: o script as monta com o que o visitante digita.
-        self.assertEqual(len(dom.whatsapp()), 3)
-        # Os textos dizem a verdade: nada de "canal ainda não divulgado" ao lado do link.
-        self.assertIn("Contrate pelo WhatsApp: a equipe NEXO responde e combina o início com você.", dom.texto)
-        self.assertIn("Atendimento comercial pelo WhatsApp", dom.texto)
+        self.assert_link(rodape, MENSAGENS["duvidas"], "Fale diretamente pelo WhatsApp com a nossa equipe",
+                         classe="lp-rodape-link")
+        # Os dois painéis de relatórios (cadastro do lead e pré-cadastro) oferecem ajuda para exportar.
+        ajuda = "Olá! Preciso de ajuda para exportar os relatórios do meu sistema para a Avaliação de Cenário Externo do NEXO."
+        ajudas = [link for link in dom.whatsapp() if "data-ajuda-whatsapp" in link["attrs"]]
+        self.assertEqual(len(ajudas), 2)
+        for link in ajudas:
+            self.assert_link(link, ajuda, "Precisa de ajuda para exportar seus relatórios do sistema? Fale conosco no "
+                             "WhatsApp", classe="lp-ajuda-link")
+            self.assertEqual(link["attrs"].get("data-numero"), NUMERO)
+        # O "Abrir o WhatsApp" do resultado não tem href no HTML: o script o monta com o protocolo.
+        self.assertEqual(len(dom.whatsapp()), 4)
         for frase in ("A contratação ainda não está disponível", "será divulgado nesta página",
-                      "serão divulgados nesta página"):
+                      "serão divulgados nesta página", "Contrate pelo WhatsApp", "Atendimento comercial pelo WhatsApp",
+                      "Falar com a equipe NEXO"):
             self.assertNotIn(frase, dom.texto)
         self.assertEqual(dom.texto.count("CONTRATAR"), 1)
         self.assertNotIn("Contrate Agora", dom.texto)
         self.assertNotIn('disabled aria-describedby="contratacao-status"', html)
-        self.assertNotIn('aria-describedby="contact-availability">Falar', html)
-        # O que não é contato continua igual: avaliação desabilitada e cabeçalho com um só link de portal.
-        self.assertIn('disabled aria-describedby="reviews-availability">Deixar Avaliação</button>', html)
+        self.assertNotIn('id="contratacao-status"', html)
+        # Com número, a dica do telefone do cadastro do lead fala do WhatsApp.
+        self.assertIn("Com DDD. Se tiver, use o número com WhatsApp.", dom.texto)
+        # O que não é contato continua igual: o link de avaliação e o cabeçalho com um só link de portal.
+        self.assertIn('href="/avaliar"', html)
         cabecalho = _trecho(html, "<header", "</header>")
         self.assertEqual(cabecalho.count('href="/auth/login"'), 1)
         self.assertNotIn("wa.me", cabecalho)
-        # A landing não carrega o Bootstrap Icons: o ícone é SVG inline, escondido do leitor de tela.
+        # A landing não carrega o Bootstrap Icons: o ícone é SVG inline, escondido do leitor de tela
+        # (CONTRATAR, rodapé, as duas ajudas e o "Abrir o WhatsApp").
         self.assertNotIn("bi-whatsapp", html)
-        self.assertEqual(html.count('<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5'), 2)
+        self.assertEqual(html.count('<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5'), 5)
         identificadores = dom.ids()
         self.assertEqual(len(identificadores), len(set(identificadores)))
         for _, attrs in dom.elementos:
@@ -511,49 +528,69 @@ class ComNumeroTests(_WhatsAppCase):
                 for alvo in attrs.get(nome, "").split():
                     self.assertIn(alvo, identificadores, (nome, alvo))
 
-    def test_precadastro_so_com_numero_e_sem_envio_ao_servidor(self):
-        """O diálogo do pré-cadastro: número do config (nunca fixo), Etapa 1 pronta mas oculta, nada
-        de formulário que poste no servidor e nenhum link legal ou de Raio-X que não exista."""
+    def test_precadastro_so_com_numero_e_envio_pelo_microsservico(self):
+        """O diálogo do pré-cadastro (decisões do dono, 16/11/2026): número do config (nunca fixo), Etapa 1 dos
+        termos ligada (textos vigentes buscados pelo script, caixas desabilitadas até a rolagem), e-mail
+        obrigatório, os relatórios enviados ao microsserviço pelo script (nada de <form> que poste) e nenhum
+        link local ou legal que não exista."""
         html, dom = self.pagina("/", cliente=self.anonimo)
         dialogo = _trecho(html, '<dialog id="precadastro"', "</dialog>")
         pagina = _Pagina(dialogo)
-        [raiz] = [attrs for tag, attrs in dom.elementos if tag == "dialog"]
+        raiz = next(attrs for tag, attrs in dom.elementos if tag == "dialog" and attrs.get("id") == "precadastro")
         self.assertEqual(raiz.get("data-numero"), NUMERO)
-        self.assertEqual(html.count("<dialog"), 1)
+        self.assertEqual(raiz.get("data-servico"), "https://nexo-externo.onrender.com")
+        self.assertEqual(html.count('<dialog id="precadastro"'), 1)
         etapas = {attrs["id"]: (attrs.get("class") or "").split() for tag, attrs in pagina.elementos
                   if attrs.get("id", "").startswith("step-")}
-        self.assertEqual(etapas, {"step-1": ["precadastro-etapa", "hidden"], "step-2": ["precadastro-etapa"],
-                                  "step-3": ["precadastro-etapa", "hidden"]})
-        # Etapa 1 (termos): as caixas e o texto do dono estão lá, mas sem link para página inexistente.
-        self.assertIn("Li e aceito os", dialogo)
-        self.assertIn("Política de Privacidade", dialogo)
+        self.assertEqual(etapas, {"step-1": ["precadastro-etapa"], "step-2": ["precadastro-etapa", "hidden"],
+                                  "step-3": ["precadastro-etapa", "hidden"], "step-4": ["precadastro-etapa", "hidden"],
+                                  "step-5": ["precadastro-etapa", "hidden"]})
+        # Etapa 1 (termos): o texto do dono, as caixas desabilitadas (a rolagem as libera) e o Continuar travado.
+        self.assertIn("Li e aceito os Termos de Uso.", dialogo)
+        self.assertIn("Li e estou ciente da Política de Privacidade", dialogo)
+        caixas = [attrs for tag, attrs in pagina.elementos if tag == "input" and attrs.get("type") == "checkbox"]
+        self.assertEqual([attrs["id"] for attrs in caixas], ["precadastro-check-termos", "precadastro-check-privacidade"])
+        self.assertTrue(all("disabled" in attrs for attrs in caixas))
+        textos = [attrs for tag, attrs in pagina.elementos if "data-termo-texto" in attrs]
+        self.assertEqual([(attrs.get("tabindex"), attrs.get("role")) for attrs in textos], [("0", "region")] * 2)
+        continuar = next(attrs for tag, attrs in pagina.elementos if attrs.get("id") == "btn-next-1")
+        self.assertIn("disabled", continuar)
+        # Nenhum destino local no diálogo, e nenhum link legal fora das páginas públicas dos documentos.
         for link in pagina.links:
             href = link["attrs"].get("href", "")
-            self.assertNotIn("termos", href.casefold())
-            self.assertNotIn("privacidade", href.casefold())
-        # Formulário só no navegador: sem action, sem method, sem campo escondido nem token.
+            self.assertFalse(href.startswith("/") and href not in ("/termos-de-uso", "/politica-de-privacidade"), href)
+        # O formulário não posta no servidor: sem action nem method; o envio é do script.
         [formulario] = [attrs for tag, attrs in pagina.elementos if tag == "form"]
         self.assertEqual(formulario, {"id": "form-pre-cadastro", "class": "precadastro-form"})
-        self.assertFalse(any(tag == "input" and attrs.get("type") in ("hidden", "file")
-                             for tag, attrs in pagina.elementos))
         obrigatorios = {attrs["id"] for tag, attrs in pagina.elementos if "required" in attrs}
-        self.assertEqual(obrigatorios, {"lead-nome", "lead-empresa", "lead-whatsapp", "lead-plano"})
-        self.assertIn('<option value="Custom / Enterprise">Custom / Enterprise</option>', dialogo)
-        # As saídas pelo WhatsApp: nova aba, sem on*, e o href só nasce no script.
-        saidas = [link for link in pagina.links if link["attrs"].get("data-raiox-situacao")]
-        self.assertEqual([link["attrs"]["id"] for link in saidas], ["btn-raiox-ajuda", "btn-raiox-pular"])
-        for link in saidas:
-            attrs = link["attrs"]
-            self.assertNotIn("href", attrs)
-            self.assertEqual((attrs.get("target"), attrs.get("rel")), ("_blank", "noopener noreferrer"))
-            self.assertEqual([nome for nome in attrs if nome.lower().startswith("on")], [])
-            self.assertTrue(link["nome"].endswith(NOVA_ABA), link["nome"])
-        # O script lê o número do data-numero; não há número nem link wa.me fixo nele.
-        script = (ROOT / "static" / "js" / "landing-precadastro.js").read_text(encoding="utf-8")
-        self.assertIn("data-numero", script)
-        self.assertNotRegex(script, r"wa\.me/\d")
-        self.assertNotRegex(script, r"\b55\d{10,11}\b")
-        self.assertIn('src="/static/js/landing-precadastro.js"', html)
+        self.assertEqual(obrigatorios, {"lead-nome", "lead-empresa", "lead-whatsapp", "lead-plano", "lead-email"})
+        self.assertIn('<option value="Personalizado / Enterprise">Personalizado / Enterprise</option>', dialogo)
+        isca = next(attrs for tag, attrs in pagina.elementos if attrs.get("name") == "campo_isca")
+        self.assertEqual((isca.get("tabindex"), isca.get("autocomplete")), ("-1", "off"))
+        self.assertFalse(any(tag == "input" and attrs.get("type") == "hidden" for tag, attrs in pagina.elementos))
+        # Os relatórios: .csv e .xlsx, vários de uma vez.
+        [arquivos] = [attrs for tag, attrs in pagina.elementos if tag == "input" and attrs.get("type") == "file"]
+        self.assertEqual((arquivos.get("id"), arquivos.get("accept")), ("precadastro-arquivos", ".csv,.xlsx"))
+        self.assertIn("multiple", arquivos)
+        # As saídas da Etapa 3 e o envio são botões (gravam no serviço); o WhatsApp só no resultado.
+        botoes = {attrs["id"]: attrs for tag, attrs in pagina.elementos if tag == "button" and attrs.get("id")}
+        for identificador in ("btn-raiox-fazer", "btn-raiox-ajuda", "btn-raiox-pular", "btn-raiox-enviar",
+                              "btn-raiox-voltar"):
+            self.assertEqual(botoes[identificador].get("type"), "button", identificador)
+        [abrir] = [link for link in pagina.links if link["attrs"].get("id") == "precadastro-whatsapp"]
+        self.assertNotIn("href", abrir["attrs"])
+        self.assertEqual((abrir["attrs"].get("target"), abrir["attrs"].get("rel")), ("_blank", "noopener noreferrer"))
+        self.assertTrue(abrir["nome"].endswith(NOVA_ABA), abrir["nome"])
+        for tag, attrs in pagina.elementos:
+            self.assertEqual([nome for nome in attrs if nome.lower().startswith("on")], [], tag)
+        # Os scripts leem o número do data-numero; não há número nem link wa.me fixo neles.
+        for nome in ("landing-precadastro.js", "landing-captacao.js"):
+            script = (ROOT / "static" / "js" / nome).read_text(encoding="utf-8")
+            self.assertNotRegex(script, r"wa\.me/\d", nome)
+            self.assertNotRegex(script, r"\b55\d{10,11}\b", nome)
+        self.assertIn("data-numero", (ROOT / "static" / "js" / "landing-precadastro.js").read_text(encoding="utf-8"))
+        # O cliente compartilhado vem antes do pré-cadastro (os dois com defer, na ordem da página).
+        self.assertLess(html.index('src="/static/js/landing-captacao.js"'), html.index('src="/static/js/landing-precadastro.js"'))
 
     def test_como_aderir_contrata_e_tira_duvidas_com_e_sem_sessao(self):
         self.login()
@@ -690,7 +727,7 @@ class NumeroDoAmbienteTests(_WhatsAppCase):
                 self.assertEqual(self.app.config["WHATSAPP_EMPRESA_NUMERO"], NUMERO)
                 _, dom = self.pagina("/", cliente=self.anonimo)
                 links = dom.whatsapp()
-                self.assertEqual(len(links), 3)  # CONTRATAR, "Falar com a equipe NEXO" e o rodapé
+                self.assertEqual(len(links), 4)  # CONTRATAR, o rodapé e a ajuda com os relatórios dos dois diálogos
                 for link in links:
                     self.assertTrue(link["attrs"]["href"].startswith(PREFIXO), link["attrs"]["href"])
 

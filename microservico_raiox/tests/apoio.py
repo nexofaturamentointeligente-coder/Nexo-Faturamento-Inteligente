@@ -5,9 +5,13 @@ import zipfile
 
 from armazenamento import ErroDeArmazenamento
 from configuracao import Configuracao
-from repositorio import ErroDeBanco, TetoDoDiaAtingido
+from repositorio import (SIGLAS_DOS_DOCUMENTOS, ErroDeBanco, TetoDoDiaAtingido, Vigente, conferir_termos,
+                         versao_dos_termos)
 
 ORIGEM = "https://landing.exemplo.com.br"
+# As versões vigentes do banco de teste e os ids que a landing manda delas (os campos do formulário).
+VIGENTES = {"TERMOS_USO": Vigente(11, "v1.0"), "POLITICA_PRIVACIDADE": Vigente(12, "v1.0")}
+IDS_DA_LANDING = {"documento_termos": "11", "documento_privacidade": "12"}
 _PLANILHA = "application/vnd.openxmlformats-officedocument.spreadsheetml."
 PRINCIPAL = _PLANILHA + "sheet.main+xml"
 PRINCIPAL_COM_MACRO = "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
@@ -42,7 +46,7 @@ _WORKBOOK_RELS = (
 def configuracao(**troca) -> Configuracao:
     base = {"database_url": "postgresql://usuario@banco.exemplo/nexo",
             "supabase_url": "https://abcdefghijklmnopqrst.supabase.co", "supabase_key": "chave-de-teste",
-            "origens": (ORIGEM,), "termos_versao": "termos-teste-v1", "proxies_confiaveis": 0}
+            "origens": (ORIGEM,), "proxies_confiaveis": 0}
     base.update(troca)
     return Configuracao(**base)
 
@@ -109,37 +113,48 @@ CSV = "Codigo;Produto;Quantidade;Total\n1;Café 500g;10;-12,50\n2;Arroz 5kg;5;50
 
 
 class RepositorioFalso:
-    """O banco: conta os leads do dia, grava (com o teto conferido na gravação) e confere se um id existe."""
+    """O banco: conta os leads do dia e lê as versões vigentes dos termos, grava o lead com um aceite por documento
+    (com o teto e as versões conferidos na gravação, com a mesma regra do repositório) e confere se um id existe.
+    `publicar_durante_o_envio` ({tipo: Vigente}) é a versão publicada entre a primeira conferência e a gravação."""
 
     def __init__(self, hoje=0, falhar_ao_gravar=False, falhar_ao_contar=False, gravar_e_falhar=False,
-                 falhar_ao_conferir=False, leads_que_chegam_antes=0):
+                 falhar_ao_conferir=False, leads_que_chegam_antes=0, vigentes=None, publicar_durante_o_envio=None):
         self.hoje = hoje
         self.falhar_ao_gravar = falhar_ao_gravar
         self.falhar_ao_contar = falhar_ao_contar
         self.gravar_e_falhar = gravar_e_falhar
         self.falhar_ao_conferir = falhar_ao_conferir
         self.leads_que_chegam_antes = leads_que_chegam_antes
+        self.vigentes = dict(VIGENTES if vigentes is None else vigentes)
+        self.publicar_durante_o_envio = publicar_durante_o_envio
         self.gravados = []
+        self.aceites = []
         self.contagens = 0
         self.conferencias = 0
         self.pedidos_de_gravacao = []
 
-    def leads_desde(self, instante):
+    def primeira_conferencia(self, desde):
         self.contagens += 1
         if self.falhar_ao_contar:
             raise ErroDeBanco("o banco não respondeu (OperationalError)")
-        return self.hoje
+        return self.hoje, dict(self.vigentes)
 
-    def gravar(self, lead, teto, desde):
-        self.pedidos_de_gravacao.append({"teto": teto, "desde": desde})
+    def gravar(self, lead, teto, desde, lidos, ip=None):
+        self.pedidos_de_gravacao.append({"teto": teto, "desde": desde, "lidos": dict(lidos), "ip": ip})
         # Leads de outros envios que chegaram entre a primeira contagem e a gravação.
         self.hoje += self.leads_que_chegam_antes
         self.leads_que_chegam_antes = 0
+        if self.publicar_durante_o_envio:
+            self.vigentes.update(self.publicar_durante_o_envio)
+            self.publicar_durante_o_envio = None
         if self.falhar_ao_gravar:
             raise ErroDeBanco("o banco recusou a operação (IntegrityError)")
         if self.hoje >= teto:
             raise TetoDoDiaAtingido()
-        self.gravados.append(lead)
+        conferir_termos(self.vigentes, lidos)
+        self.gravados.append({**lead, "termos_versao": versao_dos_termos(self.vigentes)})
+        self.aceites.extend({"id_lead": lead["id"], "id_documento": self.vigentes[tipo].id_documento, "ip": ip}
+                            for tipo in SIGLAS_DOS_DOCUMENTOS)
         self.hoje += 1
         if self.gravar_e_falhar:
             # O COMMIT foi aplicado e a resposta se perdeu.
@@ -153,7 +168,8 @@ class RepositorioFalso:
 
     def conferir_tabela(self):
         if self.falhar_ao_contar:
-            raise ErroDeBanco("o banco recusou a operação (UndefinedColumn)")
+            raise ErroDeBanco("o banco recusou a operação (UndefinedTable)")
+        return dict(self.vigentes)
 
 
 class ArmazenamentoFalso:

@@ -23,10 +23,15 @@ Complementa tests/test_leads_avaliacao.py (SQLite); aqui só o que depende do Po
   6c. Captação pelo site (e7a1c3f5b9d2): o lead do site gravado pelo serviço, o padrão "consultor" do banco,
      as CHECKs da origem, do plano de interesse e da faixa, e o downgrade recusado com lead do site, aceito
      sem ele (as colunas saem; as linhas ficam) e o novo upgrade com metadados e políticas iguais.
-  6d. Microsserviço do Raio-X (f2b6d8a4c1e9): o lead gravado como o microservico_raiox/ grava, o teto do dia
-     exato com envios simultâneos (a trava consultiva, com a janela entre a contagem e o INSERT alargada), as
-     CHECKs do interesse, da situação dos arquivos e do tamanho dos caminhos, e o downgrade recusado com esses
-     dados, aceito sem eles e o novo upgrade com metadados e políticas iguais.
+  6d. Microsserviço do Raio-X (f2b6d8a4c1e9 e c8e2a4f6b0d1): o lead gravado como o microservico_raiox/ grava, o
+     teto do dia exato com envios simultâneos (a trava consultiva, com a janela entre a contagem e o INSERT
+     alargada), as CHECKs do interesse, da situação dos arquivos e do tamanho dos caminhos, e o downgrade recusado
+     com esses dados, aceito sem eles e o novo upgrade com metadados e políticas iguais. O aceite dos termos do
+     lead: os documentos publicados pelo caminho do admin (um admin fictício), dois aceites com o IP e o instante
+     do lead; sem documento publicado, nada gravado; ids antigos ou forjados, nada gravado; a publicação em
+     andamento esperada pela gravação (e a versão nova recusada), e a publicação que chega durante a gravação
+     esperando o COMMIT; as restrições, o RLS, as políticas e os privilégios da tabela e da sequência; o
+     downgrade recusado com aceite, aceito sem ele e o novo upgrade.
 """
 
 import contextlib
@@ -58,9 +63,12 @@ REVISAO_ETAPA_3 = "9b3e5d7f1a28"
 # e7a1c3f5b9d2 (captação pelo site) acrescenta a origem e o que o visitante informou; a d9e4b7a2c6f1 vem antes.
 REVISAO_ANTES_DA_CAPTACAO = "d9e4b7a2c6f1"
 COLUNAS_DA_CAPTACAO = ("origem", "plano_interesse", "faixa_faturamento", "dificuldade", "versao_autorizacao")
-# f2b6d8a4c1e9 (microsserviço do Raio-X) vem depois da e7a1c3f5b9d2.
+# f2b6d8a4c1e9 (microsserviço do Raio-X) vem depois da e7a1c3f5b9d2; c8e2a4f6b0d1 (o aceite dos termos do lead),
+# depois dela.
 REVISAO_ANTES_DO_MICROSSERVICO = "e7a1c3f5b9d2"
+REVISAO_ANTES_DO_ACEITE = "f2b6d8a4c1e9"
 COLUNAS_DO_MICROSSERVICO = ("interesse", "status_arquivo", "arquivos_storage", "termos_aceitos_em", "termos_versao")
+TABELA_DO_ACEITE = "aceite_documento_lead"
 REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 INDICADORES_DE_ENSAIO = '{"versao": "ensaio"}'
 REVISAO_ANTES_DA_ETAPA_2 = "6a8f2d4c0e13"
@@ -125,9 +133,14 @@ CHECKS = (
     # 6c. Captação pelo site (e7a1c3f5b9d2)
     "captacao_service_writes_site_lead", "captacao_constraints_enforced",
     "captacao_downgrade_refused_with_site_lead", "captacao_downgrade_and_upgrade_again",
-    # 6d. Microsserviço do Raio-X (f2b6d8a4c1e9)
-    "microsservico_writes_lead", "microsservico_cap_exact_under_concurrency", "microsservico_constraints_enforced",
-    "microsservico_downgrade_refused_with_data", "microsservico_downgrade_and_upgrade_again",
+    # 6d. Microsserviço do Raio-X (f2b6d8a4c1e9) e o aceite dos termos do lead (c8e2a4f6b0d1)
+    "aceite_without_published_document_unavailable", "microsservico_writes_lead",
+    "aceite_writes_two_acceptances_with_ip", "microsservico_cap_exact_under_concurrency",
+    "aceite_old_ids_conflict_without_writing", "aceite_publication_in_flight_waited_and_refused",
+    "aceite_lock_holds_new_publication_until_commit", "microsservico_constraints_enforced",
+    "aceite_constraints_enforced", "aceite_rls_policies_and_privileges", "aceite_downgrade_refused_with_data",
+    "aceite_downgrade_and_upgrade_again", "microsservico_downgrade_refused_with_data",
+    "microsservico_downgrade_and_upgrade_again",
     # 7. Portal (Etapa 4)
     "portal_lines_isolated_by_lead", "portal_payload_and_cache_on_postgresql",
 )
@@ -210,13 +223,13 @@ class _ClusterDosLeads(_PrivateCluster):
                 for comando in comandos:
                     conexao.execute(text(comando), parametros)
 
-    def _politicas(self):
+    def _politicas(self, tabelas=TABELAS):
         politicas = {}
         for tabela, nome, tipo, papeis, usando, checando in self._sql(
                 "SELECT tablename, policyname, permissive, "
                 "array_to_string(ARRAY(SELECT unnest(roles) ORDER BY 1), ','), qual, with_check "
                 "FROM pg_policies WHERE schemaname = current_schema() AND tablename = ANY(:tabelas)",
-                tabelas=list(TABELAS)):
+                tabelas=list(tabelas)):
             politicas.setdefault(tabela, set()).add((nome, tipo, papeis, usando, checando))
         return politicas
 
@@ -271,8 +284,9 @@ class _ClusterDosLeads(_PrivateCluster):
         self._executar(
             'CREATE ROLE "anon" NOLOGIN', 'CREATE ROLE "authenticated" NOLOGIN',
             'CREATE ROLE "service_role" NOLOGIN BYPASSRLS', 'CREATE ROLE "postgres" NOLOGIN',
-            # O que o Supabase faz no schema public: tabela e função novas nascem acessíveis pela Data API.
+            # O que o Supabase faz no schema public: tabela, sequência e função novas nascem acessíveis pela Data API.
             "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated",
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated",
             "GRANT USAGE ON SCHEMA public TO anon, authenticated",
         )
@@ -693,22 +707,65 @@ class _ClusterDosLeads(_PrivateCluster):
                    f"revisão={revisao_depois} colunas={colunas_depois} ficou={ficou}")
         self._executar("DELETE FROM lead_avaliacao")
 
-    # ------------------------------------------------- 6d. Microsserviço do Raio-X (f2b6d8a4c1e9)
+    # ------------------------------------------------- 6d. Microsserviço do Raio-X (f2b6d8a4c1e9 e c8e2a4f6b0d1)
     def _colunas_do_microsservico(self):
         return {nome for (nome,) in self._sql(
             "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() "
             "AND table_name = 'lead_avaliacao' AND column_name = ANY(:nomes)", nomes=list(COLUNAS_DO_MICROSSERVICO))}
 
+    def _leads_e_aceites(self):
+        return tuple(self._sql("SELECT (SELECT count(*) FROM lead_avaliacao), "
+                               f"(SELECT count(*) FROM {TABELA_DO_ACEITE})")[0])
+
+    def _admin_dos_termos(self):
+        """O admin fictício que publica as versões do ensaio."""
+        import secrets
+        from models import Usuario
+        with self.app.app_context():
+            admin = Usuario(nome="Admin fictício dos termos", email="admin-termos@example.invalid", role="ADMIN",
+                            primeiro_acesso=False)
+            admin.set_senha(secrets.token_urlsafe(24))
+            self.db.session.add(admin)
+            self.db.session.commit()
+            self.id_admin_dos_termos = admin.id_usuario
+            self.db.session.remove()
+
+    def _publicar(self, tipo, versao_exibida):
+        """Publica (com commit) a versão seguinte pelo caminho do admin, configuracoes_conta.publicar_documento: a
+        primeira é a v1.0 e as outras, revisões. Devolve o id."""
+        import configuracoes_conta
+        from models import Usuario
+        with self.app.app_context():
+            documento = configuracoes_conta.publicar_documento(
+                tipo, f"Texto fictício de {tipo}, publicado sobre a versão {versao_exibida}.", versao_exibida,
+                self.db.session.get(Usuario, self.id_admin_dos_termos))
+            self.db.session.flush()
+            id_documento = documento.id_documento
+            self.db.session.commit()
+            self.db.session.remove()
+        return id_documento
+
+    def _esperou_trava(self, inicio_do_comando, limite=10.0):
+        """Se alguma conexão ficou esperando uma trava num comando que começa com `inicio_do_comando`, no limite."""
+        fim = time.monotonic() + limite
+        while time.monotonic() < fim:
+            if self._sql("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                         "AND starts_with(query, :inicio)", inicio=inicio_do_comando)[0][0]:
+                return True
+            time.sleep(0.05)
+        return False
+
     def _etapa_microsservico(self):
         from flask_migrate import downgrade, upgrade
         from sqlalchemy.exc import IntegrityError
 
-        self.stage = "lead gravado pelo repositório do microsserviço"
+        self.stage = "repositório do microsserviço sem documento publicado"
         import importlib.util
         especificacao = importlib.util.spec_from_file_location(
             "microservico_raiox_repositorio", ROOT / "microservico_raiox" / "repositorio.py")
         repositorio_do_microsservico = importlib.util.module_from_spec(especificacao)
         especificacao.loader.exec_module(repositorio_do_microsservico)
+        modulo = repositorio_do_microsservico
         with self.app.app_context():
             # O cluster de ensaio é local, sem SSL; em produção o repositório exige SSL quando a URL não diz nada.
             url = self.db.engine.url.set(drivername="postgresql").update_query_dict({"sslmode": "disable"})
@@ -719,9 +776,29 @@ class _ClusterDosLeads(_PrivateCluster):
                                 "bytes": 120, "formato": "csv", "sha256": "0" * 64}])
         antes_do_lead = datetime.now(timezone.utc) - timedelta(minutes=5)
         lead = {"id": id_lead, "nome_contato": "Contato", "email": "micro@example.invalid", "whatsapp": "62988881234",
-                "nome_loja": "Loja", "interesse": "raio_x", "status_arquivo": "aprovado", "arquivos_storage": caminhos,
-                "termos_versao": "termos-de-ensaio"}
-        repositorio.gravar(lead, teto=5, desde=antes_do_lead)
+                "nome_loja": "Loja", "interesse": "raio_x", "status_arquivo": "aprovado", "arquivos_storage": caminhos}
+        ip = "203.0.113.7"
+        # Nenhum documento publicado (o banco recém-migrado) e, depois, só os Termos de Uso: não há o que aceitar.
+        self._admin_dos_termos()
+        ids, sem_documento = {}, []
+        for publicar in (None, "TERMOS_USO"):
+            if publicar:
+                ids[publicar] = self._publicar(publicar, "0")
+            try:
+                repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=100, desde=antes_do_lead, ip=ip,
+                                   lidos={"TERMOS_USO": ids.get("TERMOS_USO", 1), "POLITICA_PRIVACIDADE": 999999})
+                sem_documento.append("gravado")
+            except modulo.TermosIndisponiveis:
+                sem_documento.append("indisponivel")
+        previa = repositorio.primeira_conferencia(antes_do_lead)
+        self.check("aceite_without_published_document_unavailable",
+                   sem_documento == ["indisponivel"] * 2 and self._leads_e_aceites() == (0, 0)
+                   and previa == (0, {"TERMOS_USO": modulo.Vigente(ids["TERMOS_USO"], "v1.0")}),
+                   f"sem_documento={sem_documento} previa={previa}")
+
+        self.stage = "lead e aceites gravados pelo repositório do microsserviço"
+        ids["POLITICA_PRIVACIDADE"] = self._publicar("POLITICA_PRIVACIDADE", "0")
+        repositorio.gravar(lead, teto=5, desde=antes_do_lead, lidos=dict(ids), ip=ip)
         gravado = [tuple(l) for l in self._sql(
             "SELECT origem, interesse, status_arquivo, arquivos_storage, status, termos_versao, "
             "termos_aceitos_em IS NOT NULL, consentimento_em IS NULL, versao_autorizacao IS NULL, "
@@ -729,16 +806,26 @@ class _ClusterDosLeads(_PrivateCluster):
         contagem = repositorio.leads_desde(antes_do_lead)
         # O teto conferido na própria transação: com 1 lead hoje e teto 1, nada entra.
         try:
-            repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=1, desde=antes_do_lead)
+            repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=1, desde=antes_do_lead, lidos=dict(ids), ip=ip)
             barrado = False
         except repositorio_do_microsservico.TetoDoDiaAtingido:
             barrado = True
         self.check("microsservico_writes_lead",
-                   gravado == [("site", "raio_x", "aprovado", caminhos, "pendente", "termos-de-ensaio", True, True,
+                   gravado == [("site", "raio_x", "aprovado", caminhos, "pendente", "TU-v1.0 PP-v1.0", True, True,
                                 True, True)]
                    and contagem == 1 and barrado and repositorio.leads_desde(antes_do_lead) == 1
                    and repositorio.existe(id_lead) and not repositorio.existe(uuid.uuid4()),
                    f"gravado={gravado} contagem={contagem} barrado={barrado}")
+        # Um aceite por documento, com a versão exata, o IP e o mesmo now() do lead.
+        aceites = [tuple(l) for l in self._sql(
+            "SELECT d.tipo, a.id_documento, a.ip, a.aceito_em = l.termos_aceitos_em, "
+            "a.aceito_em > now() - INTERVAL '10 minutes' FROM aceite_documento_lead a "
+            "JOIN lead_avaliacao l ON l.id = a.id_lead JOIN documento_legal d ON d.id_documento = a.id_documento "
+            "WHERE a.id_lead = CAST(:i AS uuid) ORDER BY d.tipo DESC", i=str(id_lead))]
+        self.check("aceite_writes_two_acceptances_with_ip",
+                   aceites == [("TERMOS_USO", ids["TERMOS_USO"], ip, True, True),
+                               ("POLITICA_PRIVACIDADE", ids["POLITICA_PRIVACIDADE"], ip, True, True)]
+                   and self._leads_e_aceites() == (1, 2), f"aceites={aceites}")
 
         self.stage = "teto do microsserviço com envios simultâneos"
         import psycopg2.extensions
@@ -762,7 +849,7 @@ class _ClusterDosLeads(_PrivateCluster):
                 barreira.wait()
                 try:
                     lento.gravar({**lead, "id": uuid.uuid4(), "email": f"micro{rodada}-{indice}@example.invalid"},
-                                 teto=teto, desde=antes_do_lead)
+                                 teto=teto, desde=antes_do_lead, lidos=dict(ids))
                     resultados.append("gravado")
                 except repositorio_do_microsservico.TetoDoDiaAtingido:
                     resultados.append("teto")
@@ -779,6 +866,109 @@ class _ClusterDosLeads(_PrivateCluster):
                    rodadas == [("gravado",) + ("teto",) * 7] * 3 and repositorio.leads_desde(antes_do_lead) == 4,
                    f"rodadas={rodadas}")
 
+        self.stage = "aceite com a versão que deixou de valer"
+        # A revisão v1.1 dos Termos de Uso publicada: quem leu a v1.0 (ou mandou id forjado ou trocado) não grava nada.
+        lidos_da_v1_0 = dict(ids)
+        ids["TERMOS_USO"] = self._publicar("TERMOS_USO", "1")
+        recusas = []
+        for lidos in (lidos_da_v1_0, {**ids, "POLITICA_PRIVACIDADE": 999999},
+                      {"TERMOS_USO": ids["POLITICA_PRIVACIDADE"], "POLITICA_PRIVACIDADE": ids["TERMOS_USO"]}):
+            try:
+                repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=100, desde=antes_do_lead, lidos=lidos, ip=ip)
+                recusas.append("gravado")
+            except modulo.TermosDesatualizados:
+                recusas.append("desatualizado")
+        vigentes = repositorio.primeira_conferencia(antes_do_lead)[1]
+        self.check("aceite_old_ids_conflict_without_writing",
+                   recusas == ["desatualizado"] * 3 and self._leads_e_aceites() == (4, 8)
+                   and vigentes["TERMOS_USO"] == modulo.Vigente(ids["TERMOS_USO"], "v1.1"),
+                   f"recusas={recusas} vigentes={vigentes}")
+
+        self.stage = "publicação em andamento durante a gravação do aceite"
+        # O admin publicou a v1.1 da Política (o INSERT feito) e ainda não confirmou: a gravação do lead espera a
+        # trava de documento_legal, vê a versão nova depois do COMMIT do admin e não grava o aceite da v1.0.
+        import configuracoes_conta
+        from models import Usuario
+        saida = {}
+
+        def gravar_durante_a_publicacao():
+            try:
+                repositorio.gravar({**lead, "id": uuid.uuid4()}, teto=100, desde=antes_do_lead, lidos=dict(ids), ip=ip)
+                saida["resultado"] = "gravado"
+            except modulo.TermosDesatualizados:
+                saida["resultado"] = "desatualizado"
+            except Exception as erro:  # noqa: BLE001 - o tipo vai para o relatório do ensaio
+                saida["resultado"] = type(erro).__name__
+
+        with self.app.app_context():
+            documento = configuracoes_conta.publicar_documento(
+                "POLITICA_PRIVACIDADE", "Política fictícia, revisão publicada durante o envio.", "1",
+                self.db.session.get(Usuario, self.id_admin_dos_termos))
+            self.db.session.flush()
+            nova_politica = documento.id_documento
+            fio = threading.Thread(target=gravar_durante_a_publicacao)
+            fio.start()
+            esperou = self._esperou_trava("LOCK TABLE documento_legal")
+            self.db.session.commit()
+            self.db.session.remove()
+        fio.join(30)
+        self.check("aceite_publication_in_flight_waited_and_refused",
+                   esperou and not fio.is_alive() and saida.get("resultado") == "desatualizado"
+                   and self._leads_e_aceites() == (4, 8),
+                   f"esperou={esperou} saida={saida}")
+        ids["POLITICA_PRIVACIDADE"] = nova_politica
+
+        self.stage = "publicação que chega durante a gravação do aceite"
+        # A gravação já leu as vigentes (com documento_legal travada) e ainda não confirmou: a publicação da v1.2
+        # dos Termos de Uso espera o COMMIT do lead. O aceite gravado é o da v1.1, a vigente até esse COMMIT.
+        segurando = threading.Event()
+
+        class CursorQueSegura(psycopg2.extensions.cursor):
+            """O mesmo SQL do repositório, com a transação do lead parada antes de gravar os aceites."""
+
+            def execute(self, consulta, parametros=None):
+                if str(consulta).startswith("INSERT INTO aceite_documento_lead") and not segurando.is_set():
+                    segurando.set()
+                    time.sleep(3)
+                return super().execute(consulta, parametros)
+
+        segura = repositorio_do_microsservico.RepositorioDeLeads(url_do_ensaio)
+        segura._parametros["cursor_factory"] = CursorQueSegura
+        id_segurado, resultado = uuid.uuid4(), {}
+
+        def gravar_segurando():
+            try:
+                segura.gravar({**lead, "id": id_segurado, "email": "segura@example.invalid"}, teto=100,
+                              desde=antes_do_lead, lidos=dict(ids), ip=ip)
+                resultado["lead"] = "gravado"
+            except Exception as erro:  # noqa: BLE001 - o tipo vai para o relatório do ensaio
+                resultado["lead"] = type(erro).__name__
+
+        def publicar_durante_a_gravacao():
+            try:
+                resultado["publicada"] = self._publicar("TERMOS_USO", "2")
+            except Exception as erro:  # noqa: BLE001 - o tipo vai para o relatório do ensaio
+                resultado["publicada"] = type(erro).__name__
+
+        fio_do_lead = threading.Thread(target=gravar_segurando)
+        fio_do_lead.start()
+        segurou = segurando.wait(10)
+        fio_do_admin = threading.Thread(target=publicar_durante_a_gravacao)
+        fio_do_admin.start()
+        esperou = self._esperou_trava("INSERT INTO documento_legal", limite=2.8)
+        fio_do_lead.join(30)
+        fio_do_admin.join(30)
+        aceitos = sorted(linha[0] for linha in self._sql(
+            "SELECT id_documento FROM aceite_documento_lead WHERE id_lead = CAST(:i AS uuid)", i=str(id_segurado)))
+        publicada = resultado.get("publicada")
+        vigentes = repositorio.primeira_conferencia(antes_do_lead)[1]
+        self.check("aceite_lock_holds_new_publication_until_commit",
+                   segurou and esperou and resultado.get("lead") == "gravado" and isinstance(publicada, int)
+                   and aceitos == sorted(ids.values()) and self._leads_e_aceites() == (5, 10)
+                   and vigentes["TERMOS_USO"] == modulo.Vigente(publicada, "v1.2"),
+                   f"segurou={segurou} esperou={esperou} resultado={resultado} aceitos={aceitos}")
+        ids["TERMOS_USO"] = publicada
+
         self.stage = "CHECKs do microsserviço"
         violacoes = (
             ("UPDATE lead_avaliacao SET interesse = '1'", "ck_lead_avaliacao_interesse"),
@@ -794,7 +984,93 @@ class _ClusterDosLeads(_PrivateCluster):
                 recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
         self.check("microsservico_constraints_enforced", recusas == [r for _c, r in violacoes], f"recusas={recusas}")
 
+        self.stage = "restrições do aceite do lead"
+        inserir_aceite = (f"INSERT INTO {TABELA_DO_ACEITE} (id_lead, id_documento, aceito_em) "
+                          "VALUES (CAST(:lead AS uuid), :documento, now())")
+        violacoes = (
+            # O mesmo documento duas vezes para o mesmo lead.
+            (inserir_aceite, {"lead": str(id_lead), "documento": lidos_da_v1_0["TERMOS_USO"]},
+             "uq_aceite_lead_documento"),
+            (inserir_aceite, {"lead": str(id_lead), "documento": 999999}, "fk_aceite_documento_lead_documento"),
+            (inserir_aceite, {"lead": str(uuid.uuid4()), "documento": ids["TERMOS_USO"]},
+             "fk_aceite_documento_lead_lead"),
+            # A versão aceita não sai do banco (FK sem cascata).
+            ("DELETE FROM documento_legal WHERE id_documento = :documento", {"documento": lidos_da_v1_0["TERMOS_USO"]},
+             "fk_aceite_documento_lead_documento"),
+        )
+        recusas = []
+        for comando, parametros, _restricao in violacoes:
+            try:
+                self._executar(comando, **parametros)
+                recusas.append(None)
+            except IntegrityError as erro:
+                recusas.append(getattr(getattr(erro.orig, "diag", None), "constraint_name", None))
+        # O aceite sai com o lead (ON DELETE CASCADE), e só o dele.
+        antes_do_cascade = self._leads_e_aceites()
+        self._executar("DELETE FROM lead_avaliacao WHERE id = CAST(:i AS uuid)", i=str(id_segurado))
+        self.check("aceite_constraints_enforced",
+                   recusas == [r for _c, _p, r in violacoes] and antes_do_cascade == (5, 10)
+                   and self._leads_e_aceites() == (4, 8), f"recusas={recusas} antes={antes_do_cascade}")
+
+        self.stage = "RLS, políticas e privilégios do aceite do lead"
+        rls = [tuple(l) for l in self._sql("SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                                           "WHERE oid = to_regclass(:t)", t=TABELA_DO_ACEITE)]
+        sequencia = self._sql("SELECT pg_get_serial_sequence(:t, 'id_aceite')", t=TABELA_DO_ACEITE)[0][0]
+        # O Supabase dá a anon e authenticated as tabelas e as sequências novas (_etapa_antes_da_migracao): a
+        # revisão as revoga.
+        privilegios = [tuple(l) for l in self._sql(
+            "SELECT papel FROM unnest(ARRAY['anon', 'authenticated']) papel "
+            "WHERE has_table_privilege(papel, :t, 'SELECT') OR has_table_privilege(papel, :t, 'INSERT') "
+            "OR has_table_privilege(papel, :t, 'UPDATE') OR has_table_privilege(papel, :t, 'DELETE') "
+            "OR has_table_privilege(papel, :t, 'TRUNCATE') OR has_sequence_privilege(papel, :s, 'USAGE') "
+            "OR has_sequence_privilege(papel, :s, 'SELECT') OR has_sequence_privilege(papel, :s, 'UPDATE')",
+            t=TABELA_DO_ACEITE, s=sequencia)] if sequencia else None
+        # O pior caso, como em lead_avaliacao: um GRANT e uma política permissiva criados depois. Com a restritiva,
+        # anon não vê nenhum aceite.
+        self._executar(f"GRANT SELECT ON {TABELA_DO_ACEITE} TO anon",
+                       f"CREATE POLICY intrusa ON {TABELA_DO_ACEITE} AS PERMISSIVE FOR ALL TO anon "
+                       "USING (true) WITH CHECK (true)")
+        visiveis = self._como_papel("anon", f"SELECT count(*) FROM {TABELA_DO_ACEITE}")
+        self._executar(f"DROP POLICY intrusa ON {TABELA_DO_ACEITE}", f"REVOKE ALL ON {TABELA_DO_ACEITE} FROM anon")
+        self.check("aceite_rls_policies_and_privileges",
+                   rls == [(True, False)] and self._politicas((TABELA_DO_ACEITE,)) == {TABELA_DO_ACEITE: POLITICAS}
+                   and privilegios == [] and visiveis == [(0,)] and self._leads_e_aceites() == (4, 8),
+                   f"rls={rls} sequencia={sequencia is not None} privilegios={privilegios} visiveis={visiveis}")
+
+        self.stage = "downgrade do aceite com dado"
+        antes = self._contagens()
+        try:
+            self._migrar(downgrade, REVISAO_ANTES_DO_ACEITE)
+            recusado = False
+        except RuntimeError:
+            recusado = True
+        self.check("aceite_downgrade_refused_with_data",
+                   recusado and self._revisao() == self.head and self._contagens() == antes
+                   and TABELA_DO_ACEITE in self._tabelas(), f"recusado={recusado} revisão={self._revisao()}")
+
+        self.stage = "downgrade do aceite sem dado e novo upgrade"
+        self._executar(f"DELETE FROM {TABELA_DO_ACEITE}")
+        estado = self._estado()
+        documentos = self._sql("SELECT count(*) FROM documento_legal")[0][0]
+        self._migrar(downgrade, REVISAO_ANTES_DO_ACEITE)
+        revisao_depois, tabelas_depois = self._revisao(), self._tabelas()
+        politicas_depois = self._politicas((TABELA_DO_ACEITE,))
+        ficou = (self._estado(), self._sql("SELECT count(*) FROM documento_legal")[0][0])
+        self._migrar(upgrade, "head")
+        rls = [tuple(l) for l in self._sql("SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                                           "WHERE oid = to_regclass(:t)", t=TABELA_DO_ACEITE)]
+        self.check("aceite_downgrade_and_upgrade_again",
+                   revisao_depois == REVISAO_ANTES_DO_ACEITE and TABELA_DO_ACEITE not in tabelas_depois
+                   and politicas_depois == {} and ficou == (estado, documentos) and self._revisao() == self.head
+                   and rls == [(True, False)]
+                   and self._politicas((TABELA_DO_ACEITE,)) == {TABELA_DO_ACEITE: POLITICAS}
+                   and self._estado() == estado and self._leads_e_aceites() == (4, 0)
+                   and self._diferencas_metadata() == [],
+                   f"revisão={revisao_depois} políticas={politicas_depois} ficou={ficou} rls={rls}")
+
         self.stage = "downgrade do microsserviço com dado"
+        # Sem aceite gravado, quem recusa é a f2b6d8a4c1e9, pelos leads do microsserviço; a c8e2a4f6b0d1, que desce
+        # antes na mesma transação, volta junto com a recusa.
         antes = self._contagens()
         try:
             self._migrar(downgrade, REVISAO_ANTES_DO_MICROSSERVICO)
@@ -803,7 +1079,8 @@ class _ClusterDosLeads(_PrivateCluster):
             recusado = True
         self.check("microsservico_downgrade_refused_with_data",
                    recusado and self._revisao() == self.head and self._contagens() == antes
-                   and self._colunas_do_microsservico() == set(COLUNAS_DO_MICROSSERVICO),
+                   and self._colunas_do_microsservico() == set(COLUNAS_DO_MICROSSERVICO)
+                   and TABELA_DO_ACEITE in self._tabelas(),
                    f"recusado={recusado} revisão={self._revisao()}")
 
         self.stage = "downgrade do microsserviço sem dado e novo upgrade"
@@ -812,13 +1089,15 @@ class _ClusterDosLeads(_PrivateCluster):
         estado = self._estado()
         self._migrar(downgrade, REVISAO_ANTES_DO_MICROSSERVICO)
         revisao_depois, colunas_depois, ficou = self._revisao(), self._colunas_do_microsservico(), self._estado()
+        sem_tabela_do_aceite = TABELA_DO_ACEITE not in self._tabelas()
         self._migrar(upgrade, "head")
         self.check("microsservico_downgrade_and_upgrade_again",
                    revisao_depois == REVISAO_ANTES_DO_MICROSSERVICO and not colunas_depois and ficou == estado
-                   and self._revisao() == self.head
+                   and sem_tabela_do_aceite and self._revisao() == self.head
                    and self._colunas_do_microsservico() == set(COLUNAS_DO_MICROSSERVICO)
                    and self._estado() == estado and self._diferencas_metadata() == []
-                   and self._politicas() == {t: POLITICAS for t in TABELAS},
+                   and self._politicas() == {t: POLITICAS for t in TABELAS}
+                   and self._politicas((TABELA_DO_ACEITE,)) == {TABELA_DO_ACEITE: POLITICAS},
                    f"revisão={revisao_depois} colunas={colunas_depois} ficou={ficou}")
         self._executar("DELETE FROM lead_avaliacao")
 

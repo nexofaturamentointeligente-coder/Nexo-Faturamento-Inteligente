@@ -16,12 +16,18 @@ Instalado pela factory (app.py). Toda resposta dinâmica recebe:
 Limites conhecidos (documentados no relatório): style-src mantém
 'unsafe-inline' porque os templates e o Plotly usam atributos style; a CSP
 não substitui a sanitização dos templates, apenas limita o impacto.
+
+A landing (endpoint index) envia o cadastro do lead ao microsserviço do
+Raio-X: só nela a origem de MICROSSERVICO_RAIOX_URL entra no connect-src
+(o form-action continua 'self': o envio é por fetch, não por <form>).
 """
 
 import secrets
 from urllib.parse import urlsplit
 
 from flask import g, request, session
+
+from config import origem_https
 
 # Fontes de CDN fixadas por CAMINHO exato, não por origem: liberar "https://cdn.jsdelivr.net"
 # inteiro deixaria qualquer pacote publicado nesse CDN executar sob a política,
@@ -43,6 +49,8 @@ CDN_FONTES = (
     _JSDELIVR + "bootstrap-icons@1.11.3/font/fonts/",  # prefixo (a CSS acrescenta ?hash)
 )
 ROTAS_SEM_CACHE = ("/auth/", "/api/", "/notificacoes/", "/midia/")
+# Páginas que conversam com o microsserviço do Raio-X (os diálogos de cadastro da landing).
+ENDPOINTS_COM_MICROSSERVICO = frozenset({"index"})
 
 
 def novo_nonce() -> str:
@@ -69,8 +77,14 @@ def origens_websocket(app) -> list[str]:
     return origens
 
 
-def politica_csp(app, nonce: str) -> str:
-    conectar = " ".join(["'self'", *origens_websocket(app)])
+def origem_do_microsservico(app) -> str:
+    """A origem de MICROSSERVICO_RAIOX_URL, conferida de novo (https://host[:porta]) porque vai para o
+    cabeçalho: um valor posto direto no app.config não injeta diretiva nem libera outra origem."""
+    return origem_https(app.config.get("MICROSSERVICO_RAIOX_URL"))
+
+
+def politica_csp(app, nonce: str, conexoes_extras=()) -> str:
+    conectar = " ".join(["'self'", *origens_websocket(app), *conexoes_extras])
     diretivas = [
         "default-src 'self'",
         f"script-src 'self' 'nonce-{nonce}' {' '.join(CDN_SCRIPTS)}",
@@ -118,7 +132,11 @@ def instalar(app) -> None:
         cabecalhos = resposta.headers
         nome_csp = "Content-Security-Policy-Report-Only" if app.config["CSP_REPORT_ONLY"] else "Content-Security-Policy"
         if "Content-Security-Policy" not in cabecalhos:
-            cabecalhos[nome_csp] = politica_csp(app, nonce_da_requisicao())
+            extras = ()
+            if request.endpoint in ENDPOINTS_COM_MICROSSERVICO:
+                origem = origem_do_microsservico(app)
+                extras = (origem,) if origem else ()
+            cabecalhos[nome_csp] = politica_csp(app, nonce_da_requisicao(), extras)
         cabecalhos.setdefault("X-Content-Type-Options", "nosniff")
         cabecalhos.setdefault("X-Frame-Options", "DENY")
         cabecalhos.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

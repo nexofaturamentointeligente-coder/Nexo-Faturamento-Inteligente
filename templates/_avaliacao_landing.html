@@ -1,0 +1,118 @@
+{#- ===================================================================
+   NEXO — "Deixar Avaliação" na seção #avaliacoes da landing (COM-002; decisão do dono em 16/11/2026)
+   Incluído por landing.html quando a rota / manda avaliacoes.contexto_da_landing(current_user)
+   (avaliacao_estado definido). A folha css/landing-avaliacao.css e o script js/landing-avaliacao.js
+   vêm no <head> da landing. O que aparece depende de quem visita:
+     visitante ...... link para /avaliar: entra no portal e volta com o modal aberto (funciona sem JavaScript)
+     pode_avaliar ... o botão abre o <dialog id="avaliacao-modal">; sem JavaScript (ou sem <dialog>), o mesmo
+                      link leva ao formulário do portal, que grava do mesmo jeito
+     ja_avaliou ..... link para "Minha avaliação"
+     inelegivel ..... o motivo, em texto (com termos a aceitar, também o caminho para aceitá-los)
+     admin .......... link para a moderação
+     indisponivel ... o botão desabilitado e o aviso (banco ou tabelas indisponíveis)
+   Nada aqui consulta o banco e todo texto sai escapado. Só o estado pode_avaliar tem formulário (e CSRF):
+   para o visitante a landing continua sem <form> e sem <dialog> deste módulo.
+   =================================================================== -#}
+{%- set estado = avaliacao_estado|default('indisponivel') -%}
+{%- set formulario = avaliacao_formulario|default(none) -%}
+<div class="review-cta avaliacao-cta" data-avaliacao-cta data-avaliacao-estado="{{ estado }}">
+{%- if estado == 'visitante' %}
+  <a class="btn-nexo btn-nexo-secondary" href="{{ avaliar_url }}" aria-describedby="avaliacao-cta-nota">Deixar Avaliação</a>
+  <p id="avaliacao-cta-nota" class="commercial-note">Para avaliar, entre com o seu acesso de cliente. Depois do login, você volta para cá.</p>
+{%- elif estado == 'pode_avaliar' and formulario %}
+  <a class="btn-nexo btn-nexo-secondary" href="{{ formulario.acao_url }}" data-avaliacao-abrir aria-describedby="avaliacao-cta-nota">Deixar Avaliação</a>
+  <p id="avaliacao-cta-nota" class="commercial-note">A equipe NEXO revisa cada avaliação antes de publicar.</p>
+  <dialog id="avaliacao-modal" class="avaliacao-modal" aria-labelledby="avaliacao-modal-titulo" aria-describedby="avaliacao-modal-intro">
+    <div class="avaliacao-modal-caixa">
+      <button type="button" class="avaliacao-modal-fechar" data-avaliacao-fechar aria-label="Fechar">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+      <h2 id="avaliacao-modal-titulo" class="avaliacao-modal-titulo" tabindex="-1">Avalie a NEXO</h2>
+      <p id="avaliacao-modal-intro" class="avaliacao-modal-intro">Conte como tem sido a sua experiência. Nada é publicado sem a revisão da equipe e sem a sua autorização.</p>
+      <form method="POST" action="{{ formulario.acao_url }}" class="avaliacao-modal-form" novalidate data-avaliacao-form
+            data-minha-avaliacao-url="{{ minha_avaliacao_url }}" data-avaliar-url="{{ avaliar_url }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        {#- Rádios nativos de 1 a 5: setas e Tab funcionam sem script. A estrela é só desenho; o nome de cada
+            opção é o texto oculto da própria label. -#}
+        <fieldset class="avaliacao-modal-estrelas" id="avaliacao-nota-grupo" role="radiogroup"
+                  aria-labelledby="avaliacao-nota-legenda" aria-required="true">
+          <legend class="avaliacao-modal-rotulo" id="avaliacao-nota-legenda">Sua nota <span class="avaliacao-modal-obrigatorio" aria-hidden="true">*</span></legend>
+          <div class="avaliacao-modal-opcoes">
+            {%- for n in range(1, 6) %}
+            <label class="avaliacao-modal-estrela" for="avaliacao-nota-{{ n }}">
+              <input type="radio" id="avaliacao-nota-{{ n }}" name="nota" value="{{ n }}" required>
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.612 15.443c-.386.198-.824-.149-.746-.592l.83-4.73L.173 6.765c-.329-.314-.158-.888.283-.95l4.898-.696L7.538.792c.197-.39.73-.39.927 0l2.184 4.327 4.898.696c.441.062.612.636.282.95l-3.522 3.356.83 4.73c.078.443-.36.79-.746.592L8 13.187l-4.389 2.256z"/></svg>
+              <span class="visually-hidden" data-avaliacao-rotulo>{{ n }} {{ 'estrela' if n == 1 else 'estrelas' }}: {{ formulario.rotulos_nota[n] }}</span>
+            </label>
+            {%- endfor %}
+          </div>
+          <p class="avaliacao-modal-significado" data-avaliacao-significado aria-hidden="true"></p>
+          <p class="avaliacao-modal-erro" id="avaliacao-nota-erro" hidden></p>
+        </fieldset>
+
+        <div class="avaliacao-modal-campo">
+          <label class="avaliacao-modal-rotulo" for="avaliacao-comentario">Conte como foi a sua experiência <span class="avaliacao-modal-obrigatorio" aria-hidden="true">*</span></label>
+          <textarea id="avaliacao-comentario" name="comentario" rows="4" required
+                    minlength="{{ formulario.comentario_min }}" maxlength="{{ formulario.comentario_max }}"
+                    placeholder="Como a NEXO ajudou a sua empresa?" aria-describedby="avaliacao-comentario-dica"></textarea>
+          <div class="avaliacao-modal-rodape-campo">
+            <p class="avaliacao-modal-dica" id="avaliacao-comentario-dica">De {{ formulario.comentario_min }} a {{ formulario.comentario_max }} caracteres. Não inclua dados financeiros, documentos nem dados de outras pessoas.</p>
+            <span class="avaliacao-modal-contador" data-avaliacao-contador aria-hidden="true" hidden></span>
+          </div>
+          <p class="visually-hidden" data-avaliacao-limite aria-live="polite"></p>
+          <p class="avaliacao-modal-erro" id="avaliacao-comentario-erro" hidden></p>
+        </div>
+
+        <div class="avaliacao-modal-campo">
+          {%- set partes = formulario.texto_consentimento.split('Política de Privacidade', 1) %}
+          <label class="avaliacao-modal-autorizacao" for="avaliacao-autoriza">
+            <input type="checkbox" id="avaliacao-autoriza" name="autoriza_publicacao" value="1" aria-describedby="avaliacao-autoriza-dica">
+            <span>
+              {%- if formulario.politica_url and partes|length == 2 -%}
+              {{ partes[0] }}<a href="{{ formulario.politica_url }}" target="_blank" rel="noopener noreferrer">Política de Privacidade</a>{{ partes[1] }}<span class="visually-hidden"> (o link abre em nova aba)</span>
+              {%- else -%}
+              {{ formulario.texto_consentimento }}
+              {%- endif -%}
+            </span>
+          </label>
+          <p class="avaliacao-modal-dica" id="avaliacao-autoriza-dica">Opcional. Sem esta autorização, a avaliação fica só com a equipe NEXO. Se for publicada, aparece como “Cliente NEXO”; para mostrar seu nome ou o da empresa, edite depois em Minha avaliação.</p>
+          {%- if not formulario.politica_url %}
+          <p class="avaliacao-modal-dica">A Política de Privacidade ainda não foi publicada; o link aparecerá aqui assim que estiver disponível.</p>
+          {%- endif %}
+        </div>
+
+        <div class="avaliacao-modal-resumo" data-avaliacao-resumo role="alert" tabindex="-1" hidden></div>
+        <p class="visually-hidden" data-avaliacao-status role="status" aria-live="polite"></p>
+
+        <div class="avaliacao-modal-acoes">
+          <button type="submit" class="btn-nexo btn-nexo-primary" data-avaliacao-enviar><span data-avaliacao-enviar-rotulo>Enviar avaliação</span></button>
+          <button type="button" class="btn-nexo btn-nexo-ghost" data-avaliacao-fechar>Cancelar</button>
+        </div>
+      </form>
+
+      <div class="avaliacao-modal-final" data-avaliacao-final hidden>
+        <p class="avaliacao-modal-final-texto" id="avaliacao-modal-final-texto" data-avaliacao-final-texto tabindex="-1"></p>
+        <div class="avaliacao-modal-acoes">
+          <a class="btn-nexo btn-nexo-secondary" href="{{ minha_avaliacao_url }}" data-avaliacao-final-link>Ver minha avaliação</a>
+          <button type="button" class="btn-nexo btn-nexo-primary" data-avaliacao-fechar>Fechar</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+{%- elif estado == 'ja_avaliou' %}
+  <a class="btn-nexo btn-nexo-secondary" href="{{ minha_avaliacao_url }}" aria-describedby="avaliacao-cta-nota">Ver minha avaliação</a>
+  <p id="avaliacao-cta-nota" class="commercial-note">Você já enviou a sua avaliação. Obrigado!</p>
+{%- elif estado == 'inelegivel' %}
+  <p id="avaliacao-cta-nota" class="commercial-note avaliacao-cta-motivo">{{ avaliacao_motivo|default('', true) }}</p>
+  {%- if avaliacao_continuar_url|default(none) %}
+  <a class="btn-nexo btn-nexo-secondary" href="{{ avaliacao_continuar_url }}" aria-describedby="avaliacao-cta-nota">Aceitar os termos e avaliar</a>
+  {%- endif %}
+{%- elif estado == 'admin' %}
+  <a class="btn-nexo btn-nexo-secondary" href="{{ moderacao_url }}" aria-describedby="avaliacao-cta-nota">Ver as avaliações recebidas</a>
+  <p id="avaliacao-cta-nota" class="commercial-note">Administradores não enviam avaliações: as dos clientes chegam para moderação.</p>
+{%- else %}
+  <button type="button" class="btn-nexo btn-nexo-secondary" disabled aria-describedby="reviews-availability">Deixar Avaliação</button>
+  <p id="reviews-availability" class="commercial-note">O envio de avaliações está indisponível no momento. Tente de novo mais tarde.</p>
+{%- endif %}
+</div>

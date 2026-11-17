@@ -4,9 +4,10 @@ import base64
 import json
 import unittest
 
-from configuracao import Configuracao
+from configuracao import AVISO_TERMOS_VERSAO, Configuracao
 from preparar_bucket import problemas_do_bucket
 from repositorio import ErroDeBanco, parametros_de_conexao
+
 
 def jwt_sintetico(papel: str) -> str:
     """Um JWT no formato das chaves legadas do Supabase, com assinatura falsa (só a carga é lida)."""
@@ -20,7 +21,6 @@ COMPLETO = {
     "DATABASE_URL": "postgresql://postgres:segredo-de-teste@db.abcdefghijklmnopqrst.supabase.co:5432/postgres",
     "SUPABASE_KEY": SERVICE_ROLE,
     "CORS_ORIGENS": "https://nexo.exemplo.com.br, https://www.nexo.exemplo.com.br/",
-    "TERMOS_VERSAO": "termos-2026-11",
 }
 
 
@@ -178,7 +178,7 @@ class ConfiguracaoTests(unittest.TestCase):
         self.assertTrue(problemas_do_bucket(Configuracao.de_ambiente(publica), publica))
 
     def test_cada_falta_vira_problema(self):
-        for nome in ("DATABASE_URL", "SUPABASE_KEY", "CORS_ORIGENS", "TERMOS_VERSAO"):
+        for nome in ("DATABASE_URL", "SUPABASE_KEY", "CORS_ORIGENS"):
             with self.subTest(falta=nome):
                 configuracao = Configuracao.de_ambiente({chave: valor for chave, valor in COMPLETO.items()
                                                          if chave != nome})
@@ -187,14 +187,25 @@ class ConfiguracaoTests(unittest.TestCase):
         sem_url = {**COMPLETO, "DATABASE_URL": "postgresql://usuario@banco.exemplo/nexo"}
         self.assertTrue(any("SUPABASE_URL" in p for p in Configuracao.de_ambiente(sem_url).problemas))
 
+    def test_termos_versao_nao_e_mais_usada(self):
+        # A versão aceita vem do banco: sem a variável o serviço fica pronto e, com ela (válida ou não), também,
+        # com o aviso para tirá-la do ambiente, sem o valor.
+        self.assertEqual(Configuracao.de_ambiente(COMPLETO).avisos, ())
+        for valor in ("termos-2026-11", "termos de uso", "v" * 41, "postgresql://u:senha-colada@host/x"):
+            with self.subTest(valor=valor[:12]):
+                configuracao = Configuracao.de_ambiente({**COMPLETO, "TERMOS_VERSAO": valor})
+                self.assertTrue(configuracao.pronta, configuracao.problemas)
+                self.assertEqual(configuracao.avisos, (AVISO_TERMOS_VERSAO,))
+                self.assertNotIn(valor, " ".join(configuracao.avisos + configuracao.problemas))
+                self.assertFalse(hasattr(configuracao, "termos_versao"))
+        self.assertEqual(Configuracao.de_ambiente({**COMPLETO, "TERMOS_VERSAO": "  "}).avisos, ())
+
     def test_valores_invalidos(self):
         casos = {
             "origem com caminho": {"CORS_ORIGENS": "https://nexo.exemplo.com.br/landing"},
             "origem http": {"CORS_ORIGENS": "http://nexo.exemplo.com.br"},
             "supabase sem https": {"SUPABASE_URL": "http://abcdefghijklmnopqrst.supabase.co"},
             "supabase com caminho": {"SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co/storage"},
-            "versão com espaço": {"TERMOS_VERSAO": "termos de uso"},
-            "versão longa": {"TERMOS_VERSAO": "v" * 41},
             "limite não numérico": {"LIMITE_POR_HORA": "cinco"},
             "limite zero": {"LIMITE_POR_DIA": "0"},
             "prazo zero": {"PRAZO_DA_TRIAGEM": "0"},

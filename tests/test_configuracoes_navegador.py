@@ -258,6 +258,13 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
                                                     ip_usuario="203.0.113.7") for documento in documentos)
         self.db.session.commit()
 
+    def _rolar_textos_ate_o_fim(self, pagina):
+        """Regra da rolagem (static/js/aceite-rolagem.js): cada texto do aceite até o fim, como a pessoa faria,
+        e a espera pela caixa liberada."""
+        pagina.evaluate("""() => document.querySelectorAll('[data-aceite-texto]').forEach((texto) => {
+            texto.scrollTop = texto.scrollHeight; })""")
+        pagina.wait_for_function("() => !document.getElementById('termosConfirmo').disabled")
+
     def test_modal_de_termos_so_fecha_pelo_aceite(self):
         self._publicar_documentos()
         for largura, altura in ((390, 844), (1366, 768)):
@@ -270,6 +277,10 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
             posts = self._posts(pagina)
             pagina.keyboard.press("Escape")
             pagina.mouse.click(5, altura - 5)  # fora do diálogo, sobre o fundo
+            # A caixa e o botão nascem travados e só liberam no fim de cada texto.
+            self.assertTrue(pagina.is_disabled("#termosConfirmo"))
+            self.assertTrue(pagina.is_disabled("#modalTermos button[type=submit].btn-nexo"))
+            self._rolar_textos_ate_o_fim(pagina)
             pagina.click("#modalTermos button[type=submit].btn-nexo")  # sem a caixa: o navegador barra
             self.assertTrue(pagina.is_visible("#modalTermos"))
             self.assertEqual(posts, [])
@@ -307,6 +318,7 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
         for tema in ("dark", "light"):
             pagina = self._sessao(CLIENTE, tema=tema)
             self.ir(pagina, "/cliente/dashboard")
+            self._rolar_textos_ate_o_fim(pagina)  # a caixa liberada, como a pessoa a marca
             caixa = pagina.evaluate("""() => { const e = document.getElementById('termosConfirmo'); e.scrollIntoView({block: 'center'});
                 const r = e.getBoundingClientRect(); return {x: Math.round(r.left), y: Math.round(r.top + r.height / 2)}; }""")
             recorte = Image.open(io.BytesIO(pagina.screenshot(clip={"x": caixa["x"] - 4, "y": caixa["y"] - 2, "width": 8, "height": 4},
@@ -321,7 +333,7 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
         self._publicar_documentos()
         seletores = [".termos-modal .modal-title", ".termos-modal p", ".termos-documento h3", ".termos-documento .field-hint",
                      ".termos-documento-texto", ".termos-modal .form-check-label", ".termos-saidas .field-hint",
-                     ".termos-saidas .btn-ghost"]
+                     ".termos-saidas .btn-ghost", ".termos-modal .aceite-aviso"]
         for tema in ("dark", "light"):
             pagina = self._sessao(CLIENTE, tema=tema)
             self.ir(pagina, "/cliente/dashboard")
@@ -342,7 +354,9 @@ class ConfiguracoesNavegadorTests(NavegadorCase):
                                         ".config-documento summary", ".config-documento-texto"),
             (CLIENTE, "/cliente/dashboard"): (".aviso-contrato strong", ".aviso-contrato p", ".aviso-contrato a"),
             (ADMIN, "/admin/configuracoes"): (".config-documento-topo h4", ".nexo-card-head .sub", ".nexo-label", ".form-control",
-                                              ".field-hint", ".dados-contrato dt", ".dados-contrato dd"),
+                                              ".field-hint", ".dados-contrato dt", ".dados-contrato dd",
+                                              ".config-editor > summary", ".config-documento-links a",
+                                              "#documentos-legais .config-documento-texto"),
             (ADMIN, f"/admin/empresas/{self.empresa_id}/detalhes"): (".usuario-corrigir-email summary", ".usuario-corrigir-email .field-hint",
                                                                      ".usuario-corrigir-email .nexo-label"),
             (ADMIN, "/admin/contratos"): (".nexo-card-head .sub", ".field-hint"),

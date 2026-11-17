@@ -34,6 +34,13 @@
 </div>
 {% else %}
 {% set a = avaliacao %}
+{% if confirmacao %}
+{# Depois de um envio por fetch (modal da landing ou formulário do portal): o texto vem de uma lista fechada. #}
+<div class="aviso-contrato avaliacao-confirmacao" role="status">
+    <i class="bi bi-check-circle" aria-hidden="true"></i>
+    <div><p>{{ confirmacao }}</p></div>
+</div>
+{% endif %}
 <div class="avaliacao-layout">
     <div class="avaliacao-lateral">
         <section class="nexo-card" aria-labelledby="situacaoTitulo">

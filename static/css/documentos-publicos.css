@@ -1,0 +1,178 @@
+/* ============================================================
+   NEXO — Documentos legais públicos (/termos-de-uso e /politica-de-privacidade)
+   ============================================================
+   Páginas de blueprints/documentos_publicos.py, no visual da landing. O landing.css
+   entra antes desta folha só pelos tokens (--nexo-*) e pela base (fundo, fonte e
+   cores do texto); o desenho fica aqui, com classes próprias (prefixo doc-), para a
+   página não depender do layout da landing. Cada token tem um valor de reserva.
+
+   - Sempre escura, como a landing: sem data-theme e sem localStorage.
+   - O texto do documento é puro e chega escapado; as quebras de linha que o
+     administrador digitou ficam visíveis por white-space: pre-wrap.
+   - Sem rolagem horizontal de 320 a 1440 px: palavras longas quebram
+     (overflow-wrap: anywhere) e o topo se reorganiza em linhas.
+   ============================================================ */
+
+body.doc-publico {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--nexo-bg, #08080d);
+  background-image: radial-gradient(ellipse 70% 320px at 50% 0, rgba(168, 85, 247, 0.12), transparent 70%);
+  background-repeat: no-repeat;
+  color: var(--nexo-text, #e8e9f0);
+}
+
+.doc-pular {
+  position: fixed; z-index: 1000; top: 12px; left: 16px;
+  padding: 12px 18px; min-height: 44px;
+  background: var(--nexo-text, #e8e9f0); color: var(--nexo-bg, #08080d);
+  border-radius: 8px; font-weight: 700;
+  transform: translateY(-180%);
+}
+.doc-pular:focus { transform: translateY(0); color: var(--nexo-bg, #08080d); }
+
+/* ---------------- Topo: a marca e a volta ao site ---------------- */
+.doc-topo {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(8, 8, 13, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--nexo-border, rgba(255, 255, 255, 0.07));
+}
+.doc-topo-interno {
+  max-width: 1240px; margin: 0 auto; padding: 12px 24px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
+}
+.doc-marca { display: inline-flex; align-items: center; gap: 10px; min-width: 0; color: var(--nexo-text, #e8e9f0); }
+.doc-marca:hover { color: var(--nexo-text, #e8e9f0); }
+.doc-marca img { display: block; width: auto; height: 40px; flex-shrink: 0; }
+.doc-marca-texto { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.doc-marca-texto .b1 { font-weight: 800; font-size: 1.02rem; letter-spacing: 0.02em; }
+.doc-marca-texto .b2 {
+  color: var(--nexo-text-3, #9da5be); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.doc-voltar {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; padding: 10px 16px;
+  border: 1px solid var(--nexo-border-strong, rgba(255, 255, 255, 0.13)); border-radius: 10px;
+  background: var(--nexo-surface, #13131d); color: var(--nexo-text, #e8e9f0);
+  font-size: 0.9rem; font-weight: 600; white-space: nowrap;
+}
+.doc-voltar:hover { color: var(--nexo-text, #e8e9f0); border-color: var(--nexo-accent, #a855f7); background: var(--nexo-surface-2, #181824); }
+.doc-voltar svg {
+  width: 1em; height: 1em; flex-shrink: 0;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ---------------- Conteúdo ---------------- */
+.doc-principal { flex: 1 0 auto; width: 100%; max-width: 880px; margin: 0 auto; padding: 36px 24px 64px; }
+.doc-principal:focus { outline: none; }
+
+.doc-abas { margin: 0 0 28px; }
+.doc-abas ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.doc-abas a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px;
+  border: 1px solid var(--nexo-border-strong, rgba(255, 255, 255, 0.13)); border-radius: 999px;
+  color: var(--nexo-text-2, #b3bad0); font-size: 0.9rem; font-weight: 600;
+}
+.doc-abas a:hover { color: var(--nexo-text, #e8e9f0); border-color: var(--nexo-accent, #a855f7); }
+.doc-abas a[aria-current="page"] {
+  color: var(--nexo-text, #e8e9f0);
+  border-color: var(--nexo-accent, #a855f7);
+  background: var(--nexo-accent-soft, rgba(168, 85, 247, 0.14));
+}
+
+.doc-cabecalho { margin-bottom: 22px; }
+.doc-titulo {
+  margin: 0 0 10px;
+  font-size: clamp(1.8rem, 1.2rem + 2vw, 2.5rem); font-weight: 800; line-height: 1.15;
+  letter-spacing: -0.02em; color: var(--nexo-text, #e8e9f0);
+  overflow-wrap: anywhere;
+}
+.doc-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin: 0; color: var(--nexo-text-3, #9da5be); font-size: 0.92rem; line-height: 1.6;
+}
+.doc-versao {
+  display: inline-flex; align-items: center; padding: 3px 12px;
+  border-radius: 999px; background: var(--nexo-accent-soft, rgba(168, 85, 247, 0.14));
+  color: var(--nexo-accent-text, #c28aff); font-weight: 700; font-size: 0.86rem;
+}
+
+/* O texto como o administrador escreveu: as quebras de linha ficam, e nada sai da caixa. */
+.doc-texto {
+  margin: 0; padding: clamp(18px, 4vw, 36px);
+  background: var(--nexo-surface, #13131d);
+  border: 1px solid var(--nexo-border, rgba(255, 255, 255, 0.07));
+  border-radius: var(--nexo-radius, 16px);
+  color: var(--nexo-text, #e8e9f0);
+  font-size: 1rem; line-height: 1.75;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.doc-aviso {
+  margin: 0; padding: 18px 22px;
+  border-left: 3px solid var(--nexo-accent, #a855f7); border-radius: 0 10px 10px 0;
+  background: var(--nexo-surface, #13131d);
+}
+.doc-aviso.is-indisponivel { border-left-color: var(--nexo-warning, #f59e0b); }
+.doc-aviso p { margin: 0; color: var(--nexo-text-2, #b3bad0); }
+.doc-aviso p + p { margin-top: 6px; }
+.doc-aviso .doc-aviso-titulo { color: var(--nexo-text, #e8e9f0); font-weight: 700; }
+
+/* ---------------- Rodapé ---------------- */
+.doc-rodape {
+  border-top: 1px solid var(--nexo-border, rgba(255, 255, 255, 0.07));
+  background: var(--nexo-bg-2, #0c0c14);
+}
+.doc-rodape-interno {
+  max-width: 1240px; margin: 0 auto; padding: 22px 24px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px;
+  color: var(--nexo-text-3, #9da5be); font-size: 0.86rem; line-height: 1.7;
+}
+.doc-rodape ul { display: flex; flex-wrap: wrap; gap: 0 18px; margin: 0; padding: 0; list-style: none; }
+.doc-rodape a {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+  color: var(--nexo-text-2, #b3bad0); text-decoration: underline; text-underline-offset: 4px;
+}
+.doc-rodape a:hover { color: var(--nexo-text, #e8e9f0); }
+
+/* ---------------- Telas estreitas ---------------- */
+@media (max-width: 640px) {
+  /* No celular o topo pode ocupar duas linhas: ele rola junto, para não roubar espaço da leitura. */
+  .doc-topo { position: static; }
+  .doc-topo-interno { padding: 10px 16px; gap: 8px; }
+  .doc-marca { gap: 8px; }
+  .doc-marca img { height: 34px; }
+  .doc-marca-texto .b1 { font-size: 0.95rem; }
+  .doc-marca-texto .b2 { font-size: 0.58rem; letter-spacing: 0.04em; }
+  .doc-voltar { padding: 8px 12px; font-size: 0.84rem; }
+  .doc-principal { padding: 26px 16px 48px; }
+  .doc-abas { margin-bottom: 22px; }
+  .doc-abas a { padding: 8px 14px; font-size: 0.86rem; }
+  .doc-texto { font-size: 0.95rem; line-height: 1.7; }
+  .doc-rodape-interno { padding: 18px 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .doc-pular { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .doc-voltar, .doc-abas a { border: 1px solid ButtonText; }
+  .doc-abas a[aria-current="page"] { outline: 2px solid Highlight; }
+}
+
+/* ---------------- Impressão: só o documento ---------------- */
+@media print {
+  body.doc-publico { display: block; background: #fff; color: #000; }
+  .doc-pular, .doc-topo, .doc-abas, .doc-rodape { display: none; }
+  .doc-principal { max-width: none; padding: 0; }
+  .doc-titulo, .doc-aviso .doc-aviso-titulo { color: #000; }
+  .doc-meta, .doc-aviso p { color: #222; }
+  .doc-versao { padding: 0; background: none; color: #000; }
+  .doc-texto, .doc-aviso { padding: 0; border: 0; background: none; color: #000; }
+}

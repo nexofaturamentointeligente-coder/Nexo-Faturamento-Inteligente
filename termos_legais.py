@@ -9,6 +9,10 @@ Regras:
   - A trava falha aberta: sem as tabelas, ou com erro de banco, a página segue.
   - Com aceite pendente continuam abertos sair, aceitar e os direitos do titular (LGPD,
     art. 18): exportar os dados e pedir a exclusão não dependem de concordar com o texto.
+    As páginas públicas dos documentos e o JSON das versões vigentes também ficam abertos.
+  - O ADMIN não passa pela trava: recebe o alerta das pendências (decisão de desenho).
+  - O aceite na tela segue a regra da rolagem (static/js/aceite-rolagem.js), mas a rolagem
+    não é prova: o servidor confere a caixa (confirmo=1), e a prova é versão, instante e IP.
   - O instante é gravado em UTC e exibido no horário de Brasília. O IP vem da requisição,
     já corrigido pelo ProxyFix, e nunca entra no log.
   - As funções de escrita não fazem commit: a rota confirma ou reverte.
@@ -41,6 +45,10 @@ ENDPOINTS_LIBERADOS = frozenset({
     # como_aderir fica de fora: com sessão, ela é desenhada dentro do portal (base.html).
     # "ping" é o despertador /ping e /health: só "OK", sem banco.
     "static", "index", "healthz", "healthz_db", "ping",
+    # Os documentos públicos (blueprints/documentos_publicos.py): quem tem aceite pendente pode ler o
+    # texto fora do modal, e a landing lê o JSON com a sessão que houver no navegador.
+    "documentos_publicos.termos_de_uso", "documentos_publicos.politica_de_privacidade",
+    "documentos_publicos.vigentes",
     "cliente.aceitar_termos", "cliente.configuracoes_aceitar_documento",
     "cliente.configuracoes_exportar_dados", "cliente.configuracoes_solicitar_exclusao",
 })

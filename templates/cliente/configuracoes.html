@@ -130,9 +130,10 @@
             <div class="nexo-card-head"><div><h3><i class="bi bi-file-earmark-text text-purple" aria-hidden="true"></i> Termos de Uso e Política de Privacidade</h3></div></div>
             <div class="nexo-card-body">
                 {% for doc in documentos %}
-                <article class="config-documento">
+                {% set aceitar = doc.vigente and not doc.aceitou_vigente %}
+                <article class="config-documento"{% if aceitar %} data-aceite-rolagem{% endif %}>
                     <div class="config-documento-topo">
-                        <h4>{{ doc.rotulo }}</h4>
+                        <h4 id="documento-{{ doc.tipo }}">{{ doc.rotulo }}</h4>
                         {% if doc.vigente %}<span class="nexo-badge b-purple">Versão atual: {{ doc.vigente.rotulo_versao }}</span>{% else %}<span class="nexo-badge b-muted">Não publicado</span>{% endif %}
                     </div>
                     {% if doc.vigente %}
@@ -141,19 +142,27 @@
                         <div><dt>Aceite inicial</dt><dd>{% if doc.aceite_inicial %}{{ m.horario(doc.aceite_inicial.aceito_em) }} ({{ doc.aceite_inicial.rotulo }}){% else %}Nenhum aceite registrado{% endif %}</dd></div>
                         <div><dt>Versão aceita</dt><dd>{% if doc.aceite_recente %}{{ doc.aceite_recente.rotulo }}, em {{ m.horario(doc.aceite_recente.aceito_em) }}{% else %}Nenhuma{% endif %}</dd></div>
                     </dl>
-                    <details>
-                        <summary>Ler a {{ doc.vigente.rotulo_versao }}</summary>
-                        <div class="config-documento-texto" tabindex="0">{{ doc.vigente.conteudo }}</div>
-                    </details>
-                    {% if doc.aceitou_vigente %}
-                    <p class="field-hint mt-3 mb-0"><i class="bi bi-check-circle" aria-hidden="true"></i> Você já aceitou a versão atual.</p>
-                    {% else %}
+                    {% if aceitar %}
+                    {#- Regra da rolagem, como no modal (static/js/aceite-rolagem.js): o texto à vista, numa caixa com
+                        rolagem, e o botão travado até o fim dele. Sem JavaScript, o <noscript> explica. -#}
+                    <div class="config-documento-texto is-aceite" tabindex="0" role="region" aria-labelledby="documento-{{ doc.tipo }}"
+                         aria-describedby="aceite-aviso-{{ doc.tipo }}" data-aceite-texto data-aceite-nome="{{ doc.rotulo }}">{{ doc.vigente.conteudo }}<span class="aceite-fim" data-aceite-fim aria-hidden="true"></span></div>
+                    <p class="field-hint aceite-aviso"><i class="bi bi-arrow-down-circle aceite-aviso-pendente" aria-hidden="true"></i><i class="bi bi-check-circle aceite-aviso-pronto" aria-hidden="true"></i>
+                        <span id="aceite-aviso-{{ doc.tipo }}" data-aceite-aviso aria-live="polite"
+                              data-pronto="Você chegou ao fim do texto e já pode aceitar.">Role até o fim do texto para habilitar.</span></p>
+                    <noscript><p class="field-hint">Para aceitar, ative o JavaScript do navegador: o botão só fica disponível depois que você rola o texto até o fim.</p></noscript>
                     <form method="POST" action="{{ url_for('cliente.configuracoes_aceitar_documento') }}" data-envio-unico>
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="tipo" value="{{ doc.tipo }}">
                         <input type="hidden" name="versao" value="{{ doc.vigente.versao }}">
-                        <button type="submit" class="btn-nexo"><i class="bi bi-check2-square" aria-hidden="true"></i> Li e aceito a {{ doc.vigente.rotulo_versao }}</button>
+                        <button type="submit" class="btn-nexo" disabled data-aceite-libera aria-describedby="aceite-aviso-{{ doc.tipo }}"><i class="bi bi-check2-square" aria-hidden="true"></i> Li e aceito a {{ doc.vigente.rotulo_versao }}</button>
                     </form>
+                    {% else %}
+                    <details>
+                        <summary>Ler a {{ doc.vigente.rotulo_versao }}</summary>
+                        <div class="config-documento-texto" tabindex="0">{{ doc.vigente.conteudo }}</div>
+                    </details>
+                    <p class="field-hint mt-3 mb-0"><i class="bi bi-check-circle" aria-hidden="true"></i> Você já aceitou a versão atual.</p>
                     {% endif %}
                     {% else %}
                     <p class="t-mut mb-0">A NEXO ainda não publicou este documento.</p>
@@ -162,6 +171,9 @@
                 {% else %}
                 <p class="t-mut mb-0">Os documentos ainda não estão disponíveis.</p>
                 {% endfor %}
+                {% if documentos|selectattr('vigente')|rejectattr('aceitou_vigente')|list %}
+                <script src="{{ url_for('static', filename='js/aceite-rolagem.js') }}" defer></script>
+                {% endif %}
             </div>
         </div>
     </div>

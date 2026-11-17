@@ -68,7 +68,7 @@ class DeployTests(DeployTestCase):
         self.assertNotIn(b"simulated outage", response.data)
 
     def test_public_pages_and_referenced_static_assets(self):
-        for path in ("/", "/como-aderir", "/auth/login"):
+        for path in ("/", "/como-aderir", "/auth/login", "/termos-de-uso", "/politica-de-privacidade"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)

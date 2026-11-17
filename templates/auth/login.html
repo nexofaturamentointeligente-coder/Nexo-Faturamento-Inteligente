@@ -20,8 +20,10 @@
 
     {# Login unificado: o backend autentica por e-mail/senha e direciona conforme
        Usuario.role. Não há mais toggle de perfil — o seletor visual "Time Nexo /
-       Cliente" era redundante (o role já é consultado no banco). #}
-    <form method="POST" action="{{ url_for('auth.login') }}">
+       Cliente" era redundante (o role já é consultado no banco).
+       O next da página (ex.: ?next=/avaliar) segue no action: o POST o lê da query e só o
+       segue se for um caminho local que abra por GET (auth._destino_seguro). #}
+    <form method="POST" action="{{ url_for('auth.login', next=request.args.get('next') or none) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         {# Flashes locais (erro de credencial, sessão terminada etc.). #}

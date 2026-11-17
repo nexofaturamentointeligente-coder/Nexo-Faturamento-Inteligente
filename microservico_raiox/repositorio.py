@@ -2,16 +2,23 @@
 
 Operações curtas, cada uma na sua transação, com prazo de 10 s no servidor e keepalive de TCP no cliente (uma
 conexão que some sem aviso não prende a thread), com SSL exigido quando a URL não diz outra coisa. O esquema
-é o da aplicação principal, com a migração f2b6d8a4c1e9 aplicada: o lead nasce com origem "site", status
-"pendente", o interesse, a situação dos arquivos, o JSON dos caminhos no Storage e o aceite dos termos
-(termos_aceitos_em e termos_versao, colunas próprias, que o reenvio do consultor não troca). O e-mail e o nome
-da loja são obrigatórios na tabela; os dados de avaliação ficam nulos até o consultor processar.
+é o da aplicação principal, com as migrações f2b6d8a4c1e9 e c8e2a4f6b0d1 aplicadas: o lead nasce com origem
+"site", status "pendente", o interesse, a situação dos arquivos, o JSON dos caminhos no Storage e o resumo do
+aceite dos termos (termos_aceitos_em e termos_versao, colunas próprias, que o reenvio do consultor não troca). O
+e-mail e o nome da loja são obrigatórios na tabela; os dados de avaliação ficam nulos até o consultor processar.
+A prova do aceite é uma linha por documento em aceite_documento_lead: a versão exata (documento_legal), o
+instante (o now() do banco, o mesmo do lead) e o IP do visitante.
 
 O teto diário é conferido de novo dentro da transação do INSERT, sob uma trava consultiva: envios simultâneos
-não passam juntos do teto.
+não passam juntos do teto. Na mesma transação, depois do teto, documento_legal é travada em SHARE MODE antes de
+ler as versões vigentes: uma publicação em andamento termina antes da leitura (e a versão nova é vista), e a
+que chega depois espera o COMMIT do lead. Assim o aceite gravado é sempre da versão vigente no instante do
+COMMIT; se o visitante leu outra, nada é gravado. A trava só disputa com a publicação de um documento (a
+leitura e o aceite do cliente do portal não esperam por ela) e dura o INSERT do lead e dos aceites.
 """
 
 import re
+from typing import NamedTuple
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import psycopg2
@@ -20,6 +27,12 @@ import psycopg2.extensions
 APLICACAO = "nexo_microservico_raiox"
 # Chave fixa da trava consultiva do teto diário (só este serviço a usa).
 TRAVA_DO_TETO = 7_204_513_881
+# Os dois documentos que o visitante aceita na landing (o tipo em documento_legal), com a sigla que vai para
+# termos_versao do lead e o nome que vai para o log.
+SIGLAS_DOS_DOCUMENTOS = {"TERMOS_USO": "TU", "POLITICA_PRIVACIDADE": "PP"}
+NOMES_DOS_DOCUMENTOS = {"TERMOS_USO": "Termos de Uso", "POLITICA_PRIVACIDADE": "Política de Privacidade"}
+# O CHECK de lead_avaliacao.termos_versao.
+TERMOS_VERSAO_MAXIMO = 40
 # Parâmetros que o Supabase e o Prisma acrescentam à URL e que a libpq não conhece (a aplicação principal
 # também os tira, em config.py).
 _PARAMETROS_FORA_DA_LIBPQ = {"pgbouncer", "connection_limit", "pool_timeout", "schema"}
@@ -35,7 +48,7 @@ _URL_DO_BANCO = re.compile(r"""
     (?:\?(?P<consulta>.*))?
 """, re.X)
 _COLUNAS = ("id", "nome_contato", "email", "whatsapp", "nome_loja", "interesse", "status_arquivo",
-            "arquivos_storage", "termos_versao")
+            "arquivos_storage")
 _INSERIR = (
     "INSERT INTO lead_avaliacao (id, nome_contato, email, whatsapp, nome_loja, status, origem, interesse, "
     "status_arquivo, arquivos_storage, termos_aceitos_em, termos_versao, criado_em, atualizado_em) "
@@ -44,6 +57,13 @@ _INSERIR = (
 )
 _CONTAR_DESDE = "SELECT count(*) FROM lead_avaliacao WHERE interesse IS NOT NULL AND criado_em >= %s"
 _EXISTE = "SELECT count(*) FROM lead_avaliacao WHERE id = %s::uuid"
+# A vigente de cada documento é a de maior `versao` do tipo (documento_legal não tem marca de "ativa").
+_VIGENTES = ("SELECT DISTINCT ON (tipo) tipo, id_documento, versao_maior, versao_menor FROM documento_legal "
+             "WHERE tipo IN (" + ", ".join(f"'{tipo}'" for tipo in SIGLAS_DOS_DOCUMENTOS) + ") "
+             "ORDER BY tipo, versao DESC")
+_TRAVAR_DOCUMENTOS = "LOCK TABLE documento_legal IN SHARE MODE"
+_INSERIR_ACEITE = ("INSERT INTO aceite_documento_lead (id_lead, id_documento, aceito_em, ip) "
+                   "VALUES (%(id)s::uuid, %(id_documento)s, now(), %(ip)s)")
 
 
 class ErroDeBanco(RuntimeError):
@@ -52,6 +72,42 @@ class ErroDeBanco(RuntimeError):
 
 class TetoDoDiaAtingido(RuntimeError):
     """O teto diário do serviço foi atingido na hora de gravar."""
+
+
+class TermosIndisponiveis(RuntimeError):
+    """Falta a versão publicada de algum dos documentos: não há o que aceitar."""
+
+
+class TermosDesatualizados(RuntimeError):
+    """O visitante leu uma versão que não é a vigente (publicada outra durante a leitura, ou id forjado)."""
+
+
+class Vigente(NamedTuple):
+    """A versão vigente de um documento: o id em documento_legal e o rótulo exibido (v1.0, v1.1, v2.0)."""
+    id_documento: int
+    rotulo: str
+
+
+def conferir_termos(vigentes: dict, lidos: dict) -> None:
+    """TermosIndisponiveis se falta a versão publicada de algum dos dois documentos; TermosDesatualizados se o
+    visitante leu outra (`lidos`, {tipo: id}, não é o id vigente de cada tipo)."""
+    if any(tipo not in vigentes for tipo in SIGLAS_DOS_DOCUMENTOS):
+        raise TermosIndisponiveis()
+    if any(lidos.get(tipo) != vigentes[tipo].id_documento for tipo in SIGLAS_DOS_DOCUMENTOS):
+        raise TermosDesatualizados()
+
+
+def versao_dos_termos(vigentes: dict) -> str:
+    """O resumo das versões aceitas que vai para termos_versao do lead, "TU-v1.0 PP-v1.0", cortado no CHECK da
+    coluna (40 caracteres; só um rótulo com números enormes chegaria lá). A prova é aceite_documento_lead."""
+    texto = " ".join(f"{sigla}-{vigentes[tipo].rotulo}" for tipo, sigla in SIGLAS_DOS_DOCUMENTOS.items())
+    return texto[:TERMOS_VERSAO_MAXIMO]
+
+
+def _ler_vigentes(cursor) -> dict:
+    cursor.execute(_VIGENTES)
+    return {tipo: Vigente(id_documento, f"v{maior}.{menor}")
+            for tipo, id_documento, maior, menor in cursor.fetchall()}
 
 
 def parametros_de_conexao(database_url: str, timeout: int = 10) -> dict:
@@ -136,8 +192,20 @@ class RepositorioDeLeads:
             return cursor.fetchone()[0]
         return self._transacao(contar)
 
-    def gravar(self, lead: dict, teto: int, desde) -> None:
-        """Grava o lead, salvo se o teto do dia (leads do microsserviço desde `desde`) já foi atingido."""
+    def primeira_conferencia(self, desde) -> tuple:
+        """Antes do trabalho pesado, numa transação só e sem trava: (leads do microsserviço desde `desde`, versões
+        vigentes {tipo: Vigente}). Só adianta a recusa; a conferência que vale é a da gravação."""
+        def conferir(cursor):
+            cursor.execute(_CONTAR_DESDE, (desde,))
+            leads = cursor.fetchone()[0]
+            return leads, _ler_vigentes(cursor)
+        return self._transacao(conferir)
+
+    def gravar(self, lead: dict, teto: int, desde, lidos: dict, ip=None) -> None:
+        """Grava o lead e um aceite por documento, numa transação. TetoDoDiaAtingido se o teto do dia (leads do
+        microsserviço desde `desde`) já foi atingido; TermosIndisponiveis ou TermosDesatualizados se as versões que
+        o visitante leu (`lidos`, {tipo: id}) não são as vigentes lidas aqui, com documento_legal travada: em
+        qualquer recusa, nada é gravado. `ip` é o do visitante, já normalizado (validacao.ip_do_visitante), ou None."""
         valores = {coluna: lead.get(coluna) for coluna in _COLUNAS}
         valores["id"] = str(lead["id"])
 
@@ -146,7 +214,13 @@ class RepositorioDeLeads:
             cursor.execute(_CONTAR_DESDE, (desde,))
             if cursor.fetchone()[0] >= teto:
                 raise TetoDoDiaAtingido()
-            cursor.execute(_INSERIR, valores)
+            cursor.execute(_TRAVAR_DOCUMENTOS)
+            vigentes = _ler_vigentes(cursor)
+            conferir_termos(vigentes, lidos)
+            cursor.execute(_INSERIR, {**valores, "termos_versao": versao_dos_termos(vigentes)})
+            for tipo in SIGLAS_DOS_DOCUMENTOS:
+                cursor.execute(_INSERIR_ACEITE, {"id": valores["id"], "id_documento": vigentes[tipo].id_documento,
+                                                 "ip": ip})
         self._transacao(inserir)
 
     def existe(self, lead_id) -> bool:
@@ -156,9 +230,14 @@ class RepositorioDeLeads:
             return cursor.fetchone()[0] == 1
         return self._transacao(conferir)
 
-    def conferir_tabela(self) -> None:
-        """Na subida: conecta e lê a tabela pelas colunas da migração (nenhuma linha); ErroDeBanco se falha."""
+    def conferir_tabela(self) -> dict:
+        """Na subida: conecta, lê as tabelas pelas colunas que o serviço usa (lead_avaliacao e aceite_documento_lead
+        sem nenhuma linha; de documento_legal, as versões vigentes, que devolve) e trava documento_legal como a
+        gravação trava (o papel do banco precisa poder). ErroDeBanco se algo falha."""
         def conferir(cursor):
             cursor.execute("SELECT interesse, status_arquivo, arquivos_storage, termos_aceitos_em, termos_versao "
                            "FROM lead_avaliacao LIMIT 0")
-        self._transacao(conferir)
+            cursor.execute("SELECT id_lead, id_documento, aceito_em, ip FROM aceite_documento_lead LIMIT 0")
+            cursor.execute(_TRAVAR_DOCUMENTOS)
+            return _ler_vigentes(cursor)
+        return self._transacao(conferir)

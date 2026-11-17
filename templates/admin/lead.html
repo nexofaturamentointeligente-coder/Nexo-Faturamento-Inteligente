@@ -27,6 +27,35 @@
     </div>
 </div>
 
+{#- O aceite dos termos que o visitante deu na landing (aceite_documento_lead, gravado pelo microsserviço do Raio-X).
+    Sem a tabela no banco (aceites_termos nulo), o bloco não aparece; no lead do site sem aceite, aparece o aviso. #}
+{% set aceite_lido = aceites_termos is defined and aceites_termos is not none %}
+{% if aceite_lido and (aceites_termos or lead.origem == 'site') %}
+<section class="nexo-card mb-4" aria-labelledby="aceiteTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="aceiteTitulo"><i class="bi bi-file-earmark-check text-purple" aria-hidden="true"></i> Aceite dos termos</h2>
+            <p class="sub">Versões que o visitante leu e aceitou no pré-cadastro do site, com a data e a hora (horário de Brasília) e o IP de onde veio o envio.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if aceites_termos %}
+        <ul class="list-unstyled mb-0">
+            {% for aceite in aceites_termos %}
+            <li class="{{ 'mb-3' if not loop.last else '' }}">
+                <strong class="text-break">{{ aceite.documento }} {{ aceite.versao }}</strong>
+                <br><small>Aceito em {{ m.horario(aceite.aceito_em) }}</small>
+                <br><small class="t-mut text-break">{% if aceite.ip %}IP {{ aceite.ip }}{% else %}IP não registrado{% endif %}</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="t-mut mb-0">Nenhum aceite registrado: este lead não passou pelo aceite dos Termos de Uso e da Política de Privacidade do pré-cadastro.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+
 {% if lead.status == 'expirado' or not linhas_pdv or situacao == 'expirado' %}
 <div class="aviso-contrato" role="status">
     <i class="bi bi-hourglass-bottom" aria-hidden="true"></i>

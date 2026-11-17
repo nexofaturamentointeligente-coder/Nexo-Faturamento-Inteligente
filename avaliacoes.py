@@ -14,6 +14,7 @@ Princípios:
   - O moderador decide sobre a versão que leu (`versao`): se o cliente editou
     depois, a decisão é recusada e o texto novo precisa ser lido.
   - A sugestão privada nunca entra no DTO público nem em logs ou eventos.
+  - A landing nunca cai por causa das avaliações: contexto_da_landing falha aberta.
 """
 
 import re
@@ -23,9 +24,9 @@ from datetime import date, datetime, time as hora_do_dia, timedelta
 from time import monotonic
 from weakref import WeakKeyDictionary
 
-from flask import current_app
-from sqlalchemy import case, delete, func, inspect, select
-from sqlalchemy.exc import IntegrityError
+from flask import current_app, url_for
+from sqlalchemy import case, delete, func, inspect, or_, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import joinedload, selectinload
 
 from contract_policy import ESTADO_ATIVA, agora, data_local, obter_situacao_contratual
@@ -33,7 +34,7 @@ from extensions import db
 from horario import BRASILIA, UTC, agora_utc, horario_brasilia, iso_utc
 from models import (
     COMENTARIO_PUBLICO_MAX, NOME_EXIBICAO_MAX, STATUS_MODERACAO, STATUS_SUGESTAO, SUGESTAO_PRIVADA_MAX,
-    Analise, AvaliacaoCliente, Empresa, EventoAvaliacao, RelatorioAnalise, SolicitacaoAvaliacao,
+    Analise, AvaliacaoCliente, Empresa, EventoAvaliacao, Notificacao, RelatorioAnalise, SolicitacaoAvaliacao,
     SugestaoMelhoria, Usuario,
 )
 from session_security import condicoes_empresa_acessivel
@@ -61,6 +62,16 @@ TEXTO_CONSENTIMENTO = (
 VERSAO_AVISO_CONSENTIMENTO = "2026-11-01"
 
 MENSAGEM_SUCESSO = "Obrigado pela sua avaliação! Sua opinião é muito importante para a evolução da NEXO."
+# Resposta do envio pelo modal da landing (JSON): depende da autorização marcada no envio.
+MENSAGEM_RECEBIDA = "Recebemos sua avaliação. Ela será publicada depois da revisão da equipe."
+MENSAGEM_RECEBIDA_SEM_PUBLICACAO = ("Recebemos sua avaliação. Como você não autorizou a publicação, ela fica só "
+                                    "com a equipe NEXO.")
+
+# Estados de quem visita a landing (contexto_da_landing), os mesmos do parcial _avaliacao_landing.html.
+ESTADOS_LANDING = ("visitante", "pode_avaliar", "ja_avaliou", "inelegivel", "admin", "indisponivel")
+MOTIVO_SO_CLIENTES = "O envio de avaliações é exclusivo de clientes com acesso ativo ao portal."
+MOTIVO_TERMOS_PENDENTES = ("Para deixar sua avaliação, aceite antes a versão atual dos Termos de Uso e da "
+                           "Política de Privacidade no portal.")
 
 ROTULOS_MODERACAO = {"PENDENTE": "Pendente", "APROVADA": "Aprovada", "REJEITADA": "Rejeitada"}
 ROTULOS_SUGESTAO = {"NOVA": "Nova", "EM_ANALISE": "Em análise", "CONCLUIDA": "Concluída"}
@@ -92,11 +103,11 @@ class ErroModeracao(ValueError):
 
 
 class EsquemaAvaliacoesInconsistente(RuntimeError):
-    """Só parte das tabelas da revisão c5e8a1f4b7d2 existe neste banco."""
+    """Só parte das tabelas da revisão d3f5b7a9c1e2 existe neste banco."""
 
 
 def esquema_avaliacoes_disponivel(sessao=None) -> bool:
-    """True quando as tabelas da revisão c5e8a1f4b7d2 existem (expand -> migrate -> deploy).
+    """True quando as tabelas da revisão d3f5b7a9c1e2 existem (expand -> migrate -> deploy).
 
     Mesmo protocolo de contract_policy.esquema_contratual_disponivel: confirmada
     a presença, fica fixo para o engine; a ausência é reavaliada a cada 30 s,
@@ -115,16 +126,22 @@ def esquema_avaliacoes_disponivel(sessao=None) -> bool:
         _esquema_por_engine[engine] = True
         return True
     if presentes:
-        raise EsquemaAvaliacoesInconsistente("Esquema de avaliações parcial: confira a migração c5e8a1f4b7d2.")
+        raise EsquemaAvaliacoesInconsistente("Esquema de avaliações parcial: confira a migração d3f5b7a9c1e2.")
     _esquema_por_engine[engine] = monotonic()
     return False
 
 
 def url_politica_privacidade() -> str | None:
-    """Endereço publicado da Política de Privacidade; None enquanto não houver."""
+    """Endereço publicado da Política de Privacidade; None enquanto não houver.
+
+    POLITICA_PRIVACIDADE_URL (https:// ou caminho local) vale primeiro; sem ela, a página pública dos
+    documentos legais, quando o blueprint documentos_publicos estiver registrado (GET /politica-de-privacidade).
+    """
     url = (current_app.config.get("POLITICA_PRIVACIDADE_URL") or "").strip()
     if url.startswith("https://") or (url.startswith("/") and not url.startswith(("//", "/\\"))):
         return url
+    if "documentos_publicos.politica_de_privacidade" in current_app.view_functions:
+        return url_for("documentos_publicos.politica_de_privacidade")
     return None
 
 
@@ -229,7 +246,7 @@ def motivo_inelegivel(usuario) -> str | None:
     60 dias valem só para o pedido automático, não para a avaliação voluntária.
     """
     if not usuario.is_cliente or not usuario.ativo or usuario.primeiro_acesso:
-        return "O envio de avaliações é exclusivo de clientes com acesso ativo ao portal."
+        return MOTIVO_SO_CLIENTES
     situacao = obter_situacao_contratual(usuario.empresa, carregar_coberturas=False)
     if situacao.estado != ESTADO_ATIVA:
         return ("O envio de avaliações fica disponível para empresas com conta ativa. "
@@ -483,9 +500,31 @@ def atualizar_status_sugestao(sessao, id_sugestao, novo_status, responsavel, *, 
     return sugestao
 
 
-def excluir_avaliacoes_empresa(sessao, id_empresa: int) -> None:
-    """Exclusão definitiva da empresa: eventos e sugestões caem pela FK em CASCADE."""
-    sessao.execute(delete(AvaliacaoCliente).where(AvaliacaoCliente.id_empresa == id_empresa))
+def excluir_avaliacoes_empresa(sessao, id_empresa: int, ids_usuarios=()) -> None:
+    """Exclusão definitiva da empresa (sem commit): as avaliações dela e as dos usuários dela saem antes deles;
+    eventos e sugestões caem pela FK em CASCADE, e o pedido dos 60 dias sai com o usuário. Os avisos do sininho
+    dos admins que levam a essas avaliações (e citam o nome da empresa) saem junto.
+
+    Sem as tabelas (código no ar antes da migração), não há o que apagar; com só parte delas, nada é tocado
+    aqui e, se houver linha ligada à empresa, a exclusão da rota falha inteira (rollback). O admin que moderou
+    continua existindo: só os eventos e decisões sobre avaliações desta empresa saem junto com elas.
+    """
+    try:
+        if not esquema_avaliacoes_disponivel(sessao):
+            return
+    except EsquemaAvaliacoesInconsistente:
+        current_app.logger.warning("Exclusão de empresa sem apagar avaliações: esquema de avaliações parcial.")
+        return
+    condicao = AvaliacaoCliente.id_empresa == id_empresa
+    ids_usuarios = [int(identificador) for identificador in ids_usuarios]
+    if ids_usuarios:
+        condicao = or_(condicao, AvaliacaoCliente.id_usuario.in_(ids_usuarios))
+    ids_avaliacoes = sessao.scalars(select(AvaliacaoCliente.id_avaliacao).where(condicao)).all()
+    if not ids_avaliacoes:
+        return
+    links = [url_for("avaliacoes.admin_detalhe", id_avaliacao=identificador) for identificador in ids_avaliacoes]
+    sessao.execute(delete(Notificacao).where(Notificacao.link_destino.in_(links)))
+    sessao.execute(delete(AvaliacaoCliente).where(AvaliacaoCliente.id_avaliacao.in_(ids_avaliacoes)))
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +568,84 @@ def depoimentos_publicos(limite: int = DEPOIMENTOS_NO_CARROSSEL) -> list[dict]:
         "data": horario_brasilia(linha.publicada_em, "data"),
         "data_iso": iso_utc(linha.publicada_em),
     } for linha in linhas]
+
+
+def _termos_pendentes(usuario) -> bool:
+    """Há versão vigente dos Termos ou da Política que este cliente ainda não aceitou (a trava do portal
+    devolveria o envio). Sem as tabelas dos documentos, ninguém é barrado, como na própria trava."""
+    import termos_legais
+    from preferencias_usuario import esquema_configuracoes_disponivel
+    return esquema_configuracoes_disponivel() and bool(termos_legais.pendentes(usuario.id_usuario))
+
+
+def _estado_na_landing(usuario) -> tuple[str, str | None]:
+    """(estado, motivo) de quem visita a landing; consulta o banco só para o CLIENTE."""
+    if usuario is None or not getattr(usuario, "is_authenticated", False):
+        return "visitante", None
+    if usuario.is_admin:
+        return "admin", None
+    if not usuario.is_cliente:
+        return "inelegivel", MOTIVO_SO_CLIENTES
+    # Quem já avaliou vê o caminho para a própria avaliação, mesmo de empresa suspensa (pode retirar a autorização).
+    if obter_avaliacao_usuario(usuario.id_usuario) is not None:
+        return "ja_avaliou", None
+    motivo = motivo_inelegivel(usuario)
+    if motivo:
+        return "inelegivel", motivo
+    if _termos_pendentes(usuario):
+        return "inelegivel", MOTIVO_TERMOS_PENDENTES
+    return "pode_avaliar", None
+
+
+def formulario_da_landing() -> dict:
+    """O que o modal da landing precisa: o destino do envio, os rótulos e limites e o aviso de autorização."""
+    return {
+        "acao_url": url_for("avaliacoes.formulario"),
+        "rotulos_nota": ROTULOS_NOTA,
+        "comentario_min": COMENTARIO_PUBLICO_MIN,
+        "comentario_max": COMENTARIO_PUBLICO_MAX,
+        "texto_consentimento": TEXTO_CONSENTIMENTO,
+        "politica_url": url_politica_privacidade(),
+    }
+
+
+def contexto_da_landing(usuario) -> dict:
+    """Contexto da seção Avaliações da landing (templates/_avaliacao_landing.html), para quem visita.
+
+    Chaves: landing_reviews (DTOs de depoimentos_publicos, com nota de 1 a 5 e data), avaliacao_estado (um de
+    ESTADOS_LANDING), avaliacao_motivo (texto ou None), avaliar_url (/avaliar), minha_avaliacao_url,
+    moderacao_url, avaliacao_formulario (só no estado "pode_avaliar"; None nos outros) e
+    avaliacao_continuar_url (/avaliar só para o cliente com termos a aceitar: a trava mostra o aceite e volta
+    para o modal). Usar com render_template("landing.html", **contexto_da_landing(current_user)).
+
+    Falha aberta: erro de banco ou de esquema (inclusive as tabelas ainda ausentes) devolve a seção sem
+    depoimentos, no estado "indisponivel", e só o tipo do erro vai para o log. A transação é desfeita, para a
+    página seguir (no PostgreSQL, a transação abortada derrubaria as consultas seguintes da mesma requisição).
+    """
+    contexto = {
+        "landing_reviews": [], "avaliacao_estado": "indisponivel", "avaliacao_motivo": None,
+        "avaliar_url": url_for("avaliacoes.avaliar"),
+        "minha_avaliacao_url": url_for("avaliacoes.minha_avaliacao"),
+        "moderacao_url": url_for("avaliacoes.admin_lista"),
+        "avaliacao_formulario": None, "avaliacao_continuar_url": None,
+    }
+    try:
+        if not esquema_avaliacoes_disponivel():
+            return contexto
+        depoimentos = depoimentos_publicos()
+        estado, motivo = _estado_na_landing(usuario)
+    except (SQLAlchemyError, EsquemaAvaliacoesInconsistente) as erro:
+        db.session.rollback()
+        # A presença confirmada antes deixa de valer (downgrade com o processo no ar): a próxima reconfere.
+        _esquema_por_engine.pop(db.session.get_bind(), None)
+        current_app.logger.warning("Avaliações da landing indisponíveis (%s).", type(erro).__name__)
+        return contexto
+    contexto.update(landing_reviews=depoimentos, avaliacao_estado=estado, avaliacao_motivo=motivo)
+    if estado == "pode_avaliar":
+        contexto["avaliacao_formulario"] = formulario_da_landing()
+    elif motivo == MOTIVO_TERMOS_PENDENTES:
+        contexto["avaliacao_continuar_url"] = contexto["avaliar_url"]
+    return contexto
 
 
 # ---------------------------------------------------------------------------

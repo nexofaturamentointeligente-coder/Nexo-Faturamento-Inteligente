@@ -1,22 +1,68 @@
-{#- WhatsApp comercial (_macros.html): sem número válido no config, a página sai como antes. -#}
+{#- WhatsApp comercial (_macros.html): sem número válido no config, a página não menciona o WhatsApp. -#}
 {%- import "_macros.html" as m -%}
 {%- set wa = m.numero_whatsapp(config.WHATSAPP_EMPRESA_NUMERO) -%}
+{#- Mensagem do link de ajuda com os relatórios (desenhado só com número). -#}
+{%- set texto_ajuda_relatorios = 'Olá! Preciso de ajuda para exportar os relatórios do meu sistema para a Avaliação de Cenário Externo do NEXO.' -%}
+{#- Aceite dos documentos legais vigentes nos dois diálogos, com a regra da rolagem (Aceite, em
+    static/js/landing-captacao.js). O texto de cada documento vem de /documentos-legais/vigentes quando o diálogo
+    abre e entra por textContent; as caixas nascem desabilitadas. -#}
+{%- macro aceite_dos_termos(prefixo, id_continuar) -%}
+<div class="lp-termos" data-termos>
+            <p class="lp-termos-status" data-termos-status role="status">Carregando os termos…</p>
+            <div class="lp-termo" data-termo="termos" hidden>
+              <h3 class="lp-termo-titulo" id="{{ prefixo }}-termos-titulo">Termos de Uso <span class="lp-termo-versao" data-termo-versao></span></h3>
+              <div class="lp-termo-texto" data-termo-texto tabindex="0" role="region" aria-labelledby="{{ prefixo }}-termos-titulo"></div>
+              <label class="precadastro-aceite"><input type="checkbox" id="{{ prefixo }}-check-termos" data-termo-aceite disabled aria-describedby="{{ prefixo }}-termos-dica"><span>Li e aceito os Termos de Uso.</span></label>
+              <p class="lp-termo-dica" id="{{ prefixo }}-termos-dica" data-termo-dica aria-live="polite">Role o texto até o fim para liberar a confirmação.</p>
+            </div>
+            <div class="lp-termo" data-termo="privacidade" hidden>
+              <h3 class="lp-termo-titulo" id="{{ prefixo }}-privacidade-titulo">Política de Privacidade <span class="lp-termo-versao" data-termo-versao></span></h3>
+              <div class="lp-termo-texto" data-termo-texto tabindex="0" role="region" aria-labelledby="{{ prefixo }}-privacidade-titulo"></div>
+              <label class="precadastro-aceite"><input type="checkbox" id="{{ prefixo }}-check-privacidade" data-termo-aceite disabled aria-describedby="{{ prefixo }}-privacidade-dica"><span>Li e estou ciente da Política de Privacidade e das condições de tratamento dos meus dados.</span></label>
+              <p class="lp-termo-dica" id="{{ prefixo }}-privacidade-dica" data-termo-dica aria-live="polite">Role o texto até o fim para liberar a confirmação.</p>
+            </div>
+            <p class="lp-termos-links">Os mesmos textos em página própria: <a class="text-link" href="{{ url_for('documentos_publicos.termos_de_uso') }}" target="_blank" rel="noopener noreferrer">Termos de Uso</a> · <a class="text-link" href="{{ url_for('documentos_publicos.politica_de_privacidade') }}" target="_blank" rel="noopener noreferrer">Política de Privacidade</a><span class="visually-hidden"> (abrem em nova aba)</span></p>
+          </div>
+          <div class="lp-aviso" data-aviso role="alert"></div>
+          <button type="button" id="{{ id_continuar }}" class="btn-nexo btn-nexo-primary lp-largo" data-termos-continuar disabled>Continuar</button>
+{%- endmacro -%}
+{#- Relatórios da Avaliação de Cenário Externo (Arquivos, em static/js/landing-captacao.js): .csv e .xlsx, até 12
+    e 15 MB somados, conferidos no navegador antes do envio. O link de ajuda pelo WhatsApp só sai com número. -#}
+{%- macro painel_dos_relatorios(prefixo, numero, texto_ajuda) -%}
+<div class="lp-upload" data-arquivos>
+            <p class="lp-upload-apoio" id="{{ prefixo }}-apoio">Envie os relatórios de vendas exportados do sistema da sua loja e, se tiver, os de compras: de um mês ou de vários. Os relatórios aceitos ficam guardados para a equipe NEXO preparar a avaliação.</p>
+            {%- if numero %}
+            <p class="lp-upload-ajuda"><a class="lp-ajuda-link" href="https://wa.me/{{ numero }}?text={{ texto_ajuda|urlencode }}" target="_blank" rel="noopener noreferrer" data-ajuda-whatsapp data-numero="{{ numero }}"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 20.5 5.07 15A8 8 0 1 1 8 17.93Z"/></svg> Precisa de ajuda para exportar seus relatórios do sistema? Fale conosco no WhatsApp<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a></p>
+            {%- endif %}
+            <div class="lp-arquivos-zona" data-arquivos-zona>
+              <input type="file" class="lp-arquivos-campo" id="{{ prefixo }}-arquivos" name="arquivos" accept=".csv,.xlsx" multiple data-arquivos-campo aria-describedby="{{ prefixo }}-arquivos-regras">
+              <label class="lp-arquivos-rotulo" for="{{ prefixo }}-arquivos"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg><strong>Escolher relatórios</strong><span>ou arraste os arquivos para cá</span></label>
+            </div>
+            <p class="lp-dica" id="{{ prefixo }}-arquivos-regras">Arquivos .csv ou .xlsx, até 12 por envio e 15 MB somados.</p>
+            <ul class="lp-arquivos-lista" data-arquivos-lista aria-label="Relatórios escolhidos"></ul>
+          </div>
+{%- endmacro -%}
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NEXO | Indicadores para decisões comerciais mais claras</title>
-  <meta name="description" content="O NEXO interpreta relatórios de compras e vendas da sua loja de tintas, organiza indicadores e apoia decisões de reposição e oportunidades comerciais." />
+  <meta name="description" content="O NEXO interpreta relatórios de compras e vendas da sua loja, organiza indicadores e apoia decisões de reposição e oportunidades comerciais." />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
         rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}" />
+  {%- if avaliacao_estado is defined %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/landing-avaliacao.css') }}" />
+  <script defer src="{{ url_for('static', filename='js/landing-avaliacao.js') }}"></script>
+  {%- endif %}
   <script id="nexo-plotly" async src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8" integrity="sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7" crossorigin="anonymous"></script>
   <script defer src="{{ url_for('static', filename='js/landing.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/landing-video.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/landing-captacao.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/landing-precadastro.js') }}"></script>
 </head>
 <body>
@@ -36,126 +82,66 @@
         <li><a href="#planos">Planos</a></li>
       </ul>
     </nav>
+    {#- Topo (decisão do dono, 16/11/2026): "Entrar" leva ao login do portal; "Cadastre-se" abre o cadastro do
+        lead (#cadastro-lead, static/js/landing-captacao.js). Sem JavaScript, ele leva aos contatos do rodapé. #}
     <div class="header-actions">
-      <a href="{{ url_for('auth.login') }}" class="btn-nexo btn-nexo-primary">Acessar Portal <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></a>
+      <a href="{{ url_for('auth.login') }}" class="lp-entrar">Entrar</a>
+      <a href="#contato" class="btn-nexo btn-nexo-primary lp-cadastre" data-cadastro-gatilho>Cadastre-se</a>
       <button id="landing-menu-toggle" class="landing-menu-toggle" type="button" aria-controls="landing-navigation" aria-expanded="false" aria-label="Abrir menu de navegação" hidden>
-        <span aria-hidden="true">☰</span><span>Menu</span>
+        <span aria-hidden="true">☰</span><span class="lp-menu-rotulo">Menu</span>
       </button>
     </div>
   </div>
 </header>
 <main id="conteudo" tabindex="-1">
-<section class="hero" id="inicio" aria-labelledby="hero-title">
+<section class="hero lp-hero" id="inicio" aria-labelledby="hero-title">
   <div class="bg-ornament" aria-hidden="true"></div>
-  <div class="container position-relative">
-    <div class="row align-items-center g-5">
-      <div class="col-lg-6">
-        <span class="section-tag">Inteligência para a sua loja</span>
-        <h1 id="hero-title">Decisões mais claras para <span class="accent">fazer sua loja crescer.</span></h1>
-        <p class="lead">O NEXO interpreta seus relatórios de compras e vendas e entrega os indicadores essenciais. Entenda os números, identifique oportunidades e planeje a reposição com mais segurança.</p>
-        <p class="hero-audience">Para lojas de tintas, materiais de pintura e pequenos comércios de construção e reforma.</p>
-        <div class="hero-cta">
-          <a href="#planos" class="btn-nexo btn-nexo-primary btn-nexo-lg">Conheça os planos <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></a>
-          <a href="#demonstracao" class="btn-nexo btn-nexo-secondary btn-nexo-lg">Veja o NEXO em ação</a>
-        </div>
-        <p class="hero-note">Mais clareza para decidir, no seu ritmo. Os resultados dependem da realidade e das decisões de cada empresa.</p>
-      </div>
-      <div class="col-lg-6">
-        <div class="mockup">
-          <div class="mockup-head">
-            <div class="mockup-title-block">
-              <div class="mt-1">Painel demonstrativo</div>
-              <div class="mt-2">Exemplo de análise mensal</div>
-            </div>
-            <span class="badge-published">
-              <span class="dot"></span>
-              Valores ilustrativos
-            </span>
-          </div>
-
-          <div class="kpi-grid">
-            <div class="kpi-tile green">
-              <div class="label">Faturamento total</div>
-              <div class="value">R$ 142.800</div>
-            </div>
-            <div class="kpi-tile">
-              <div class="label">Total comprado</div>
-              <div class="value">R$ 156.300</div>
-            </div>
-            <div class="kpi-tile amber">
-              <div class="label">Indicador de Pressão de Estoque</div>
-              <div class="value">R$ 13.500</div>
-            </div>
-            <div class="kpi-tile purple">
-              <div class="label">Mais vendido</div>
-              <div class="value" style="font-size:13px;">Tinta Acrílica Fosca 18L · 318un</div>
-            </div>
-          </div>
-
-          <div class="mockup-chart" id="hero-chart" aria-hidden="true"></div>
-          <p class="chart-fallback commercial-note" data-chart-fallback-for="hero-chart">Os dados da demonstração também estão disponíveis na descrição abaixo.</p>
-          <details class="chart-summary">
-            <summary>Consultar os valores do gráfico</summary>
-            <p>Compras: R$ 156.300. Vendas: R$ 142.800. Valores ilustrativos do mesmo período.</p>
-          </details>
-
-          <div class="mockup-list">
-            <div class="ll">Parecer estratégico · exemplo</div>
-            <div class="row-i">
-              <strong>Maior faturamento</strong>
-              <span class="v">Massa Corrida Premium PVA 18L · R$ 28.450</span>
-            </div>
-            <div class="row-i">
-              <strong>Maior saldo estimado parado</strong>
-              <span class="v">Esmalte Sintético Brilhante Alto Brilho 3,6L | 85 un estimadas</span>
-            </div>
-          </div>
-        </div>
-      </div>
+  <div class="container lp-hero-conteudo">
+    <h1 id="hero-title">Decisões mais claras para <span class="accent">fazer sua loja crescer.</span></h1>
+    <p class="lead">O NEXO interpreta seus relatórios de compras e vendas e entrega os indicadores essenciais. Entenda os números, identifique oportunidades e planeje a reposição com mais segurança.</p>
+    <div class="hero-cta">
+      <a href="#planos" class="btn-nexo btn-nexo-primary btn-nexo-lg">Conheça os planos <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></a>
+      <a href="#demonstracao" class="btn-nexo btn-nexo-secondary btn-nexo-lg">Veja o NEXO em ação</a>
     </div>
   </div>
 </section>
 
-<!-- OPORTUNIDADES -->
+<!-- BENEFÍCIOS -->
 <section id="problema" class="opportunities-section" aria-labelledby="opportunities-title">
   <div class="container">
-    <div class="text-center mb-5">
-      <span class="section-tag">Oportunidades nos seus dados</span>
-      <h2 id="opportunities-title" class="section-title">Seus relatórios podem abrir <span class="accent">novos caminhos para o negócio.</span></h2>
-      <p class="section-subtitle mx-auto text-center">As informações já existem. O NEXO ajuda a entender o que compras e vendas sinalizam, sem depender de horas cruzando planilhas.</p>
+    <div class="lp-secao-cabeca">
+      <h2 id="opportunities-title" class="section-title">Veja onde o seu caixa <span class="accent">está perdendo dinheiro.</span></h2>
+      <p class="section-subtitle">As informações já estão nos relatórios do seu sistema. O NEXO cruza compras e vendas e mostra, em reais, onde o dinheiro escapa.</p>
     </div>
-    <div class="row g-4">
-      <div class="col-md-6 col-lg-3"><article class="nexo-card"><div class="nexo-card-icon purple" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></div><h3>Enxergue oportunidades</h3><p>Identifique os produtos que movimentam seu faturamento e ganhe referências para planejar os próximos passos.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="nexo-card"><div class="nexo-card-icon green" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></div><h3>Cuide do capital de giro</h3><p>Compare compras e vendas para avaliar a reposição com mais contexto e reduzir decisões baseadas somente na intuição.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="nexo-card"><div class="nexo-card-icon amber" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></div><h3>Observe sinais de excesso</h3><p>Perceba possíveis descasamentos entre o volume comprado e a saída observada, sem confundir estimativa com estoque físico.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="nexo-card"><div class="nexo-card-icon purple" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 19 19 5M5 5h14v14"/></svg></div><h3>Ganhe clareza para agir</h3><p>Reúna indicadores e recomendações em uma leitura organizada para apoiar decisões comerciais ao longo do tempo.</p></article></div>
-    </div>
-    <p class="commercial-note text-center mt-4">Identificar oportunidades apoia o crescimento. Não representa garantia de aumento de faturamento ou de eliminação de produtos parados.</p>
+    <ul class="lp-beneficios">
+      <li><article class="nexo-card lp-beneficio"><div class="nexo-card-icon red" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 17 13.5 8.5l-5 5L2 7"/><path d="M16 17h6v-6"/></svg></div><h3>Pare de vender abaixo do custo</h3><p>Veja as vendas que saíram por menos do que custaram e quanto isso tirou do seu caixa, produto a produto.</p></article></li>
+      <li><article class="nexo-card lp-beneficio"><div class="nexo-card-icon amber" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg></div><h3>Recupere o que escapa nos descontos</h3><p>Descubra os produtos vendidos fora do preço normal e o valor que ficou pelo caminho em cada venda.</p></article></li>
+      <li><article class="nexo-card lp-beneficio"><div class="nexo-card-icon green" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 21.7a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7z"/><path d="M12 22V12M3.3 7l8.7 5 8.7-5M7.5 4.3l9 5.1"/></svg></div><h3>Libere o capital parado</h3><p>Compare o que foi comprado com o que foi vendido e veja onde o dinheiro está imobilizado em estoque.</p></article></li>
+      <li><article class="nexo-card lp-beneficio"><div class="nexo-card-icon purple" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h14a1 1 0 0 1 1 1v3h-3a2 2 0 0 0 0 4h3v3a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V5"/></svg></div><h3>Saiba quanto dá para recuperar</h3><p>Receba uma estimativa do dinheiro recuperável e um Plano de Ação de 12 meses para colocar as correções em prática.</p></article></li>
+    </ul>
   </div>
 </section>
 <section id="como-funciona" aria-labelledby="solution-title">
   <div class="container">
-    <div class="text-center mb-5">
-      <span class="section-tag">Da informação à decisão</span>
+    <div class="lp-secao-cabeca">
       <h2 id="solution-title" class="section-title">O NEXO interpreta seus relatórios.<br/><span class="accent">Você decide com mais contexto.</span></h2>
-      <p class="section-subtitle mx-auto text-center">Compras, vendas e oportunidades organizadas em indicadores, gráficos e no Parecer Estratégico do Sistema.</p>
+      <p class="section-subtitle">Compras, vendas e oportunidades organizadas em indicadores, gráficos e no Parecer Estratégico do Sistema.</p>
     </div>
-    <div class="row g-4">
-      <div class="col-md-6 col-lg-3"><article class="flow-card"><div class="flow-num" aria-hidden="true">01</div><h3>Envie seus relatórios</h3><p>Disponibilize os arquivos de compras e vendas exportados do seu sistema, em CSV ou XLSX.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="flow-card"><div class="flow-num" aria-hidden="true">02</div><h3>Organização dos dados</h3><p>O NEXO interpreta e organiza os relatórios para calcular os indicadores do período.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="flow-card"><div class="flow-num" aria-hidden="true">03</div><h3>Indicadores estratégicos</h3><p>Acompanhe gráficos e informações para compreender o faturamento e o comportamento dos produtos.</p></article></div>
-      <div class="col-md-6 col-lg-3"><article class="flow-card"><div class="flow-num" aria-hidden="true">04</div><h3>Parecer estratégico</h3><p>Receba uma leitura dos resultados e recomendações para apoiar sua próxima decisão.</p></article></div>
-    </div>
-    <p class="process-note commercial-note">A equipe NEXO acompanha a análise, revisa os resultados e elabora ou revisa o parecer antes de sua publicação no portal.</p>
+    <ol class="lp-passos">
+      <li class="flow-card"><span class="flow-num" aria-hidden="true">01</span><h3>Envie seus relatórios</h3><p>Disponibilize os arquivos de compras e vendas exportados do seu sistema, em CSV ou XLSX.</p></li>
+      <li class="flow-card"><span class="flow-num" aria-hidden="true">02</span><h3>Organização dos dados</h3><p>O NEXO interpreta e organiza os relatórios para calcular os indicadores do período.</p></li>
+      <li class="flow-card"><span class="flow-num" aria-hidden="true">03</span><h3>Indicadores estratégicos</h3><p>Acompanhe gráficos e informações para compreender o faturamento e o comportamento dos produtos.</p></li>
+      <li class="flow-card"><span class="flow-num" aria-hidden="true">04</span><h3>Parecer estratégico</h3><p>Receba uma leitura dos resultados e recomendações para apoiar sua próxima decisão.</p></li>
+    </ol>
   </div>
 </section>
 
 <section id="avaliacoes" class="reviews-section" aria-labelledby="reviews-title">
   <div class="container">
-    <div class="text-center mb-4">
-      <span class="section-tag">Depoimentos</span>
+    <div class="lp-secao-cabeca">
+      <span class="section-tag section-tag--destaque">Avaliações</span>
       <h2 id="reviews-title" class="section-title">Histórias reais merecem <span class="accent">espaço.</span></h2>
-      <p class="section-subtitle mx-auto text-center">Depoimentos de clientes só serão publicados com autorização.</p>
+      <p class="section-subtitle">Depoimentos de clientes só serão publicados com autorização.</p>
     </div>
     {# COM-002 fornecerá um DTO público aprovado, sem sugestões ou dados privados. #}
     {% set reviews = namespace(items=[]) %}
@@ -167,7 +153,11 @@
     <div class="review-carousel" data-review-carousel role="region" aria-roledescription="carrossel" aria-label="Depoimentos autorizados">
       <div class="review-slides" data-review-slides>
         {% for review in reviews.items %}
+        {%- set nota = review.nota|default(none) %}
         <article class="review-card" data-review-slide role="group" aria-roledescription="depoimento" aria-label="Depoimento {{ loop.index }} de {{ reviews.items|length }}">
+          {%- if nota is number and nota >= 1 and nota <= 5 %}
+          <p class="review-nota" role="img" aria-label="Nota {{ nota|int }} de 5">{% for estrela in range(1, 6) %}<svg class="lp-estrela{% if estrela <= nota|int %} is-cheia{% endif %}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>{% endfor %}</p>
+          {%- endif %}
           <blockquote><p>{{ review.quote }}</p></blockquote>
           <p class="review-author">{{ review.author }}{% if review.company|default('') %} · {{ review.company }}{% endif %}</p>
         </article>
@@ -184,38 +174,89 @@
       </div>
       <p class="visually-hidden" data-review-status role="status" aria-live="polite" aria-atomic="true"></p>
     </div>
-    <div class="review-cta text-center mt-4">
+    {%- if avaliacao_estado is defined %}
+    {% include "_avaliacao_landing.html" %}
+    {%- else %}
+    <div class="review-cta">
       <button type="button" class="btn-nexo btn-nexo-secondary" disabled aria-describedby="reviews-availability">Deixar Avaliação</button>
-      <p id="reviews-availability" class="commercial-note mt-2">O envio de avaliações ainda não está disponível.</p>
+      <p id="reviews-availability" class="commercial-note">O envio de avaliações ainda não está disponível.</p>
     </div>
+    {%- endif %}
   </div>
 </section>
 
 <section id="indicadores" class="indicators-section" aria-labelledby="indicators-title">
   <div class="container">
-    <div class="text-center mb-5">
+    <div class="lp-secao-cabeca">
       <span class="section-tag">Indicadores Estratégicos</span>
       <h2 id="indicators-title" class="section-title">Os números essenciais para <span class="accent">entender sua operação.</span></h2>
-      <p class="section-subtitle mx-auto text-center">Uma visão organizada de compras e vendas, de acordo com os dados disponíveis nos relatórios.</p>
+      <p class="section-subtitle">Uma visão organizada de compras, vendas e custos, de acordo com os dados disponíveis nos relatórios.</p>
     </div>
-    <div class="kpi-list">
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">01</span><span class="kpi-name">Faturamento total do período</span><span class="kpi-source">Vendas</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">02</span><span class="kpi-name">Total comprado no período</span><span class="kpi-source">Compras</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">03</span><span class="kpi-name">Indicador de Pressão de Estoque</span><span class="kpi-source">Estimativa</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">04</span><span class="kpi-name">Produto mais vendido em quantidade</span><span class="kpi-source">Vendas</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">05</span><span class="kpi-name">Produto com maior faturamento</span><span class="kpi-source">Vendas</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">06</span><span class="kpi-name">Produto com maior saldo estimado parado</span><span class="kpi-source">Estimativa</span></div>
-      <div class="kpi-row"><span class="kpi-index" aria-hidden="true">07</span><span class="kpi-name">Curva ABC dos produtos</span><span class="kpi-source">Faturamento</span></div>
+    {#- Só o que tem tela no portal hoje (Docs/PLANOS_E_RAIO_X.md). Os indicadores executivos calculados sem tela
+        ficam de fora até ganharem uma. #}
+    <div class="lp-indicadores">
+      <div class="lp-grupo lp-grupo--largo">
+        <div class="lp-grupo-cabeca">
+          <span class="lp-grupo-icone" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20V11M10 20V5M16 20v-7M21 20H3"/></svg></span>
+          <div><h3>Vendas e compras</h3><p>O retrato do período, direto dos seus relatórios.</p></div>
+        </div>
+        <ul class="lp-grupo-lista">
+          <li>Faturamento total do período</li>
+          <li>Total comprado no período</li>
+          <li>Indicador de Pressão de Estoque <span class="lp-selo">Estimativa</span></li>
+          <li>Produto mais vendido em quantidade</li>
+          <li>Produto com maior faturamento</li>
+          <li>Produto com maior saldo estimado parado <span class="lp-selo">Estimativa</span></li>
+          <li>Curva ABC dos produtos</li>
+          <li>Compras × vendas ao longo dos meses</li>
+        </ul>
+      </div>
+      <div class="lp-grupo">
+        <div class="lp-grupo-cabeca">
+          <span class="lp-grupo-icone is-ambar" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg></span>
+          <div><h3>Raio-X do caixa</h3><p>Onde o dinheiro escapa nas vendas do dia a dia.</p></div>
+        </div>
+        <ul class="lp-grupo-lista">
+          <li>Dinheiro recuperável (estimativa)</li>
+          <li>Saúde do cadastro (0 a 100)</li>
+          <li>Vendas sem custo informado</li>
+          <li>Produtos vendidos fora do preço normal</li>
+          <li>Perdas e dinheiro recuperável mês a mês</li>
+        </ul>
+      </div>
+      <div class="lp-grupo">
+        <div class="lp-grupo-cabeca">
+          <span class="lp-grupo-icone is-vermelho" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <div><h3>Auditoria de custos <span class="lp-selo lp-selo--plano">Prata em diante</span></h3><p>Custo, margem e prejuízo, produto a produto.</p></div>
+        </div>
+        <ul class="lp-grupo-lista">
+          <li>Prejuízo direto no caixa</li>
+          <li>Margem e sobra bruta</li>
+          <li>Produtos vendidos com prejuízo</li>
+          <li>Custo subindo sem reajuste de preço</li>
+        </ul>
+      </div>
+      <div class="lp-grupo">
+        <div class="lp-grupo-cabeca">
+          <span class="lp-grupo-icone is-verde" aria-hidden="true"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span>
+          <div><h3>Ação e acompanhamento</h3><p>Do diagnóstico à prática, mês a mês.</p></div>
+        </div>
+        <ul class="lp-grupo-lista">
+          <li>Síntese executiva com semáforos de ação</li>
+          <li>Plano de Ação (12 meses)</li>
+          <li>Evolução &amp; Conquistas</li>
+          <li>Parecer estratégico com exportação em PDF</li>
+        </ul>
+      </div>
     </div>
-    <p class="indicator-note" id="stock-estimate-note">O Indicador de Pressão de Estoque é a diferença entre total comprado e faturamento do período. É uma estimativa de descasamento, não uma medição de estoque físico, lucro ou margem. O saldo por produto depende de informações de produto e quantidade nas compras.</p>
   </div>
 </section>
 <section id="demonstracao" aria-labelledby="demo-title">
   <div class="container">
-    <div class="text-center mb-5">
+    <div class="lp-secao-cabeca">
       <span class="section-tag">Conheça o portal</span>
       <h2 id="demo-title" class="section-title">Seja um cliente NEXO e <span class="accent">tenha acesso ao portal.</span></h2>
-      <p class="section-subtitle mx-auto text-center">Explore uma demonstração dos indicadores, gráficos e do Parecer Estratégico do Sistema. Os valores apresentados são ilustrativos.</p>
+      <p class="section-subtitle">Explore uma demonstração dos indicadores, gráficos e do Parecer Estratégico do Sistema. Os valores apresentados são ilustrativos.</p>
     </div>
     <figure class="motion-demo" aria-labelledby="motion-demo-title">
       <div class="motion-demo-intro">
@@ -268,89 +309,116 @@
       </details>
     </figure>
 
-    <div class="dashboard-demo">
-      <div class="demo-head">
-        <div class="demo-head-title">
-          <h3>Visão geral · Painel demonstrativo</h3>
-          <p>Exemplo de análise mensal · Valores ilustrativos</p>
-        </div>
-        <span class="badge-published">
-          <span class="dot"></span>
-          Demonstração
-        </span>
+    {#- Painel demonstrativo no visual do portal atual. Valores ilustrativos (os mesmos dos gráficos e das tabelas);
+        os produtos são genéricos, de varejo. #}
+    <div class="dashboard-demo lp-painel">
+      <div class="lp-painel-janela" aria-hidden="true">
+        <span class="lp-painel-pontos"><span></span><span></span><span></span></span>
+        <span class="lp-painel-endereco">Portal NEXO · Visão geral</span>
       </div>
-
-      <div class="demo-kpi-grid">
-        <div class="demo-kpi green">
-          <div class="label">
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            Faturamento total
-          </div>
-          <div class="value">R$ 142.800</div>
-          <div class="sub">Resultado consolidado da análise</div>
+      <div class="lp-painel-area">
+        <div class="lp-painel-menu" aria-hidden="true">
+          <span class="is-ativo"><svg class="inline-icon" viewBox="0 0 24 24" focusable="false"><path d="M4 20V11M10 20V5M16 20v-7M21 20H3"/></svg>Visão geral</span>
+          <span><svg class="inline-icon" viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>Raio-X do caixa</span>
+          <span><svg class="inline-icon" viewBox="0 0 24 24" focusable="false"><path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/></svg>Auditoria de custos</span>
+          <span><svg class="inline-icon" viewBox="0 0 24 24" focusable="false"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>Plano de Ação</span>
+          <span><svg class="inline-icon" viewBox="0 0 24 24" focusable="false"><path d="m3 17 6-6 4 4 8-8M15 7h6v6"/></svg>Evolução</span>
         </div>
-        <div class="demo-kpi">
-          <div class="label">
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11H1l8-8 8 8h-8v8H9z"></path></svg>
-            Total comprado
-          </div>
-          <div class="value">R$ 156.300</div>
-          <div class="sub">Baseado no relatório de compras enviado</div>
-        </div>
-        <div class="demo-kpi amber">
-          <div class="label">
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-            Indicador de Pressão de Estoque
-          </div>
-          <div class="value">R$ 13.500</div>
-          <div class="sub">Estimativa · não representa lucro real</div>
-        </div>
-      </div>
-
-      <div class="demo-charts">
-        <div class="demo-chart-card">
-          <h3>Evolução do Faturamento × Compras</h3>
-          <div class="sub">Últimos 5 meses · em R$</div>
-          <div id="demo-chart-evolucao" style="height: 240px;" aria-hidden="true"></div>
-          <p class="chart-fallback commercial-note" data-chart-fallback-for="demo-chart-evolucao">Os dados da demonstração também estão disponíveis na descrição abaixo.</p>
-          <details class="chart-summary">
-            <summary>Consultar dados de faturamento e compras</summary>
-            <div class="table-responsive">
-              <table>
-                <caption>Valores ilustrativos em reais</caption>
-                <thead><tr><th scope="col">Mês</th><th scope="col">Compras</th><th scope="col">Faturamento</th></tr></thead>
-                <tbody>
-                  <tr><th scope="row">Dez/25</th><td>138.400</td><td>132.100</td></tr>
-                  <tr><th scope="row">Jan/26</th><td>124.900</td><td>119.800</td></tr>
-                  <tr><th scope="row">Fev/26</th><td>149.600</td><td>138.200</td></tr>
-                  <tr><th scope="row">Mar/26</th><td>152.300</td><td>141.600</td></tr>
-                  <tr><th scope="row">Abr/26</th><td>156.300</td><td>142.800</td></tr>
-                </tbody>
-              </table>
+        <div class="lp-painel-conteudo">
+          <div class="demo-head">
+            <div class="demo-head-title">
+              <h3>Visão geral · Painel demonstrativo</h3>
+              <p>Exemplo de análise mensal · Valores ilustrativos</p>
             </div>
-          </details>
-        </div>
-        <div class="demo-chart-card">
-          <h3>Produtos de destaque da análise</h3>
-          <div class="sub">Período analisado</div>
-          <div id="demo-chart-top" style="height: 240px;" aria-hidden="true"></div>
-          <p class="chart-fallback commercial-note" data-chart-fallback-for="demo-chart-top">Os dados da demonstração também estão disponíveis na descrição abaixo.</p>
-          <details class="chart-summary">
-            <summary>Consultar faturamento dos produtos demonstrativos</summary>
-            <div class="table-responsive">
-              <table>
-                <caption>Valores ilustrativos em reais</caption>
-                <thead><tr><th scope="col">Produto</th><th scope="col">Faturamento</th></tr></thead>
-                <tbody>
-                  <tr><th scope="row">Massa Corrida Premium PVA 18L</th><td>28.450</td></tr>
-                  <tr><th scope="row">Tinta Acrílica Fosca 18L</th><td>24.800</td></tr>
-                  <tr><th scope="row">Esmalte Sintético Brilhante 3,6L</th><td>19.200</td></tr>
-                  <tr><th scope="row">Tinta Látex Branca 18L</th><td>16.500</td></tr>
-                  <tr><th scope="row">Selador Acrílico 18L</th><td>12.700</td></tr>
-                </tbody>
-              </table>
+            <span class="badge-published">
+              <span class="dot"></span>
+              Demonstração
+            </span>
+          </div>
+
+          <div class="demo-kpi-grid">
+            <div class="demo-kpi green">
+              <div class="label">
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                Faturamento total
+              </div>
+              <div class="value">R$ 142.800</div>
+              <div class="lp-variacao">Alta de 0,8% sobre mar/26</div>
+              <div class="sub">Resultado consolidado da análise</div>
             </div>
-          </details>
+            <div class="demo-kpi">
+              <div class="label">
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11H1l8-8 8 8h-8v8H9z"></path></svg>
+                Total comprado
+              </div>
+              <div class="value">R$ 156.300</div>
+              <div class="lp-variacao">Alta de 2,6% sobre mar/26</div>
+              <div class="sub">Baseado no relatório de compras enviado</div>
+            </div>
+            <div class="demo-kpi amber">
+              <div class="label">
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                Indicador de Pressão de Estoque
+              </div>
+              <div class="value">R$ 13.500</div>
+              <div class="sub">Estimativa · não representa lucro real</div>
+            </div>
+            <div class="demo-kpi purple">
+              <div class="label">
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><path d="M3 6h18M16 10a4 4 0 0 1-8 0"></path></svg>
+                Mais vendido
+              </div>
+              <div class="value lp-valor-texto">Garrafa térmica 1 L</div>
+              <div class="sub">318 unidades no mês</div>
+            </div>
+          </div>
+
+          <div class="demo-charts">
+            <div class="demo-chart-card">
+              <h3>Evolução do Faturamento × Compras</h3>
+              <div class="sub">Últimos 5 meses · em R$</div>
+              <div id="demo-chart-evolucao" style="height: 240px;" aria-hidden="true"></div>
+              <p class="chart-fallback commercial-note" data-chart-fallback-for="demo-chart-evolucao">Os dados da demonstração também estão disponíveis na descrição abaixo.</p>
+              <details class="chart-summary">
+                <summary>Consultar dados de faturamento e compras</summary>
+                <div class="table-responsive">
+                  <table>
+                    <caption>Valores ilustrativos em reais</caption>
+                    <thead><tr><th scope="col">Mês</th><th scope="col">Compras</th><th scope="col">Faturamento</th></tr></thead>
+                    <tbody>
+                      <tr><th scope="row">Dez/25</th><td>138.400</td><td>132.100</td></tr>
+                      <tr><th scope="row">Jan/26</th><td>124.900</td><td>119.800</td></tr>
+                      <tr><th scope="row">Fev/26</th><td>149.600</td><td>138.200</td></tr>
+                      <tr><th scope="row">Mar/26</th><td>152.300</td><td>141.600</td></tr>
+                      <tr><th scope="row">Abr/26</th><td>156.300</td><td>142.800</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
+            <div class="demo-chart-card">
+              <h3>Produtos de destaque da análise</h3>
+              <div class="sub">Período analisado · faturamento em R$</div>
+              <div id="demo-chart-top" style="height: 240px;" aria-hidden="true"></div>
+              <p class="chart-fallback commercial-note" data-chart-fallback-for="demo-chart-top">Os dados da demonstração também estão disponíveis na descrição abaixo.</p>
+              <details class="chart-summary">
+                <summary>Consultar faturamento dos produtos demonstrativos</summary>
+                <div class="table-responsive">
+                  <table>
+                    <caption>Valores ilustrativos em reais</caption>
+                    <thead><tr><th scope="col">Produto</th><th scope="col">Faturamento</th></tr></thead>
+                    <tbody>
+                      <tr><th scope="row">Kit de ferramentas 12 peças</th><td>28.450</td></tr>
+                      <tr><th scope="row">Garrafa térmica inox 1 L</th><td>24.800</td></tr>
+                      <tr><th scope="row">Fone de ouvido Bluetooth</th><td>19.200</td></tr>
+                      <tr><th scope="row">Mochila escolar reforçada</th><td>16.500</td></tr>
+                      <tr><th scope="row">Lâmpada LED 9 W, caixa com 10</th><td>12.700</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -359,10 +427,10 @@
 
 <section id="metodo" class="method-section" aria-labelledby="method-title">
   <div class="container">
-    <div class="text-center mb-4">
+    <div class="lp-secao-cabeca">
       <span class="section-tag">Método NEXO</span>
       <h2 id="method-title" class="section-title">Mais gráficos, <span class="accent">menos textos e dados soltos.</span></h2>
-      <p class="section-subtitle mx-auto text-center">O Parecer Estratégico do Sistema conecta os indicadores ao contexto do seu negócio. A equipe NEXO revisa a análise antes de disponibilizá-la no portal.</p>
+      <p class="section-subtitle">O Parecer Estratégico do Sistema conecta os indicadores ao contexto do seu negócio. A equipe NEXO revisa a análise antes de disponibilizá-la no portal.</p>
     </div>
     <div class="report-blocks">
       <article class="report-block"><div class="step" aria-hidden="true">ETAPA 01</div><h3>Resumo executivo</h3><p>Visão consolidada do período, em uma leitura direta.</p></article>
@@ -375,11 +443,13 @@
 </section>
 <section id="planos" aria-labelledby="plans-title">
   <div class="container">
-    <div class="text-center mb-5">
+    <div class="lp-secao-cabeca">
       <span class="section-tag">Planos NEXO</span>
       <h2 id="plans-title" class="section-title">Escolha o ritmo de análise <span class="accent">da sua loja.</span></h2>
-      <p class="section-subtitle mx-auto text-center">Os três planos incluem indicadores e parecer estratégico. Escolha a profundidade e a frequência adequadas à sua operação.</p>
+      <p class="section-subtitle">Todos os planos incluem indicadores e parecer estratégico. Escolha a profundidade e a frequência adequadas à sua operação.</p>
     </div>
+    {#- Os cards só apresentam os planos, sem preço nem botão (decisão do dono): a contratação é pelo CONTRATAR
+        do fim da página. Só entregas que já estão no portal; o que está em implantação não entra. #}
     <div class="plans-grid">
       <article class="plan bronze">
         <h3 class="plan-name">BRONZE</h3>
@@ -387,10 +457,12 @@
         <div class="plan-price">Sob consulta</div>
         <p class="plan-price-sub">1 análise por mês</p>
         <ul class="plan-features">
-          <li><span aria-hidden="true">✓</span><span>1 análise mensal</span></li>
-          <li><span aria-hidden="true">✓</span><span>Leitura inicial dos dados</span></li>
-          <li><span aria-hidden="true">✓</span><span>Parecer objetivo</span></li>
-          <li><span aria-hidden="true">✓</span><span>Indicadores principais</span></li>
+          <li><span aria-hidden="true">✓</span><span>1 análise mensal com indicadores, Curva ABC e semáforos de ação</span></li>
+          <li><span aria-hidden="true">✓</span><span>Raio-X do caixa: saúde do cadastro, preços fora do normal e dinheiro recuperável</span></li>
+          <li><span aria-hidden="true">✓</span><span>Plano de Ação (12 meses) e Evolução &amp; Conquistas</span></li>
+          <li><span aria-hidden="true">✓</span><span>Parecer estratégico com exportação em PDF</span></li>
+          <li><span aria-hidden="true">✓</span><span>Histórico do Raio-X dos últimos 6 meses</span></li>
+          <li><span aria-hidden="true">✓</span><span>Atendimento 100% digital</span></li>
         </ul>
       </article>
       <article class="plan prata">
@@ -399,10 +471,12 @@
         <div class="plan-price">Sob consulta</div>
         <p class="plan-price-sub">1 análise por mês</p>
         <ul class="plan-features">
-          <li><span aria-hidden="true">✓</span><span>1 análise mensal</span></li>
-          <li><span aria-hidden="true">✓</span><span>Indicadores principais do período</span></li>
-          <li><span aria-hidden="true">✓</span><span>Parecer completo</span></li>
-          <li><span aria-hidden="true">✓</span><span>Pontos positivos, alertas e recomendações</span></li>
+          <li><span aria-hidden="true">✓</span><span>Tudo do Bronze</span></li>
+          <li><span aria-hidden="true">✓</span><span>Auditoria de custos: vendas abaixo do custo e prejuízo direto no caixa</span></li>
+          <li><span aria-hidden="true">✓</span><span>Margem bruta em R$ e % por produto e por mês</span></li>
+          <li><span aria-hidden="true">✓</span><span>Alerta de custo subindo sem reajuste de preço</span></li>
+          <li><span aria-hidden="true">✓</span><span>Histórico do Raio-X de até 24 meses</span></li>
+          <li><span aria-hidden="true">✓</span><span>Reunião remota de 30 minutos para começar e suporte prioritário</span></li>
         </ul>
       </article>
       <article class="plan ouro featured">
@@ -412,200 +486,282 @@
         <div class="plan-price">Sob consulta</div>
         <p class="plan-price-sub">Até 2 análises por mês · recorte quinzenal</p>
         <ul class="plan-features">
-          <li><span aria-hidden="true">✓</span><span>Até 2 análises por mês</span></li>
-          <li><span aria-hidden="true">✓</span><span>Recorte quinzenal disponível</span></li>
-          <li><span aria-hidden="true">✓</span><span>Indicadores consolidados</span></li>
-          <li><span aria-hidden="true">✓</span><span>Parecer aprofundado</span></li>
-          <li><span aria-hidden="true">✓</span><span>Recomendações mais detalhadas</span></li>
+          <li><span aria-hidden="true">✓</span><span>Tudo do Prata</span></li>
+          <li><span aria-hidden="true">✓</span><span>Até 2 análises por mês, com recorte quinzenal</span></li>
+          <li><span aria-hidden="true">✓</span><span>Histórico completo no Raio-X</span></li>
+          <li><span aria-hidden="true">✓</span><span>Reunião estratégica mensal de 30 minutos</span></li>
+        </ul>
+      </article>
+      <article class="plan personalizado">
+        <h3 class="plan-name">PERSONALIZADO / ENTERPRISE</h3>
+        <p class="plan-tag">Para operações com necessidades próprias.</p>
+        <div class="plan-price">Sob consulta</div>
+        <p class="plan-price-sub">Escopo definido com a equipe NEXO</p>
+        <ul class="plan-features">
+          <li><span aria-hidden="true">✓</span><span>Tudo do Ouro</span></li>
+          <li><span aria-hidden="true">✓</span><span>Histórico do Raio-X sem limite</span></li>
+          <li><span aria-hidden="true">✓</span><span>Consultor dedicado e implantação acompanhada de perto</span></li>
+          <li><span aria-hidden="true">✓</span><span>Escopo e condições combinados com a equipe NEXO</span></li>
         </ul>
       </article>
     </div>
-    {#- Contratação (decisão do dono, 15/11/2026): um CONTRATAR único abaixo da grade, no lugar dos
-        "Contrate Agora" de cada card. Sem JavaScript, ele leva direto ao WhatsApp com a mensagem de
-        contratação (macro intacta); com JavaScript, static/js/landing-precadastro.js abre o
-        pré-cadastro (#precadastro). Sem número válido, sai desabilitado, como os botões de antes. #}
-    <div class="plans-cta text-center" data-precadastro-gatilho>
-      {%- if wa %}
-      {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar, 'CONTRATAR', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg', descrito_por='contratacao-status') }}
-      {%- else %}
-      <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="contratacao-status">CONTRATAR</button>
-      {%- endif %}
-    </div>
-    <div class="plan-availability text-center mt-4" id="contratacao">
-      {%- if wa %}
-      <p class="commercial-note" id="contratacao-status">Contrate pelo WhatsApp: a equipe NEXO responde e combina o início com você.</p>
-      {%- else %}
-      <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta página. Os canais oficiais serão divulgados aqui.</p>
-      {%- endif %}
-      <a href="{{ url_for('como_aderir') }}" class="text-link">Como obter acesso ao NEXO <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h16M13 5l7 7-7 7"/></svg></a>
-    </div>
-    {%- if wa %}
-    {#- Pré-cadastro comercial (Docs/PRE_CADASTRO_LANDING.md). Só existe com número válido: sem ele,
-        a landing sai como antes (tests/test_whatsapp_telas.py). Fica fechado até o
-        static/js/landing-precadastro.js abri-lo; sem JavaScript, ninguém chega aqui e o CONTRATAR
-        vai direto ao WhatsApp. As etapas 1 a 3 não enviam nada ao servidor: os dados vão só no
-        texto da mensagem que o próprio visitante confere e envia pelo WhatsApp. #}
-    <dialog id="precadastro" class="precadastro" aria-labelledby="precadastro-titulo-2" data-numero="{{ wa }}">
-      <div class="precadastro-caixa">
-        <button type="button" class="precadastro-fechar" data-precadastro-fechar aria-label="Fechar o pré-cadastro"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-        {#- ETAPA 1 (aceite dos Termos de Uso e da Política de Privacidade): pronta, mas DESLIGADA
-            nesta entrega, com a classe "hidden" (decisão do dono, 15/11/2026): os textos ainda não
-            foram publicados e não existe página pública para eles. Para REATIVAR no futuro:
-            1. Publicar os textos revisados (Admin > Configurações > Documentos Legais) e criar as
-               páginas públicas que os mostram.
-            2. Pôr esses endereços no href dos dois links abaixo. Eles ficam sem href de propósito:
-               /termos e /privacidade não existem. Link local que não responde reprova
-               tests/test_avaliacao_publica.py (destinos do diálogo), e link com "termos" ou "privacidade"
-               reprova tests/test_whatsapp_telas.py: atualize os dois junto.
-            3. Trocar ETAPA_TERMOS_ATIVA para true em static/js/landing-precadastro.js. O script tira
-               a classe "hidden" desta etapa e passa a abrir o modal por ela.
-            4. Decidir como registrar o aceite no servidor (a caixa marcada no navegador não fica
-               gravada) e atualizar os testes dos links legais e do aviso do rodapé. #}
-        <section id="step-1" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-1">
-          <h2 id="precadastro-titulo-1" class="precadastro-titulo" tabindex="-1">Antes de continuar</h2>
-          <p>Para prosseguir com sua solicitação, leia e aceite nossos Termos de Uso e nossa Política de Privacidade.</p>
-          <div class="precadastro-aceites">
-            <label class="precadastro-aceite"><input type="checkbox" id="check-termos"><span>Li e aceito os <a class="text-link">Termos de Uso</a>.</span></label>
-            <label class="precadastro-aceite"><input type="checkbox" id="check-privacidade"><span>Li e estou ciente da <a class="text-link">Política de Privacidade</a> e das condições de tratamento dos meus dados.</span></label>
-          </div>
-          <button type="button" id="btn-next-1" class="btn-nexo btn-nexo-primary w-100" disabled>Continuar</button>
-        </section>
-        <section id="step-2" class="precadastro-etapa" aria-labelledby="precadastro-titulo-2">
-          <h2 id="precadastro-titulo-2" class="precadastro-titulo" tabindex="-1">Vamos conhecer sua empresa</h2>
-          <p>Preencha algumas informações para que nossa equipe compreenda melhor suas necessidades.</p>
-          <form id="form-pre-cadastro" class="precadastro-form">
-            <div class="precadastro-linha">
-              <div class="precadastro-campo">
-                <label for="lead-nome">Nome do responsável *</label>
-                <input type="text" id="lead-nome" name="nome" required maxlength="120" autocomplete="name">
-              </div>
-              <div class="precadastro-campo">
-                <label for="lead-empresa">Nome da empresa *</label>
-                <input type="text" id="lead-empresa" name="empresa" required maxlength="120" autocomplete="organization">
-              </div>
-            </div>
-            <div class="precadastro-linha">
-              <div class="precadastro-campo">
-                <label for="lead-whatsapp">WhatsApp para contato *</label>
-                <input type="tel" id="lead-whatsapp" name="whatsapp" required inputmode="tel" autocomplete="tel-national" placeholder="(00) 00000-0000" maxlength="60" aria-describedby="lead-whatsapp-dica">
-                <small id="lead-whatsapp-dica" class="precadastro-dica">Com DDD.</small>
-              </div>
-              <div class="precadastro-campo">
-                <label for="lead-plano">Plano de interesse *</label>
-                <select id="lead-plano" name="plano" required>
-                  <option value="">Selecione um plano</option>
-                  <option value="Bronze">Bronze</option>
-                  <option value="Prata">Prata</option>
-                  <option value="Ouro">Ouro</option>
-                  <option value="Custom / Enterprise">Custom / Enterprise</option>
-                </select>
-              </div>
-            </div>
-            <div class="precadastro-linha">
-              <div class="precadastro-campo">
-                <label for="lead-email">E-mail (Opcional)</label>
-                <input type="email" id="lead-email" name="email" maxlength="254" autocomplete="email">
-              </div>
-              <div class="precadastro-campo">
-                <label for="lead-faturamento">Faixa de faturamento (Opcional)</label>
-                <select id="lead-faturamento" name="faturamento">
-                  <option value="">Selecione</option>
-                  <option value="Até R$ 50 mil">Até R$ 50 mil</option>
-                  <option value="R$ 50 mil a R$ 200 mil">R$ 50 mil a R$ 200 mil</option>
-                  <option value="Acima de R$ 200 mil">Acima de R$ 200 mil</option>
-                </select>
-              </div>
-            </div>
-            <div class="precadastro-campo">
-              <label for="lead-desafio">Qual é a principal dificuldade que sua empresa enfrenta atualmente? (Opcional)</label>
-              <textarea id="lead-desafio" name="desafio" rows="2" maxlength="400" placeholder="Conte brevemente o que você gostaria de melhorar..."></textarea>
-            </div>
-            <p class="precadastro-nota">Até aqui, nada é gravado no site: os dados entram só na mensagem que você vai conferir e enviar pelo seu WhatsApp para a equipe NEXO.</p>
-            <button type="submit" id="btn-next-2" class="btn-nexo btn-nexo-primary w-100">Avançar</button>
-          </form>
-        </section>
-        <section id="step-3" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-3">
-          <h2 id="precadastro-titulo-3" class="precadastro-titulo" tabindex="-1">Quer conhecer melhor a situação da sua empresa?</h2>
-          <p>Você também pode realizar uma avaliação inicial para ajudar nossa equipe a compreender melhor o cenário do seu negócio.</p>
-          <div class="precadastro-acoes">
-            {#- O Raio-X público (/avaliacao-inicial) só com AVALIACAO_PUBLICA_ATIVA ligado; sem destino, o script esconde o botão. #}
-            <a id="btn-raiox-fazer" class="btn-nexo btn-nexo-primary w-100" data-raiox-destino{% if config.AVALIACAO_PUBLICA_ATIVA is sameas true %} href="{{ url_for('avaliacao_publica.formulario') }}"{% endif %}>REALIZAR RAIO-X</a>
-            <a id="btn-raiox-ajuda" class="btn-nexo btn-nexo-secondary w-100" target="_blank" rel="noopener noreferrer" data-raiox-situacao="ajuda">PRECISO DE AJUDA COM OS RELATÓRIOS<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a>
-            <a id="btn-raiox-pular" class="btn-nexo btn-nexo-ghost w-100" target="_blank" rel="noopener noreferrer" data-raiox-situacao="pular">FINALIZAR SEM RAIO-X<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a>
-          </div>
-        </section>
-      </div>
-    </dialog>
-    {%- endif %}
   </div>
 </section>
-<section aria-labelledby="final-cta-title">
+<section class="lp-cta" aria-labelledby="final-cta-title">
   <div class="container">
     <div class="cta-final">
       <h2 id="final-cta-title">Pronto para transformar seu negócio?<br/><span class="accent">Deixe a NEXO fazer parte disso!</span></h2>
-      <p>Organize seus relatórios, entenda os indicadores e encontre novas possibilidades para suas decisões de compras e vendas.</p>
-      <div class="cta-buttons">
+      {#- Contratação (decisões do dono, 15 e 16/11/2026): um CONTRATAR único, logo abaixo do título. Sem
+          JavaScript, ele leva direto ao WhatsApp com a mensagem de contratação (macro intacta); com JavaScript,
+          static/js/landing-precadastro.js abre o pré-cadastro (#precadastro). Sem número válido, sai desabilitado. #}
+      <div class="lp-cta-acao" data-precadastro-gatilho>
         {%- if wa %}
-        {{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Falar com a equipe NEXO', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg', descrito_por='contact-availability') }}
+        {{ m.link_whatsapp(wa, m.whatsapp_textos.contratar, 'CONTRATAR', classe='btn-nexo btn-nexo-primary btn-nexo-lg', icone='svg') }}
         {%- else %}
-        <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="contact-availability">Falar com a equipe NEXO</button>
+        <button type="button" class="btn-nexo btn-nexo-primary btn-nexo-lg" disabled aria-describedby="contratacao-status">CONTRATAR</button>
+        <p class="commercial-note" id="contratacao-status">A contratação ainda não está disponível nesta página.</p>
         {%- endif %}
-        <a href="{{ url_for('como_aderir') }}" class="btn-nexo btn-nexo-secondary btn-nexo-lg">Como obter acesso</a>
       </div>
-      {%- if wa %}
-      <p id="contact-availability" class="commercial-note mt-3">Atendimento comercial pelo WhatsApp: tire dúvidas sobre os planos e a contratação com a equipe NEXO.</p>
-      {%- else %}
-      <p id="contact-availability" class="commercial-note mt-3">Nosso canal oficial de atendimento será divulgado nesta página.</p>
-      {%- endif %}
     </div>
+      {%- if wa %}
+      {#- Pré-cadastro comercial (Docs/PRE_CADASTRO_LANDING.md). Só existe com número válido: sem ele, a landing não
+          menciona o WhatsApp (tests/test_whatsapp_telas.py). Fica fechado até o landing-precadastro.js abri-lo; sem
+          JavaScript, ninguém chega aqui e o CONTRATAR vai direto ao WhatsApp. As três saídas da Etapa 3 gravam o
+          lead no microsserviço (MICROSSERVICO_RAIOX_URL); plano, faixa e dificuldade vão só na mensagem. #}
+      <dialog id="precadastro" class="lp-dialogo" aria-labelledby="precadastro-titulo-1" data-numero="{{ wa }}" data-servico="{{ config.MICROSSERVICO_RAIOX_URL }}" data-email="{{ config.EMAIL_SUPORTE }}">
+        <div class="precadastro-caixa">
+          <button type="button" class="precadastro-fechar" data-dialogo-fechar aria-label="Fechar o pré-cadastro"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+          <section id="step-1" class="precadastro-etapa" aria-labelledby="precadastro-titulo-1">
+            <p class="lp-passo">Passo 1 de 3</p>
+            <h2 id="precadastro-titulo-1" class="precadastro-titulo" tabindex="-1">Antes de continuar</h2>
+            <p>Para prosseguir com sua solicitação, leia e aceite nossos Termos de Uso e nossa Política de Privacidade.</p>
+            {{ aceite_dos_termos('precadastro', 'btn-next-1') }}
+          </section>
+          <section id="step-2" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-2">
+            <p class="lp-passo">Passo 2 de 3</p>
+            <h2 id="precadastro-titulo-2" class="precadastro-titulo" tabindex="-1">Vamos conhecer sua empresa</h2>
+            <p>Preencha algumas informações para que nossa equipe compreenda melhor suas necessidades.</p>
+            <form id="form-pre-cadastro" class="precadastro-form">
+              <div class="precadastro-linha">
+                <div class="precadastro-campo">
+                  <label for="lead-nome">Nome do responsável *</label>
+                  <input type="text" id="lead-nome" name="nome" required maxlength="120" autocomplete="name">
+                </div>
+                <div class="precadastro-campo">
+                  <label for="lead-empresa">Nome da empresa *</label>
+                  <input type="text" id="lead-empresa" name="empresa" required maxlength="120" autocomplete="organization">
+                </div>
+              </div>
+              <div class="precadastro-linha">
+                <div class="precadastro-campo">
+                  <label for="lead-whatsapp">WhatsApp para contato *</label>
+                  <input type="tel" id="lead-whatsapp" name="whatsapp" required inputmode="tel" autocomplete="tel-national" placeholder="(00) 00000-0000" maxlength="60" aria-describedby="lead-whatsapp-dica">
+                  <small id="lead-whatsapp-dica" class="precadastro-dica">Com DDD.</small>
+                </div>
+                <div class="precadastro-campo">
+                  <label for="lead-plano">Plano de interesse *</label>
+                  <select id="lead-plano" name="plano" required>
+                    <option value="">Selecione um plano</option>
+                    <option value="Bronze">Bronze</option>
+                    <option value="Prata">Prata</option>
+                    <option value="Ouro">Ouro</option>
+                    <option value="Personalizado / Enterprise">Personalizado / Enterprise</option>
+                  </select>
+                </div>
+              </div>
+              <div class="precadastro-linha">
+                <div class="precadastro-campo">
+                  <label for="lead-email">E-mail *</label>
+                  <input type="email" id="lead-email" name="email" required maxlength="254" autocomplete="email">
+                </div>
+                <div class="precadastro-campo">
+                  <label for="lead-faturamento">Faixa de faturamento (Opcional)</label>
+                  <select id="lead-faturamento" name="faturamento">
+                    <option value="">Selecione</option>
+                    <option value="Até R$ 50 mil">Até R$ 50 mil</option>
+                    <option value="R$ 50 mil a R$ 200 mil">R$ 50 mil a R$ 200 mil</option>
+                    <option value="Acima de R$ 200 mil">Acima de R$ 200 mil</option>
+                  </select>
+                </div>
+              </div>
+              <div class="precadastro-campo">
+                <label for="lead-desafio">Qual é a principal dificuldade que sua empresa enfrenta atualmente? (Opcional)</label>
+                <textarea id="lead-desafio" name="desafio" rows="2" maxlength="400" placeholder="Conte brevemente o que você gostaria de melhorar..."></textarea>
+              </div>
+              <div class="lp-isca" aria-hidden="true"><label for="precadastro-isca">Deixe este campo em branco</label><input type="text" id="precadastro-isca" name="campo_isca" tabindex="-1" autocomplete="off"></div>
+              <p class="precadastro-nota">Ao concluir, seu nome, a empresa, o e-mail e o WhatsApp ficam gravados para a equipe NEXO entrar em contato. O plano, a faixa de faturamento e a dificuldade vão só na mensagem do WhatsApp, que você confere antes de enviar.</p>
+              <div class="lp-aviso" data-aviso role="alert"></div>
+              <button type="submit" id="btn-next-2" class="btn-nexo btn-nexo-primary lp-largo">Avançar</button>
+            </form>
+          </section>
+          <section id="step-3" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-3">
+            <p class="lp-passo">Passo 3 de 3</p>
+            <h2 id="precadastro-titulo-3" class="precadastro-titulo" tabindex="-1">Quer conhecer melhor a situação da sua empresa?</h2>
+            <p>Você também pode enviar seus relatórios para a Avaliação de Cenário Externo e ajudar nossa equipe a compreender melhor o cenário do seu negócio.</p>
+            <p class="lp-ocupado" data-ocupado role="status" hidden><span class="lp-girador" aria-hidden="true"></span><span data-ocupado-texto>Enviando…</span></p>
+            <div class="lp-aviso" data-aviso role="alert"></div>
+            <div class="precadastro-acoes">
+              <button type="button" id="btn-raiox-fazer" class="btn-nexo btn-nexo-primary" data-acao>REALIZAR RAIO-X</button>
+              <button type="button" id="btn-raiox-ajuda" class="btn-nexo btn-nexo-secondary" data-acao>PRECISO DE AJUDA COM OS RELATÓRIOS</button>
+              <button type="button" id="btn-raiox-pular" class="btn-nexo btn-nexo-ghost" data-acao>FINALIZAR SEM RAIO-X</button>
+            </div>
+          </section>
+          <section id="step-4" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-4">
+            <p class="lp-passo">Passo 3 de 3</p>
+            <h2 id="precadastro-titulo-4" class="precadastro-titulo" tabindex="-1">Avaliação de Cenário Externo</h2>
+            <p>Com os relatórios do seu sistema, a equipe NEXO prepara uma avaliação inicial do cenário da sua loja.</p>
+            {{ painel_dos_relatorios('precadastro', wa, texto_ajuda_relatorios) }}
+            <p class="lp-ocupado" data-ocupado role="status" hidden><span class="lp-girador" aria-hidden="true"></span><span data-ocupado-texto>Enviando…</span></p>
+            <div class="lp-aviso" data-aviso role="alert"></div>
+            <div class="precadastro-acoes">
+              <button type="button" id="btn-raiox-enviar" class="btn-nexo btn-nexo-primary" data-acao>Enviar para a avaliação</button>
+              <button type="button" id="btn-raiox-voltar" class="btn-nexo btn-nexo-ghost" data-acao>Voltar</button>
+            </div>
+          </section>
+          <section id="step-5" class="precadastro-etapa hidden" aria-labelledby="precadastro-titulo-5">
+            <h2 id="precadastro-titulo-5" class="precadastro-titulo" tabindex="-1">Pronto! Recebemos a sua solicitação.</h2>
+            <p id="precadastro-resultado-texto"></p>
+            <div class="lp-protocolo"><span>Protocolo</span><strong id="precadastro-protocolo"></strong></div>
+            <ul class="lp-resultado-arquivos" id="precadastro-resultado-arquivos" aria-label="Situação dos relatórios"></ul>
+            <p>Para agilizar o atendimento, envie a mensagem pelo WhatsApp da equipe NEXO: ela já leva o protocolo.</p>
+            <div class="precadastro-acoes">
+              <a id="precadastro-whatsapp" class="btn-nexo btn-nexo-primary" target="_blank" rel="noopener noreferrer"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 20.5 5.07 15A8 8 0 1 1 8 17.93Z"/></svg> Abrir o WhatsApp<span class="visually-hidden"> (abre o WhatsApp em nova aba)</span></a>
+              <button type="button" class="btn-nexo btn-nexo-ghost" data-dialogo-fechar>Fechar</button>
+            </div>
+          </section>
+        </div>
+      </dialog>
+      {%- endif %}
   </div>
 </section>
 </main>
-<footer class="nexo-footer" id="contato" aria-labelledby="footer-title">
+{#- Rodapé (decisões do dono, 16/11/2026): de ponta a ponta, com os contatos fixos. O CNPJ só aparece com
+    CNPJ_EMPRESA válido; os links dos documentos legais levam às páginas públicas /termos-de-uso e
+    /politica-de-privacidade. #}
+<footer class="nexo-footer lp-rodape" id="contato" aria-labelledby="footer-title">
   <h2 id="footer-title" class="visually-hidden">Informações do NEXO</h2>
-  <div class="container">
-    <div class="footer-grid">
-      <div class="footer-brand">
+  <div class="lp-rodape-largo">
+    <div class="lp-rodape-grade">
+      <div class="footer-brand lp-rodape-marca">
         <a href="#inicio" class="brand" aria-label="NEXO Faturamento Inteligente, início">
           <img class="brand-symbol" src="{{ url_for('static', filename='img/nexo-cubo-transparente.png') }}" alt="" width="253" height="279" decoding="async">
           <span class="brand-text"><span class="b1">NEXO</span><span class="b2">Faturamento Inteligente</span></span>
         </a>
-        <p>Relatórios de compras e vendas transformados em informações para apoiar decisões de lojas de tintas e materiais de pintura.</p>
+        <p>Relatórios de compras e vendas transformados em informações para apoiar as decisões da sua loja.</p>
       </div>
-      <div class="footer-col">
-        <h3>Navegação</h3>
+      <nav class="footer-col" aria-labelledby="rodape-navegacao">
+        <h3 id="rodape-navegacao">Navegação</h3>
         <ul>
           <li><a href="#inicio">Início</a></li>
           <li><a href="#como-funciona">Como funciona</a></li>
           <li><a href="#indicadores">Indicadores</a></li>
           <li><a href="#planos">Planos</a></li>
+          <li><a href="{{ url_for('como_aderir') }}">Como obter acesso</a></li>
           <li><a href="{{ url_for('auth.login') }}">Login do Cliente</a></li>
         </ul>
-      </div>
+      </nav>
       <div class="footer-col">
-        <h3>Privacidade e uso</h3>
-        <p>Os documentos de privacidade, termos de uso e cancelamento ainda não estão disponíveis nesta página.</p>
-      </div>
-      <div class="footer-col">
-        <h3>Contatos</h3>
-        {%- if wa %}
-        <p>Dúvidas sobre os planos ou a contratação? Fale com a equipe NEXO pelo WhatsApp.</p>
-        <ul>
-          <li>{{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Fale conosco no WhatsApp', classe=none, icone=none) }}</li>
-          <li><a href="{{ url_for('como_aderir') }}">Entenda como obter acesso</a></li>
+        <h3>Contato</h3>
+        <ul class="lp-rodape-contatos">
+          {%- if config.EMAIL_SUPORTE %}
+          <li><a class="lp-rodape-link" href="mailto:{{ config.EMAIL_SUPORTE }}"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18v12H3z"/><path d="m3 7 9 6 9-6"/></svg> <span>{{ config.EMAIL_SUPORTE }}</span></a></li>
+          {%- endif %}
+          {%- if wa %}
+          <li>{{ m.link_whatsapp(wa, m.whatsapp_textos.duvidas, 'Fale diretamente pelo WhatsApp com a nossa equipe', classe='lp-rodape-link', icone='svg') }}</li>
+          {%- endif %}
+          <li><a class="lp-rodape-link" href="https://www.instagram.com/nexo.faturamento/" target="_blank" rel="noopener noreferrer"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg> <span>Instagram @nexo.faturamento</span><span class="visually-hidden"> (abre em nova aba)</span></a></li>
         </ul>
-        {%- else %}
-        <p>Os canais oficiais de atendimento serão divulgados nesta página.</p>
-        <a href="{{ url_for('como_aderir') }}">Entenda como obter acesso</a>
-        {%- endif %}
+      </div>
+      <div class="footer-col lp-rodape-legal">
+        <h3>Institucional</h3>
+        <ul>
+          <li>© 2026 NEXO Faturamento Inteligente. Todos os direitos reservados.</li>
+          {%- if config.CNPJ_EMPRESA %}
+          <li class="lp-cnpj">CNPJ {{ m.cnpj(config.CNPJ_EMPRESA) }}</li>
+          {%- endif %}
+          <li><a href="{{ url_for('documentos_publicos.termos_de_uso') }}">Termos de Uso</a></li>
+          <li><a href="{{ url_for('documentos_publicos.politica_de_privacidade') }}">Política de Privacidade</a></li>
+        </ul>
       </div>
     </div>
     <div class="footer-bottom">
-      <span>© 2026 NEXO Faturamento Inteligente. Todos os direitos reservados.</span>
+      <a class="lp-credito" href="https://www.linkedin.com/in/jo%C3%A3o-c%C3%A9sar-netto-souza-castro-152441304" target="_blank" rel="noopener noreferrer">Desenvolvido por João César N. S. Castro<span class="visually-hidden"> (abre o LinkedIn em nova aba)</span></a>
       <a href="#inicio">Voltar ao início <svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20V4M5 11l7-7 7 7"/></svg></a>
     </div>
   </div>
 </footer>
+{#- Cadastro do lead frio (decisões do dono, 16/11/2026): termos, dados, a Avaliação de Cenário Externo (opcional) e
+    o resultado, gravados no microsserviço pelo static/js/landing-captacao.js. Existe com ou sem o WhatsApp
+    comercial; sem número, nada aqui menciona o WhatsApp (o telefone vai ao serviço no campo "whatsapp" pelo
+    script, e o name do campo é "telefone"). #}
+<dialog id="cadastro-lead" class="lp-dialogo" aria-labelledby="cadastro-lead-titulo-1" data-servico="{{ config.MICROSSERVICO_RAIOX_URL }}" data-email="{{ config.EMAIL_SUPORTE }}">
+  <div class="precadastro-caixa">
+    <button type="button" class="precadastro-fechar" data-dialogo-fechar aria-label="Fechar o cadastro"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <section id="cadastro-lead-etapa-1" class="precadastro-etapa" aria-labelledby="cadastro-lead-titulo-1">
+      <p class="lp-passo">Passo 1 de 3</p>
+      <h2 id="cadastro-lead-titulo-1" class="precadastro-titulo" tabindex="-1">Antes de continuar</h2>
+      <p>Para fazer o seu cadastro, leia e aceite os Termos de Uso e a Política de Privacidade.</p>
+          {{ aceite_dos_termos('cadastro-lead', 'cadastro-lead-continuar') }}
+    </section>
+    <section id="cadastro-lead-etapa-2" class="precadastro-etapa hidden" aria-labelledby="cadastro-lead-titulo-2">
+      <p class="lp-passo">Passo 2 de 3</p>
+      <h2 id="cadastro-lead-titulo-2" class="precadastro-titulo" tabindex="-1">Seus dados</h2>
+      <p>Informe como a equipe NEXO pode falar com você.</p>
+      <form id="cadastro-lead-form" class="precadastro-form">
+        <div class="precadastro-linha">
+          <div class="precadastro-campo">
+            <label for="cadastro-lead-nome">Seu nome *</label>
+            <input type="text" id="cadastro-lead-nome" name="nome" required maxlength="120" autocomplete="name">
+          </div>
+          <div class="precadastro-campo">
+            <label for="cadastro-lead-empresa">Nome da empresa *</label>
+            <input type="text" id="cadastro-lead-empresa" name="empresa" required maxlength="120" autocomplete="organization">
+          </div>
+        </div>
+        <div class="precadastro-linha">
+          <div class="precadastro-campo">
+            <label for="cadastro-lead-email">E-mail *</label>
+            <input type="email" id="cadastro-lead-email" name="email" required maxlength="254" autocomplete="email">
+          </div>
+          <div class="precadastro-campo">
+            <label for="cadastro-lead-telefone">Telefone da empresa *</label>
+            <input type="tel" id="cadastro-lead-telefone" name="telefone" required inputmode="tel" autocomplete="tel-national" placeholder="(00) 00000-0000" maxlength="60" aria-describedby="cadastro-lead-telefone-dica">
+            <small id="cadastro-lead-telefone-dica" class="precadastro-dica">Com DDD.{% if wa %} Se tiver, use o número com WhatsApp.{% endif %}</small>
+          </div>
+        </div>
+        <div class="lp-isca" aria-hidden="true"><label for="cadastro-lead-isca">Deixe este campo em branco</label><input type="text" id="cadastro-lead-isca" name="campo_isca" tabindex="-1" autocomplete="off"></div>
+        <div class="lp-aviso" data-aviso role="alert"></div>
+        <button type="submit" class="btn-nexo btn-nexo-primary lp-largo">Continuar</button>
+      </form>
+    </section>
+    <section id="cadastro-lead-etapa-3" class="precadastro-etapa hidden" aria-labelledby="cadastro-lead-titulo-3">
+      <p class="lp-passo">Passo 3 de 3</p>
+      <h2 id="cadastro-lead-titulo-3" class="precadastro-titulo" tabindex="-1">Avaliação de Cenário Externo <span class="lp-opcional">(opcional)</span></h2>
+      <p>Quer que a equipe NEXO olhe os números da sua loja? Envie os relatórios do seu sistema. Se preferir, conclua o cadastro só com o contato.</p>
+          {{ painel_dos_relatorios('cadastro-lead', wa, texto_ajuda_relatorios) }}
+      <p class="lp-ocupado" data-ocupado role="status" hidden><span class="lp-girador" aria-hidden="true"></span><span data-ocupado-texto>Enviando…</span></p>
+      <div class="lp-aviso" data-aviso role="alert"></div>
+      <div class="precadastro-acoes">
+        <button type="button" class="btn-nexo btn-nexo-primary" data-acao data-enviar="1">Enviar para a avaliação</button>
+        <button type="button" class="btn-nexo btn-nexo-secondary" data-acao data-enviar="3">Agora não, só quero contato</button>
+        <button type="button" class="btn-nexo btn-nexo-ghost" data-acao data-voltar>Voltar</button>
+      </div>
+    </section>
+    <section id="cadastro-lead-etapa-4" class="precadastro-etapa hidden" aria-labelledby="cadastro-lead-titulo-4">
+      <h2 id="cadastro-lead-titulo-4" class="precadastro-titulo" tabindex="-1">Cadastro recebido!</h2>
+      <p id="cadastro-lead-resultado-texto"></p>
+      <div class="lp-protocolo"><span>Protocolo</span><strong id="cadastro-lead-protocolo"></strong></div>
+      <ul class="lp-resultado-arquivos" id="cadastro-lead-resultado-arquivos" aria-label="Situação dos relatórios"></ul>
+      <h3 class="lp-proximos-titulo">Próximos passos</h3>
+      <ol class="lp-proximos">
+        <li>A equipe NEXO confere o seu cadastro<span data-com-relatorios hidden> e os relatórios aceitos</span>.</li>
+        <li>O contato é feito pelo telefone ou pelo e-mail que você informou.</li>
+        <li>Guarde o protocolo: ele identifica o seu cadastro no atendimento.</li>
+      </ol>
+      <button type="button" class="btn-nexo btn-nexo-primary lp-largo" data-dialogo-fechar>Fechar</button>
+    </section>
+  </div>
+</dialog>
 <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 </body>
 </html>

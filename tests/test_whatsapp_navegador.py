@@ -4,8 +4,9 @@ Com WHATSAPP_EMPRESA_NUMERO preenchido, as telas que ganharam botão de WhatsApp
 login, "Como aderir", Visão Geral com a faixa de renovação, Suporte, chamado, Planos e a
 resposta de upgrade) não rolam na horizontal em 320, 390 e 1366 px, cada link novo fica
 inteiro dentro da tela, o NexoBot não o encobre no fim da página e nenhuma violação de CSP
-aparece. O wa.me nunca é aberto e a rede continua só local: o único clique é no CONTRATAR da landing,
-que abre o pré-cadastro (e as saídas dele só são lidas, não clicadas).
+aparece. O wa.me nunca é aberto e a rede continua só local: na landing, o CONTRATAR abre o
+pré-cadastro, os documentos legais e o microsserviço do Raio-X respondem com dados de teste
+(page.route) e o "Abrir o WhatsApp" do resultado só é lido, não clicado.
 
 Reaproveita o harness de tests/test_overflow_navegador.py (servidor local, CDN respondida
 com as cópias íntegras de NEXO_TEST_CDN_DIR e dados fictícios extensos). Habilitado por
@@ -15,6 +16,7 @@ NEXO_TEST_BROWSER=1, como na CI.
 from datetime import date
 import unittest
 
+from tests.landing_support import ROTA_DO_LEAD, SERVICO, campos_multipart, documentos, responder_json
 from tests.test_overflow_navegador import _BROWSER, NavegadorCase
 
 NUMERO = "5562988887777"
@@ -29,7 +31,8 @@ _MEDIR = """() => {
     const vw = innerWidth;
     const visivel = el => { const cs = getComputedStyle(el); return cs.display !== 'none' && cs.visibility !== 'hidden'; };
     const texto = el => el.textContent.replace(/\\s+/g, ' ').trim();
-    const links = [...document.querySelectorAll('a[href^="https://wa.me/"]')].map(a => {
+    // Os links dentro de um diálogo fechado (cadastro e pré-cadastro da landing) só aparecem com ele aberto.
+    const links = [...document.querySelectorAll('a[href^="https://wa.me/"]')].filter(a => !a.closest('dialog:not([open])')).map(a => {
         const b = a.getBoundingClientRect();
         return {texto: texto(a).slice(0, 60), x0: b.left, x1: b.right, alvo: a.target, rel: a.rel,
                 visivel: visivel(a) && b.width > 0 && b.height > 0};
@@ -76,8 +79,8 @@ class WhatsAppNavegadorTests(NavegadorCase):
     def test_paginas_publicas_com_whatsapp_cabem_na_tela(self):
         for largura, altura in LARGURAS:
             pagina = self._abrir(largura, altura)
-            # Na landing: CONTRATAR, "Falar com a equipe NEXO" e o rodapé (o pré-cadastro fica fechado).
-            for caminho, esperados in (("/", 3), ("/auth/login", 0), ("/como-aderir", 2)):
+            # Na landing: o CONTRATAR e o rodapé (os diálogos ficam fechados).
+            for caminho, esperados in (("/", 2), ("/auth/login", 0), ("/como-aderir", 2)):
                 with self.subTest(caminho=caminho, largura=largura):
                     self.ir(pagina, caminho)
                     pagina.wait_for_timeout(300)
@@ -85,14 +88,34 @@ class WhatsAppNavegadorTests(NavegadorCase):
                     self.assertEqual(medida["fora"], [], f"{caminho} @ {largura}px: controle fora da tela")
             pagina.context.close()
 
-    def test_precadastro_abre_pelo_contratar_e_monta_a_mensagem(self):
-        """O CONTRATAR abre o pré-cadastro, que começa no formulário (Etapa 1 oculta). Avançar não
-        sai da página nem chama o servidor; as saídas montam o wa.me com o número do config e só o
-        que o visitante digitou. O diálogo cabe na tela, fecha com Esc e devolve o foco."""
+    def _rotas_da_captacao(self, pagina, respostas, envios):
+        """Os documentos legais vigentes (texto neutro de teste) e o microsserviço do Raio-X, respondido na ordem de
+        `respostas`; cada envio fica em `envios` (campos e arquivos do multipart)."""
+        def documentos_vigentes(rota):
+            responder_json(rota, documentos())
+
+        def servico(rota):
+            pedido = rota.request
+            if not pedido.url.startswith(ROTA_DO_LEAD):
+                responder_json(rota, {"status": "alive"})
+                return
+            envios.append(campos_multipart(pedido))
+            status, corpo = respostas.pop(0)
+            responder_json(rota, corpo, status, {"Access-Control-Allow-Origin": self.base})
+
+        pagina.route("**/documentos-legais/vigentes", documentos_vigentes)
+        pagina.route(SERVICO + "/**", servico)
+
+    def test_precadastro_abre_pelo_contratar_grava_no_servico_e_monta_a_mensagem(self):
+        """O CONTRATAR abre o pré-cadastro na Etapa 1: os termos vigentes, com as caixas presas até o fim da
+        rolagem. A Etapa 2 confere os campos (máscara do WhatsApp, e-mail obrigatório) sem sair da página; a saída
+        escolhida na Etapa 3 grava o lead no microsserviço (interceptado) e o resultado mostra o protocolo e o
+        "Abrir o WhatsApp" com a mensagem de sempre mais o protocolo. O diálogo cabe na tela, fecha com Esc e
+        devolve o foco."""
         from urllib.parse import parse_qs, urlsplit
         esperado = ("*NOVO CONTATO COMERCIAL | NEXO*\n\n"
                     "Nome: Maria Fictícia\n"
-                    "Empresa: Tintas Exemplo\n"
+                    "Empresa: Loja Exemplo\n"
                     "WhatsApp: (62) 98888-1234\n"
                     "Plano de interesse: Prata\n"
                     "E-mail: maria@example.invalid\n"
@@ -100,6 +123,7 @@ class WhatsAppNavegadorTests(NavegadorCase):
                     "Principal necessidade: Repor\n\nsem excesso\n\n"
                     "Situação do Raio-X: Não solicitado\n"
                     "Solicitou auxílio: Não\n"
+                    "Protocolo: ABCD1234\n"
                     "Origem: Landing Page da NEXO")
         medir_dialogo = """() => {
             const caixa = document.getElementById('precadastro').getBoundingClientRect();
@@ -112,9 +136,13 @@ class WhatsAppNavegadorTests(NavegadorCase):
                     rola: document.documentElement.scrollWidth > innerWidth + 1};
         }"""
         requisicoes = []
-        for largura, altura in ((320, 568), (1366, 768)):
-            with self.subTest(largura=largura):
+        for largura, altura, saida in ((320, 568, "pular"), (1366, 768, "ajuda")):
+            with self.subTest(largura=largura, saida=saida):
                 pagina = self._abrir(largura, altura)
+                envios = []
+                self._rotas_da_captacao(pagina, [(201, {
+                    "status": "recebido", "protocolo": "ABCD1234", "interesse": "so_contato",
+                    "status_arquivo": "sem_arquivo", "arquivos": []})], envios)
                 self.ir(pagina, "/")
                 pagina.on("request", lambda req: requisicoes.append((req.method, req.url)))
                 contratar = pagina.locator("[data-precadastro-gatilho] a")
@@ -123,7 +151,21 @@ class WhatsAppNavegadorTests(NavegadorCase):
                 contratar.click()
                 dialogo = pagina.locator("#precadastro")
                 dialogo.wait_for(state="visible")
-                self.assertFalse(pagina.locator("#step-1").is_visible())
+                # Etapa 1: os documentos vigentes, cada um no seu contêiner com rolagem.
+                self.assertTrue(pagina.locator("#step-1").is_visible())
+                texto_termos = pagina.locator("#precadastro [data-termo='termos'] [data-termo-texto]")
+                texto_termos.wait_for(state="visible")
+                caixas = [pagina.locator("#precadastro-check-termos"), pagina.locator("#precadastro-check-privacidade")]
+                self.assertTrue(all(caixa.is_disabled() for caixa in caixas))
+                self.assertTrue(pagina.locator("#btn-next-1").is_disabled())
+                for chave in ("termos", "privacidade"):
+                    pagina.locator(f"#precadastro [data-termo='{chave}'] [data-termo-texto]").evaluate(
+                        "el => { el.scrollTop = el.scrollHeight; }")
+                pagina.wait_for_function("() => !document.getElementById('precadastro-check-termos').disabled"
+                                         " && !document.getElementById('precadastro-check-privacidade').disabled")
+                for caixa in caixas:
+                    caixa.check()
+                pagina.locator("#btn-next-1").click()
                 self.assertTrue(pagina.locator("#step-2").is_visible())
                 self.assertEqual(pagina.evaluate("document.activeElement.id"), "lead-nome")
                 # Vazio, o navegador barra o avanço.
@@ -144,10 +186,11 @@ class WhatsAppNavegadorTests(NavegadorCase):
                                          ("559927654321", "559927654321")):
                     pagina.fill("#lead-whatsapp", colado)
                     self.assertEqual(pagina.input_value("#lead-whatsapp"), no_campo, colado)
-                # Nome só com espaços e esse número não avançam.
+                # Nome só com espaços, esse número e o e-mail sem domínio completo não avançam.
                 pagina.fill("#lead-nome", "   ")
-                pagina.fill("#lead-empresa", "Tintas Exemplo")
+                pagina.fill("#lead-empresa", "Loja Exemplo")
                 pagina.select_option("#lead-plano", "Prata")
+                pagina.fill("#lead-email", "maria@exemplo")
                 pagina.locator("#btn-next-2").click()
                 self.assertTrue(pagina.locator("#step-2").is_visible())
                 self.assertFalse(pagina.locator("#step-3").is_visible())
@@ -155,6 +198,8 @@ class WhatsAppNavegadorTests(NavegadorCase):
                                  "Preencha este campo.")
                 self.assertEqual(pagina.eval_on_selector("#lead-whatsapp", "el => el.validationMessage"),
                                  "Informe um WhatsApp do Brasil com DDD: 10 ou 11 números.")
+                self.assertEqual(pagina.eval_on_selector("#lead-email", "el => el.validationMessage"),
+                                 "Informe um e-mail válido.")
                 # Corrigir no meio do número: a máscara não joga o cursor para o fim; o blur remonta.
                 pagina.fill("#lead-whatsapp", "")
                 pagina.locator("#lead-whatsapp").press_sequentially("119814567")
@@ -168,36 +213,53 @@ class WhatsAppNavegadorTests(NavegadorCase):
                 pagina.locator("#lead-whatsapp").press_sequentially("62988881234")
                 self.assertEqual(pagina.input_value("#lead-whatsapp"), "(62) 98888-1234")
                 pagina.select_option("#lead-plano", "Prata")
-                pagina.fill("#lead-email", "maria@example.invalid")
+                pagina.fill("#lead-email", "Maria@Example.invalid")
                 pagina.select_option("#lead-faturamento", "Até R$ 50 mil")
                 pagina.fill("#lead-desafio", "Repor\n\n\n\nsem excesso")
                 pagina.locator("#btn-next-2").click()
                 self.assertTrue(pagina.locator("#step-3").is_visible())
                 self.assertEqual(pagina.url, self.base + "/")
-                # Com o Raio-X público desligado (o padrão), o botão dele não aparece.
-                self.assertTrue(pagina.locator("#btn-raiox-fazer").is_hidden())
+                # O Raio-X agora acontece aqui mesmo (envio dos relatórios ao serviço): o botão aparece sempre.
+                self.assertTrue(pagina.locator("#btn-raiox-fazer").is_visible())
                 medida = pagina.evaluate(medir_dialogo)
                 self.assertFalse(medida["rola"], f"{largura}px: a página rola na horizontal")
                 self.assertGreaterEqual(medida["x0"], 0, medida)
                 self.assertLessEqual(medida["x1"], medida["vw"], medida)
                 self.assertEqual(medida["fora"], [], f"{largura}px: controle fora do diálogo")
-                href = pagina.locator("#btn-raiox-pular").get_attribute("href")
+                pagina.locator("#btn-raiox-pular" if saida == "pular" else "#btn-raiox-ajuda").click()
+                pagina.locator("#step-5").wait_for(state="visible")
+                self.assertEqual(pagina.locator("#precadastro-protocolo").inner_text().strip(), "ABCD1234")
+                # O que foi ao serviço: os campos que ele grava, os ids dos documentos lidos e nenhum relatório.
+                [(campos, arquivos)] = envios
+                self.assertEqual(arquivos, [])
+                self.assertEqual(campos, {
+                    "nome": "Maria Fictícia", "empresa": "Loja Exemplo", "email": "maria@example.invalid",
+                    "whatsapp": "(62) 98888-1234", "interesse": "3" if saida == "pular" else "2",
+                    "termos_aceitos": "true", "documento_termos": "11", "documento_privacidade": "12",
+                    "campo_isca": ""})
+                href = pagina.locator("#precadastro-whatsapp").get_attribute("href")
                 partes = urlsplit(href)
                 self.assertEqual((partes.scheme, partes.netloc, partes.path), ("https", "wa.me", "/" + NUMERO))
-                self.assertEqual(parse_qs(partes.query, strict_parsing=True), {"text": [esperado]})
-                ajuda = parse_qs(urlsplit(pagina.locator("#btn-raiox-ajuda").get_attribute("href")).query)["text"][0]
-                self.assertTrue(ajuda.endswith("Situação do Raio-X: Não realizado\n"
-                                               "Solicitou auxílio: Sim, cliente solicitou auxílio com relatórios\n"
-                                               "Origem: Landing Page da NEXO"), ajuda)
+                mensagem = parse_qs(partes.query, strict_parsing=True)["text"][0]
+                if saida == "pular":
+                    self.assertEqual(mensagem, esperado)
+                else:
+                    self.assertTrue(mensagem.endswith("Situação do Raio-X: Não realizado\n"
+                                                      "Solicitou auxílio: Sim, cliente solicitou auxílio com relatórios\n"
+                                                      "Protocolo: ABCD1234\n"
+                                                      "Origem: Landing Page da NEXO"), mensagem)
+                medida = pagina.evaluate(medir_dialogo)
+                self.assertEqual(medida["fora"], [], f"{largura}px: controle fora do diálogo no resultado")
                 pagina.keyboard.press("Escape")
                 dialogo.wait_for(state="hidden")
                 self.assertTrue(pagina.evaluate("document.activeElement.closest('[data-precadastro-gatilho]') !== null"))
                 self.assertEqual(pagina.evaluate("window.__cspViolations"), [])
                 pagina.context.close()
-        # Nada do pré-cadastro foi ao servidor: depois de carregar a página, nenhum POST e nenhuma
-        # chamada à aplicação além de arquivos estáticos (fontes e mídia podem carregar sob demanda).
-        self.assertEqual([r for r in requisicoes
-                          if r[0] != "GET" or (r[1].startswith(self.base) and "/static/" not in r[1])], [])
+        # Na aplicação, só leituras: os arquivos estáticos e os documentos vigentes. O único POST é o do lead, no
+        # microsserviço (interceptado aqui), um por saída.
+        self.assertEqual([r for r in requisicoes if r[1].startswith(self.base) and (
+            r[0] != "GET" or not ("/static/" in r[1] or r[1].endswith("/documentos-legais/vigentes")))], [])
+        self.assertEqual([r for r in requisicoes if r[0] != "GET"], [("POST", ROTA_DO_LEAD)] * 2)
 
     def test_paginas_do_cliente_com_whatsapp_cabem_na_tela(self):
         paginas = (("/cliente/dashboard", 200, 2), ("/cliente/tickets", 200, 1),

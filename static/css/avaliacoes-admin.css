@@ -6,6 +6,10 @@
    Carregado apenas por templates/admin/avaliac*.html.
    =================================================================== */
 
+/* ---- Nota em estrelas, só leitura (macro m.estrelas de _macros.html) ---- */
+.nota-estrelas { display: inline-flex; gap: 2px; font-size: 0.92rem; line-height: 1; color: rgba(255, 255, 255, 0.28); white-space: nowrap; }
+.nota-estrelas .is-cheia { color: #fbbf24; }
+
 /* ---- Abas: links comuns; o fundo de vidro garante o contraste sobre a paisagem ---- */
 .aval-abas {
   display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 100%;
@@ -101,3 +105,19 @@
 @media (prefers-reduced-motion: reduce) {
   .aval-aba { transition: none; }
 }
+
+/* ---- Tema claro do portal (nexo-tema-claro.css define os tokens): as cores fixas acima são do
+   tema escuro e sumiriam sobre o branco. Repouso antes do estado, como na folha clara. ---- */
+html[data-theme="light"] .nota-estrelas { color: var(--campo-borda); }
+html[data-theme="light"] .nota-estrelas .is-cheia { color: #d97706; }
+html[data-theme="light"] .aval-aba { color: var(--text-muted); }
+html[data-theme="light"] .aval-aba:hover { background: var(--primary-soft); color: var(--text); }
+html[data-theme="light"] .aval-aba[aria-current="page"] { border-color: var(--glass-border-2); color: var(--roxo-forte); }
+html[data-theme="light"] .aval-aba:focus-visible,
+html[data-theme="light"] .aval-atalho:focus-visible { outline-color: var(--primary-2); }
+html[data-theme="light"] .aval-origem,
+html[data-theme="light"] .aval-subtitulo { color: var(--roxo-texto); }
+html[data-theme="light"] .aval-origem:hover { color: var(--roxo-forte); }
+html[data-theme="light"] .aval-origem:focus-visible { outline-color: var(--primary-2); }
+html[data-theme="light"] .app-shell .aval-pagina[aria-current="page"] { border-color: var(--glass-border-2); color: var(--roxo-forte); }
+html[data-theme="light"] .aval-comentario { background: var(--surface-2); }

@@ -209,7 +209,8 @@ class TemplatesTests(unittest.TestCase):
         self.assertLess(BASE.index("css/nexo.css"), BASE.index("css/nexo-tema-claro.css"))
 
     def test_paginas_fora_do_portal_nao_tem_tema(self):
-        for relativo in ("auth/_layout.html", "erro_simples.html", "landing.html"):
+        for relativo in ("auth/_layout.html", "erro_simples.html", "landing.html",
+                         "documentos_publicos/_base.html", "documentos_publicos/documento.html"):
             conteudo = (TEMPLATES / relativo).read_text(encoding="utf-8")
             for termo in ("data-theme", "themeToggle", "localStorage"):
                 self.assertNotIn(termo, conteudo, relativo)

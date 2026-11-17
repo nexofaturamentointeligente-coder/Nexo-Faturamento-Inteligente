@@ -14,6 +14,8 @@ import unittest
 from flask import Blueprint, Flask, render_template
 from werkzeug.serving import make_server, WSGIRequestHandler
 
+from tests.landing_support import servir_bootstrap
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -39,6 +41,11 @@ class LandingVideoCommercialTests(unittest.TestCase):
         auth = Blueprint("auth", __name__, url_prefix="/auth")
         auth.add_url_rule("/login", "login", lambda: "Prévia local de teste")
         app.register_blueprint(auth)
+        documentos = Blueprint("documentos_publicos", __name__)
+        documentos.add_url_rule("/termos-de-uso", "termos_de_uso", lambda: "Prévia local de teste")
+        documentos.add_url_rule("/politica-de-privacidade", "politica_de_privacidade",
+                                lambda: "Prévia local de teste")
+        app.register_blueprint(documentos)
         cls.server = make_server("127.0.0.1", 0, app, threaded=True,
                                  request_handler=QuietLocalRequests)
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
@@ -66,7 +73,8 @@ class LandingVideoCommercialTests(unittest.TestCase):
                 else:
                     request.continue_()
             elif "/bootstrap@5.3.3/dist/css/bootstrap.min.css" in url:
-                request.continue_()
+                # A cópia íntegra local, quando existe (sem rede externa); senão, como na CI.
+                servir_bootstrap(request)
             else:
                 request.abort()
 

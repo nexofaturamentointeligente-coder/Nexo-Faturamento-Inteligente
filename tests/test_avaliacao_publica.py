@@ -128,29 +128,27 @@ class _PublicaCase(_BancoCase):
 # 1. Desligado por padrão
 # =============================================================================
 class DesligadaTests(_PublicaCase):
-    def test_desligada_responde_404_e_o_botao_do_raio_x_some(self):
+    def test_desligada_responde_404_e_a_landing_nao_leva_a_ela(self):
         self.app.config["AVALIACAO_PUBLICA_ATIVA"] = False
         token = self.csrf_token("/auth/login")
         for metodo, caminho in (("GET", PAGINA), ("POST", PAGINA), ("GET", RESULTADO), ("POST", SAIR)):
             with self.subTest(metodo=metodo, caminho=caminho):
                 dados = {"csrf_token": token} if metodo == "POST" else None
                 self.assertEqual(self.client.open(caminho, method=metodo, data=dados).status_code, 404)
-        html = self.client.get("/").get_data(as_text=True)
-        [raio_x] = [l for l in _Pagina(html).links if l["attrs"].get("id") == "btn-raiox-fazer"]
-        self.assertNotIn("href", raio_x["attrs"])
-        # Ligada, o botão leva à página pública (o script o mostra só com o destino), que existe de verdade.
-        self.app.config["AVALIACAO_PUBLICA_ATIVA"] = True
-        html = self.client.get("/").get_data(as_text=True)
-        [raio_x] = [l for l in _Pagina(html).links if l["attrs"].get("id") == "btn-raiox-fazer"]
-        self.assertEqual(raio_x["attrs"]["href"], PAGINA)
-        # Todo destino local do diálogo responde (um link da Etapa 1 reativada para página inexistente reprova aqui).
-        dialogo = html.split('<dialog id="precadastro"', 1)[1].split("</dialog>", 1)[0]
-        locais = [l["attrs"]["href"] for l in _Pagina(dialogo).links if l["attrs"].get("href", "").startswith("/")]
-        self.assertEqual(locais, [PAGINA])
-        for destino in locais:
-            resposta = self.client.head(destino)
-            self.assertIn(resposta.status_code, (200, 302), destino)
-            resposta.close()
+        # Na landing (decisões do dono, 16/11/2026), o "REALIZAR RAIO-X" do pré-cadastro abre o envio dos
+        # relatórios no próprio diálogo, para o microsserviço: é um botão, com o Raio-X público ligado ou não, e o
+        # diálogo não tem destino local nenhum (um link para página inexistente reprovaria aqui).
+        for ativa in (False, True):
+            with self.subTest(ativa=ativa):
+                self.app.config["AVALIACAO_PUBLICA_ATIVA"] = ativa
+                html = self.client.get("/").get_data(as_text=True)
+                dialogo = html.split('<dialog id="precadastro"', 1)[1].split("</dialog>", 1)[0]
+                self.assertIn('<button type="button" id="btn-raiox-fazer"', dialogo)
+                self.assertNotIn(PAGINA, html)
+                # Na junção com os documentos legais, só as páginas públicas deles.
+                locais = [l["attrs"]["href"] for l in _Pagina(dialogo).links if l["attrs"].get("href", "").startswith("/")
+                          and l["attrs"]["href"] not in ("/termos-de-uso", "/politica-de-privacidade")]
+                self.assertEqual(locais, [])
 
     def test_padrao_do_config_e_desligado(self):
         import config
@@ -854,20 +852,14 @@ class RaioXPublicoNavegadorTests(NavegadorCase):
             with self.subTest(largura=largura):
                 pagina = self.abrir(largura, altura)
                 pagina.add_init_script(_COLETOR_CSP)
+                # Desde 16/11/2026 o pré-cadastro da landing envia os relatórios ao microsserviço no próprio
+                # diálogo e não leva mais a esta página. O que ela lê do sessionStorage ('nexo.precadastro',
+                # static/js/avaliacao-publica.js) é posto aqui à mão, no formato que a landing gravava.
                 self.ir(pagina, "/")
-                pagina.locator("[data-precadastro-gatilho] a").click()
-                pagina.locator("#precadastro").wait_for(state="visible")
-                pagina.fill("#lead-nome", "Maria Fictícia")
-                pagina.fill("#lead-empresa", EMPRESA)
-                pagina.locator("#lead-whatsapp").press_sequentially("62988881234")
-                pagina.select_option("#lead-plano", "Prata")
-                pagina.select_option("#lead-faturamento", "Até R$ 50 mil")
-                pagina.fill("#lead-desafio", "Repor sem excesso")
-                pagina.locator("#btn-next-2").click()
-                raio_x = pagina.locator("#btn-raiox-fazer")
-                self.assertTrue(raio_x.is_visible())
-                with pagina.expect_navigation(wait_until="load"):
-                    raio_x.click()
+                pagina.evaluate("""() => sessionStorage.setItem('nexo.precadastro', JSON.stringify({
+                    nome: 'Maria Fictícia', empresa: %s, whatsapp: '(62) 98888-1234', plano: 'Prata', email: '',
+                    faturamento: 'Até R$ 50 mil', desafio: 'Repor sem excesso'}))""" % json.dumps(EMPRESA))
+                self.ir(pagina, PAGINA)
                 self.assertTrue(pagina.url.endswith(PAGINA), pagina.url)
                 # O formulário público vem preenchido com o pré-cadastro, e o dado sai do sessionStorage.
                 self.assertEqual([pagina.input_value(f"#publica-{campo}") for campo in ("nome", "empresa", "whatsapp")],

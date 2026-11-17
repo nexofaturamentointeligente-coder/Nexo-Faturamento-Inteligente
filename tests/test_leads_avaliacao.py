@@ -1,8 +1,9 @@
-"""Avaliação de Cenário (revisão f4c2a8e1d9b6): tabelas de leads, restrições e expurgo de 30 dias.
+"""Avaliação de Cenário (revisão f4c2a8e1d9b6): tabelas de leads, restrições e expurgo de 30 dias; e o aceite dos
+termos do lead da landing (revisão c8e2a4f6b0d1), com o bloco "Aceite dos termos" da página do lead.
 
 Em SQLite, com as migrações reais (tests/deploy_support.py). O que depende do PostgreSQL
-(RLS, políticas da Data API, privilégios e a função expurgar_brainstorming_pdv) está em
-tests/test_leads_postgresql.py. Os dados são fictícios.
+(RLS, políticas da Data API, privilégios, a função expurgar_brainstorming_pdv e a gravação do aceite
+pelo microsserviço, com publicações concorrentes) está em tests/test_leads_postgresql.py. Os dados são fictícios.
 """
 
 import contextlib
@@ -31,9 +32,22 @@ REVISAO_ETAPA_2 = "7c4e2a9b5d31"
 REVISAO_SEM_EFEITO = "6a8f2d4c0e13"
 REVISAO_QUE_RECUSA = "5e1b9c3a7d20"
 REVISAO_ANTERIOR = "b3e9d6c1f7a2"
+# O aceite dos termos do lead (c8e2a4f6b0d1) vem depois das colunas do microsserviço (f2b6d8a4c1e9).
+REVISAO_DO_MICROSSERVICO = "f2b6d8a4c1e9"
+REVISAO_DO_ACEITE = "c8e2a4f6b0d1"
 
 
 class _LeadsCase(DeployTestCase):
+    def _migrar(self, comando, revisao):
+        from unittest.mock import patch
+        from flask_migrate import downgrade, upgrade
+        funcao = {"downgrade": downgrade, "upgrade": upgrade}[comando]
+        self.db.session.remove()
+        # Sem o fileConfig() do Alembic, que trocaria os handlers e desligaria os loggers.
+        with patch("logging.config.fileConfig"), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            funcao(directory=str(ROOT / "migrations"), revision=revisao)
+
     def lead(self, status="concluido", **campos):
         from models import LeadAvaliacao
         dados = {"nome_contato": "Contato fictício", "email": f"lead-{uuid.uuid4().hex[:8]}@example.invalid",
@@ -360,15 +374,6 @@ class ExpurgoTests(_LeadsCase):
 
 
 class DowngradeTests(_LeadsCase):
-    def _migrar(self, comando, revisao):
-        from unittest.mock import patch
-        from flask_migrate import downgrade, upgrade
-        funcao = {"downgrade": downgrade, "upgrade": upgrade}[comando]
-        self.db.session.remove()
-        # Sem o fileConfig() do Alembic, que trocaria os handlers e desligaria os loggers.
-        with patch("logging.config.fileConfig"), contextlib.redirect_stdout(io.StringIO()),                 contextlib.redirect_stderr(io.StringIO()):
-            funcao(directory=str(ROOT / "migrations"), revision=revisao)
-
     def test_downgrade_da_etapa_2_recusa_dados_das_regras_novas(self):
         lead = self.lead(itens_omissao_erp=2)
         self.linha(lead, 1, versao_regras="lead-2026-11.3", categoria_produto="BEBIDAS")
@@ -443,7 +448,10 @@ class DowngradeTests(_LeadsCase):
         with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
             self._migrar("downgrade", "e7a1c3f5b9d2")
         self.assertIn("Downgrade do microsserviço do Raio-X recusado", registro.output[0])
-        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
+        # Sem aceite gravado, a c8e2a4f6b0d1 (o aceite dos termos do lead) desce antes, com as revisões acima dela;
+        # o SQLite pode registrar esses passos antes da recusa.
+        self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
+                      (HEAD, REVISAO_DO_ACEITE, REVISAO_DO_MICROSSERVICO))
         self.assertEqual(self.db.session.scalar(text("SELECT interesse FROM lead_avaliacao")), "raio_x")
         for coluna in COLUNAS_DO_MICROSSERVICO:
             with self.subTest(coluna=coluna):
@@ -516,7 +524,166 @@ class DowngradeTests(_LeadsCase):
         self.db.session.commit()
         self._migrar("downgrade", REVISAO_ANTERIOR)
         tabelas = set(inspect(self.db.engine).get_table_names())
-        self.assertFalse({"lead_avaliacao", "brainstorming_dados_pdv"} & tabelas)
+        self.assertFalse({"lead_avaliacao", "brainstorming_dados_pdv", "aceite_documento_lead"} & tabelas)
         self.assertIn("plano_nivel", tabelas)
         self._migrar("upgrade", "head")
-        self.assertTrue({"lead_avaliacao", "brainstorming_dados_pdv"} <= set(inspect(self.db.engine).get_table_names()))
+        self.assertTrue({"lead_avaliacao", "brainstorming_dados_pdv", "aceite_documento_lead"}
+                        <= set(inspect(self.db.engine).get_table_names()))
+
+
+class AceiteDoLeadTests(_LeadsCase):
+    """c8e2a4f6b0d1: o aceite dos termos do lead da landing (aceite_documento_lead), que o microsserviço do Raio-X
+    grava (o ensaio da gravação é a etapa 6d de tests/test_leads_postgresql.py). A aplicação só o lê, no bloco
+    "Aceite dos termos" da página do lead, com falha aberta sem a tabela."""
+
+    # 16/11/2026 às 14:03 no horário de Brasília.
+    INSTANTE = datetime(2026, 11, 16, 17, 3, tzinfo=timezone.utc)
+
+    def documentos(self):
+        """Os Termos de Uso v1.0 e a Política de Privacidade v1.0 e v1.1, publicados pelo admin das fixtures."""
+        from models import DocumentoLegal
+        self.fixtures()
+        documentos = [DocumentoLegal(tipo=tipo, versao=versao, versao_maior=1, versao_menor=menor,
+                                     conteudo=f"Texto fictício {tipo} {versao}.", publicado_em=AGORA,
+                                     id_usuario_admin=self.admin_id)
+                      for tipo, versao, menor in (("TERMOS_USO", 1, 0), ("POLITICA_PRIVACIDADE", 1, 0),
+                                                  ("POLITICA_PRIVACIDADE", 2, 1))]
+        self.db.session.add_all(documentos)
+        self.db.session.flush()
+        return documentos[0], documentos[2]
+
+    def aceitar(self, lead, documento, ip=None, instante=INSTANTE):
+        from models import AceiteDocumentoLead
+        aceite = AceiteDocumentoLead(id_lead=lead.id, id_documento=documento.id_documento, aceito_em=instante, ip=ip)
+        self.db.session.add(aceite)
+        self.db.session.flush()
+        return aceite
+
+    def pagina(self, lead_id):
+        resposta = self.client.get(f"/admin/leads/{lead_id}")
+        self.assertEqual(resposta.status_code, 200)
+        return resposta.get_data(as_text=True)
+
+    def test_tabela_colunas_chaves_e_indice(self):
+        inspetor = inspect(self.db.engine)
+        colunas = {c["name"]: c["nullable"] for c in inspetor.get_columns("aceite_documento_lead")}
+        self.assertEqual(colunas, {"id_aceite": False, "id_lead": False, "id_documento": False, "aceito_em": False,
+                                   "ip": True})
+        fks = {fk["name"]: (fk["referred_table"], fk["referred_columns"], fk["options"].get("ondelete"))
+               for fk in inspetor.get_foreign_keys("aceite_documento_lead")}
+        self.assertEqual(fks, {"fk_aceite_documento_lead_lead": ("lead_avaliacao", ["id"], "CASCADE"),
+                               "fk_aceite_documento_lead_documento": ("documento_legal", ["id_documento"], None)})
+        unicos = inspetor.get_unique_constraints("aceite_documento_lead")
+        self.assertEqual({u["name"]: u["column_names"] for u in unicos},
+                         {"uq_aceite_lead_documento": ["id_lead", "id_documento"]})
+        indices = {i["name"]: i["column_names"] for i in inspetor.get_indexes("aceite_documento_lead")}
+        self.assertEqual(indices.get("ix_aceite_documento_lead"), ["id_documento"])
+
+    def test_restricoes_cascade_e_a_versao_aceita_que_nao_se_apaga(self):
+        from models import AceiteDocumentoLead
+        termos, politica = self.documentos()
+        lead, outro = self.lead(status="pendente", origem="site"), self.lead(status="pendente", origem="site")
+        aceite = self.aceitar(lead, termos, ip="203.0.113.9")
+        self.aceitar(lead, politica)
+        self.aceitar(outro, termos)
+        self.db.session.commit()
+        self.assertEqual((aceite.documento.tipo, aceite.documento.rotulo_versao), ("TERMOS_USO", "v1.0"))
+        self.assertEqual(aceite.aceito_em, self.INSTANTE)
+        lead_id, outro_id, id_termos = lead.id, outro.id, termos.id_documento
+        casos = {"o mesmo documento duas vezes": lambda: self.aceitar(lead, termos),
+                 "documento que não existe": lambda: self.db.session.add(AceiteDocumentoLead(
+                     id_lead=lead_id, id_documento=987654, aceito_em=self.INSTANTE)) or self.db.session.flush(),
+                 "lead que não existe": lambda: self.db.session.add(AceiteDocumentoLead(
+                     id_lead=uuid.uuid4(), id_documento=id_termos, aceito_em=self.INSTANTE)) or self.db.session.flush(),
+                 "sem o instante": lambda: self.aceitar(outro, politica, instante=None)}
+        for caso, gravar in casos.items():
+            with self.subTest(caso=caso):
+                with self.assertRaises(IntegrityError):
+                    gravar()
+                self.db.session.rollback()
+        # A versão aceita não sai do banco enquanto houver aceite dela (FK sem cascata).
+        with self.assertRaises(IntegrityError):
+            self.db.session.execute(text("DELETE FROM documento_legal WHERE id_documento = :i"), {"i": id_termos})
+            self.db.session.flush()
+        self.db.session.rollback()
+        # O aceite sai com o lead, e só o dele.
+        self.db.session.execute(text("DELETE FROM lead_avaliacao WHERE id = :id"), {"id": lead_id.hex})
+        self.db.session.commit()
+        self.assertEqual(self.db.session.execute(text("SELECT id_lead FROM aceite_documento_lead")).scalars().all(),
+                         [outro_id.hex])
+
+    def test_pagina_do_lead_mostra_o_aceite_dos_termos(self):
+        termos, politica = self.documentos()
+        lead = self.lead(status="pendente", origem="site")
+        # Gravados fora da ordem dos documentos: a página mostra os Termos de Uso primeiro.
+        self.aceitar(lead, politica)
+        self.aceitar(lead, termos, ip="2001:db8::1")
+        self.db.session.commit()
+        lead_id = lead.id
+        self.login("admin-test@example.invalid")
+        html = self.pagina(lead_id)
+        self.assertIn('aria-labelledby="aceiteTitulo"', html)
+        # Só o bloco: o sininho do admin também cita a versão (o alerta do aceite pendente dos clientes).
+        bloco = html[html.index('id="aceiteTitulo"'):]
+        bloco = bloco[:bloco.index("</section>")]
+        self.assertIn("Aceite dos termos", bloco)
+        self.assertLess(bloco.index("Termos de Uso v1.0"), bloco.index("Política de Privacidade v1.1"))
+        self.assertEqual(bloco.count("Aceito em <time"), 2)
+        self.assertEqual(bloco.count('title="16/11/2026 às 14:03 (Horário de Brasília)">16/11/2026 às 14:03</time>'), 2)
+        self.assertLess(bloco.index("IP 2001:db8::1"), bloco.index("IP não registrado"))
+        self.assertNotIn("Nenhum aceite registrado", bloco)
+
+    def test_lead_sem_aceite(self):
+        self.fixtures()
+        do_site, do_consultor = self.lead(status="pendente", origem="site"), self.lead(status="pendente")
+        self.db.session.commit()
+        ids = do_site.id, do_consultor.id
+        self.login("admin-test@example.invalid")
+        # O lead do site sem aceite (o Raio-X público só pede a autorização dos relatórios) diz que não há aceite;
+        # o do consultor nem mostra o bloco.
+        html = self.pagina(ids[0])
+        self.assertIn("Nenhum aceite registrado", html)
+        self.assertNotIn("Aceito em", html)
+        self.assertNotIn("aceiteTitulo", self.pagina(ids[1]))
+
+    def test_pagina_segue_sem_a_tabela_ou_com_falha_na_leitura(self):
+        from sqlalchemy.exc import OperationalError
+        from unittest.mock import patch
+        self.fixtures()
+        lead = self.lead(status="pendente", origem="site")
+        self.db.session.commit()
+        lead_id = lead.id
+        self.login("admin-test@example.invalid")
+        with patch("blueprints.leads._aceite_dos_termos_disponivel",
+                   side_effect=OperationalError("SELECT", {}, Exception("banco fora do ar"))):
+            self.assertNotIn("aceiteTitulo", self.pagina(lead_id))
+        # Banco sem a revisão (o código publicado antes da migração): a página sai sem o bloco.
+        self._migrar("downgrade", REVISAO_DO_MICROSSERVICO)
+        self.assertNotIn("aceite_documento_lead", inspect(self.db.engine).get_table_names())
+        html = self.pagina(lead_id)
+        self.assertNotIn("aceiteTitulo", html)
+        self.assertIn("Dados de PDV indisponíveis", html)
+
+    def test_downgrade_recusa_com_aceite_e_sai_e_volta_sem_ele(self):
+        termos, _politica = self.documentos()
+        lead = self.lead(status="pendente", origem="site")
+        self.aceitar(lead, termos, ip="203.0.113.9")
+        self.db.session.commit()
+        with self.assertLogs("flask_migrate", "ERROR") as registro, self.assertRaises(SystemExit):
+            self._migrar("downgrade", REVISAO_DO_MICROSSERVICO)
+        self.assertIn("Downgrade do aceite dos termos do lead recusado", registro.output[0])
+        # As revisões acima da c8e2a4f6b0d1, sem dado, podem descer antes da recusa no SQLite.
+        self.assertIn(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), (HEAD, REVISAO_DO_ACEITE))
+        self.assertEqual(self.db.session.scalar(text("SELECT ip FROM aceite_documento_lead")), "203.0.113.9")
+        self.db.session.execute(text("DELETE FROM aceite_documento_lead"))
+        self.db.session.commit()
+        self._migrar("downgrade", REVISAO_DO_MICROSSERVICO)
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")),
+                         REVISAO_DO_MICROSSERVICO)
+        self.assertNotIn("aceite_documento_lead", inspect(self.db.engine).get_table_names())
+        # O lead e as versões dos documentos ficam.
+        self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM lead_avaliacao")), 1)
+        self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM documento_legal")), 3)
+        self._migrar("upgrade", "head")
+        self.assertEqual(self.db.session.scalar(text("SELECT version_num FROM alembic_version")), HEAD)
+        self.assertEqual(self.db.session.scalar(text("SELECT count(*) FROM aceite_documento_lead")), 0)

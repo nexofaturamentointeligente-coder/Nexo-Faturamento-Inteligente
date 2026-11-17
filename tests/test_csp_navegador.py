@@ -42,7 +42,8 @@ class CSPNavegadorTests(NavegadorCase):
 
     def test_public_pages_run_under_csp_without_violations(self):
         pagina = self._abrir_com_coletor()
-        for caminho in ("/", "/como-aderir", "/auth/login", "/auth/recuperar-senha", "/pagina-inexistente"):
+        for caminho in ("/", "/como-aderir", "/auth/login", "/auth/recuperar-senha", "/termos-de-uso",
+                        "/politica-de-privacidade", "/pagina-inexistente"):
             with self.subTest(caminho=caminho):
                 self._assert_pagina_limpa(pagina, caminho, 404 if "inexistente" in caminho else 200)
         self.assertEqual(self.erros_js, [])

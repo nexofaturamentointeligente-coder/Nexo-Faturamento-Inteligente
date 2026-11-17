@@ -1010,6 +1010,10 @@ def empresa_excluir_permanente(id_empresa):
                     Notificacao.id_usuario.in_(ids_usuarios)
                 )
             )
+        # Avaliações dos clientes (COM-002): as da empresa e as dos usuários dela saem antes deles;
+        # eventos e sugestões caem junto, por ON DELETE CASCADE.
+        from avaliacoes import excluir_avaliacoes_empresa
+        excluir_avaliacoes_empresa(db.session, id_empresa, ids_usuarios)
         for u in usuarios:
             db.session.delete(u)
 
@@ -2000,7 +2004,8 @@ def configuracoes_documento():
         flash(f"{rotulo}: o texto não mudou, nenhuma versão nova foi criada.", "info")
     else:
         current_app.logger.info("Documento legal publicado | tipo=%s versao=%s admin=%s", tipo, versao, id_admin)
-        flash(f"{rotulo}: versão {versao} publicada. Os clientes precisam aceitá-la no próximo acesso.", "success")
+        flash(f"{rotulo}: versão {versao} publicada e já vale na página pública. A versão anterior continua no "
+              "histórico, e os clientes precisam aceitar a nova no próximo acesso.", "success")
     return redirect(url_for("admin.configuracoes"))
 
 

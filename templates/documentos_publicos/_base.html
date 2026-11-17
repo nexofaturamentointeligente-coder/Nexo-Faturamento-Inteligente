@@ -1,0 +1,47 @@
+{#- Documentos legais públicos (blueprints/documentos_publicos.py): página própria, no visual da landing, sem
+    base.html (que traria a moldura do portal a quem estiver logado), sem tema e sem script. O landing.css entra
+    pelos tokens e pela base; o desenho fica em documentos-publicos.css, com classes próprias. -#}
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block titulo %}Documentos legais{% endblock %} | NEXO Faturamento Inteligente</title>
+  <meta name="description" content="{% block descricao %}Documentos legais do NEXO Faturamento Inteligente.{% endblock %}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/documentos-publicos.css') }}">
+</head>
+<body class="doc-publico">
+<a class="doc-pular" href="#conteudo">Pular para o conteúdo</a>
+<header class="doc-topo">
+  <div class="doc-topo-interno">
+    <a href="{{ url_for('index') }}" class="doc-marca" aria-label="NEXO Faturamento Inteligente, página inicial">
+      <img src="{{ url_for('static', filename='img/nexo-cubo-transparente.png') }}" alt="" width="253" height="279" decoding="async">
+      <span class="doc-marca-texto"><span class="b1">NEXO</span><span class="b2">Faturamento Inteligente</span></span>
+    </a>
+    <a href="{{ url_for('index') }}" class="doc-voltar"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 5l-7 7 7 7"/></svg> Voltar ao site</a>
+  </div>
+</header>
+<main id="conteudo" class="doc-principal" tabindex="-1">
+  <nav class="doc-abas" aria-label="Documentos legais">
+    <ul>
+      {%- for endpoint, rotulo in paginas %}
+      <li><a href="{{ url_for(endpoint) }}"{% if endpoint == request.endpoint %} aria-current="page"{% endif %}>{{ rotulo }}</a></li>
+      {%- endfor %}
+    </ul>
+  </nav>
+  {% block conteudo %}{% endblock %}
+</main>
+<footer class="doc-rodape">
+  <div class="doc-rodape-interno">
+    <span>© 2026 NEXO Faturamento Inteligente. Todos os direitos reservados.</span>
+    <ul>
+      <li><a href="{{ url_for('index') }}">Voltar ao início</a></li>
+    </ul>
+  </div>
+</footer>
+</body>
+</html>

@@ -290,6 +290,12 @@ def create_app(config_name: str = None) -> Flask:
     # Raio-X público (captação pelo site): /avaliacao-inicial*, desligado por padrão (AVALIACAO_PUBLICA_ATIVA).
     from blueprints.avaliacao_publica import avaliacao_publica_bp
     app.register_blueprint(avaliacao_publica_bp)
+    # Documentos legais públicos, sem login: /termos-de-uso, /politica-de-privacidade e /documentos-legais/vigentes.
+    from blueprints.documentos_publicos import documentos_publicos_bp
+    app.register_blueprint(documentos_publicos_bp)
+    # Avaliações dos clientes (COM-002): /avaliar, /cliente/avaliacao* e /admin/avaliacoes* (o prefixo vem nas rotas).
+    from blueprints.avaliacoes import avaliacoes_bp
+    app.register_blueprint(avaliacoes_bp)
 
     # Gestão contratual: prazos exibidos no fuso da política (nunca no do
     # navegador) e comandos `flask contratos` / `flask planos` (simulação padrão).
@@ -353,7 +359,11 @@ def create_app(config_name: str = None) -> Flask:
     # que o auth.login os redireciona direto para o dashboard do perfil correto.
     @app.route("/")
     def index():
-        return render_template("landing.html")
+        # Seção Avaliações (COM-002): depoimentos publicados e o estado de quem visita; falha aberta.
+        # Cache: o seguranca_http já põe no-store em toda página de quem está logado (é aí que entra o formulário
+        # da avaliação, com o token CSRF); a página anônima só tem conteúdo público e continua cacheável.
+        import avaliacoes
+        return render_template("landing.html", **avaliacoes.contexto_da_landing(current_user))
 
     # Onboarding comercial: explica como obter acesso (handoff via WhatsApp + reunião).
     # Linkado pelo login ("É novo por aqui?") e pelo footer da landing.

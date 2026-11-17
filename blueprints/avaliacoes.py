@@ -1,7 +1,9 @@
 """
 NEXO - Blueprint de avaliações dos clientes (COM-002 / AUD-LANDING-001)
 =======================================================================
-Fluxo: landing -> /avaliar -> login -> formulário -> banco -> moderação -> carrossel.
+Fluxo (decisão do dono em 16/11/2026): landing -> "Deixar Avaliação" -> /avaliar -> login (volta a /avaliar)
+-> landing com o modal aberto (/?avaliar=1#avaliacoes) -> banco -> moderação -> carrossel. Sem JavaScript, o
+botão do modal leva ao formulário do portal (/cliente/avaliacao), que grava do mesmo jeito.
 
 Rotas (mutações só por POST com CSRF):
   /avaliar                                   → porta de entrada pública (só redireciona)
@@ -19,6 +21,10 @@ Rotas (mutações só por POST com CSRF):
 
 As rotas do cliente não recebem identificador nenhum: usuário e empresa vêm da
 sessão, o que elimina IDOR por construção. As regras ficam em avaliacoes.py.
+
+Envio por fetch (X-Requested-With: fetch, do modal da landing e do formulário do portal): a resposta é JSON e
+nunca usa flash, que reapareceria numa página seguinte do portal. A confirmação vai como código no destino
+("Minha avaliação" a traduz por uma lista fechada).
 """
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
@@ -37,10 +43,20 @@ avaliacoes_bp = Blueprint("avaliacoes", __name__)
 MENSAGEM_ESQUEMA_AUSENTE = "As avaliações estarão disponíveis em breve. Tente novamente mais tarde."
 MENSAGEM_FALHA_GRAVACAO = "Não foi possível salvar sua avaliação. Nada foi registrado; tente novamente em instantes."
 MENSAGEM_JA_REGISTRADA = "Sua avaliação já está registrada. Você pode consultá-la e editá-la aqui."
+MENSAGEM_JA_REGISTRADA_JSON = "Você já enviou sua avaliação. Para consultá-la ou editá-la, abra Minha avaliação."
+
+# Confirmação mostrada em "Minha avaliação" depois de um envio: no POST comum vai no flash; no envio por fetch,
+# o código vai no destino (?confirmacao=) e só estes textos são exibidos.
+CONFIRMACOES = {
+    "enviada": servico.MENSAGEM_SUCESSO,
+    "reenviada": "Avaliação atualizada e reenviada para revisão da equipe NEXO.",
+    "atualizada": "Avaliação atualizada.",
+    "registrada": MENSAGEM_JA_REGISTRADA,
+}
 
 
 def _quer_json() -> bool:
-    """Envio pelo avaliacao.js (fetch): recebe JSON em vez de redirect ou página."""
+    """Envio pelo modal da landing ou pelo avaliacao.js (fetch): recebe JSON em vez de redirect ou página."""
     return request.headers.get("X-Requested-With") == "fetch"
 
 
@@ -87,21 +103,22 @@ def _resposta_invalida(modo: str, erros: dict, valores: dict):
     return _pagina_formulario(modo, valores, erros, 422)
 
 
-def _resposta_confirmada(mensagem: str):
+def _resposta_confirmada(codigo: str, mensagem_json: str | None = None):
     """Só depois do COMMIT: nunca há confirmação sem o banco ter gravado."""
-    flash(mensagem, "success")
-    destino = url_for("avaliacoes.minha_avaliacao")
+    mensagem = CONFIRMACOES[codigo]
     if _quer_json():
-        return jsonify(ok=True, mensagem=mensagem, destino=destino)
-    return redirect(destino)
+        return jsonify(ok=True, mensagem=mensagem_json or mensagem,
+                       destino=url_for("avaliacoes.minha_avaliacao", confirmacao=codigo))
+    flash(mensagem, "success")
+    return redirect(url_for("avaliacoes.minha_avaliacao"))
 
 
 def _resposta_ja_registrada():
-    flash(MENSAGEM_JA_REGISTRADA, "info")
-    destino = url_for("avaliacoes.minha_avaliacao")
     if _quer_json():
-        return jsonify(ok=False, mensagem=MENSAGEM_JA_REGISTRADA, erros={}, destino=destino), 409
-    return redirect(destino)
+        return jsonify(ok=False, mensagem=MENSAGEM_JA_REGISTRADA_JSON, erros={},
+                       destino=url_for("avaliacoes.minha_avaliacao", confirmacao="registrada")), 409
+    flash(MENSAGEM_JA_REGISTRADA, "info")
+    return redirect(url_for("avaliacoes.minha_avaliacao"))
 
 
 def _resposta_falha_gravacao(erro, modo: str, valores: dict):
@@ -119,13 +136,29 @@ def _resposta_falha_gravacao(erro, modo: str, valores: dict):
 # =====================================================================
 @avaliacoes_bp.route("/avaliar")
 def avaliar():
-    """Destino do botão "Deixar Avaliação". Não expõe nada: só encaminha."""
+    """Destino do botão "Deixar Avaliação". Não expõe nada: só encaminha.
+
+    Visitante: o login, que volta para cá. Admin: a moderação. Cliente que pode avaliar: a landing com o modal
+    aberto. Quem já avaliou: "Minha avaliação". Os demais: o formulário do portal, que explica o motivo. O
+    cliente com termos pendentes nem chega aqui: a trava mostra o aceite e, aceito, volta para /avaliar.
+    """
     if not current_user.is_authenticated:
         return redirect(url_for("auth.login", next=url_for("avaliacoes.avaliar")))
     if current_user.is_admin:
         flash("Administradores não registram avaliações em nome de clientes. "
               "As avaliações recebidas estão nesta página.", "info")
         return redirect(url_for("avaliacoes.admin_lista"))
+    try:
+        if not servico.esquema_avaliacoes_disponivel():
+            return _indisponivel()
+        if servico.obter_avaliacao_usuario(current_user.id_usuario) is not None:
+            return redirect(url_for("avaliacoes.minha_avaliacao"))
+        if servico.motivo_inelegivel(current_user) is None:
+            return redirect(url_for("index", avaliar=1, _anchor="avaliacoes"))
+    except (SQLAlchemyError, servico.EsquemaAvaliacoesInconsistente) as erro:
+        db.session.rollback()
+        current_app.logger.warning("Encaminhamento da avaliação indisponível (%s).", type(erro).__name__)
+        return _indisponivel()
     return redirect(url_for("avaliacoes.formulario"))
 
 
@@ -154,9 +187,10 @@ def formulario():
     if erros:
         return _resposta_invalida("novo", erros, valores)
     try:
-        servico.criar_avaliacao(db.session, current_user, dados)
+        avaliacao = servico.criar_avaliacao(db.session, current_user, dados)
+        # O link leva à própria avaliação: a exclusão definitiva da empresa apaga este aviso junto.
         notificar_admins(f"Nova avaliação de {_nome_empresa(current_user)} aguardando moderação.",
-                         url_for("avaliacoes.admin_lista", status="PENDENTE"))
+                         url_for("avaliacoes.admin_detalhe", id_avaliacao=avaliacao.id_avaliacao))
         db.session.commit()
     except IntegrityError as erro:
         db.session.rollback()
@@ -165,7 +199,8 @@ def formulario():
         return _resposta_falha_gravacao(erro, "novo", valores)
     except SQLAlchemyError as erro:
         return _resposta_falha_gravacao(erro, "novo", valores)
-    return _resposta_confirmada(servico.MENSAGEM_SUCESSO)
+    return _resposta_confirmada("enviada", servico.MENSAGEM_RECEBIDA if dados.autoriza_publicacao
+                                else servico.MENSAGEM_RECEBIDA_SEM_PUBLICACAO)
 
 
 @avaliacoes_bp.route("/cliente/minha-avaliacao")
@@ -183,6 +218,8 @@ def minha_avaliacao():
         pode_editar=servico.motivo_inelegivel(current_user) is None,
         identificacao_anonima=servico.IDENTIFICACAO_ANONIMA,
         nome_empresa=_nome_empresa(current_user),
+        # Depois de um envio por fetch; qualquer outro valor é ignorado.
+        confirmacao=CONFIRMACOES.get(request.args.get("confirmacao") or "") if avaliacao else None,
     )
 
 
@@ -214,14 +251,11 @@ def editar():
             return redirect(url_for("avaliacoes.formulario"))
         if reenviada:
             notificar_admins(f"Nova avaliação de {_nome_empresa(current_user)} aguardando moderação (editada).",
-                             url_for("avaliacoes.admin_lista", status="PENDENTE"))
+                             url_for("avaliacoes.admin_detalhe", id_avaliacao=avaliacao.id_avaliacao))
         db.session.commit()
     except SQLAlchemyError as erro:
         return _resposta_falha_gravacao(erro, "editar", valores)
-    return _resposta_confirmada(
-        "Avaliação atualizada e reenviada para revisão da equipe NEXO." if reenviada
-        else "Avaliação atualizada."
-    )
+    return _resposta_confirmada("reenviada" if reenviada else "atualizada")
 
 
 @avaliacoes_bp.route("/cliente/avaliacao/consentimento/retirar", methods=["POST"])

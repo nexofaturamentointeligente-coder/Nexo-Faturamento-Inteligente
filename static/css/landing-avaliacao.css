@@ -1,0 +1,169 @@
+/* ============================================================
+   NEXO — "Deixar Avaliação" da landing (COM-002)
+   ============================================================
+   Parcial templates/_avaliacao_landing.html e static/js/landing-avaliacao.js. Usa os tokens --nexo-* de
+   landing.css, carregada antes desta folha, e o .visually-hidden do Bootstrap que a landing já carrega.
+   Classes com prefixo próprio (avaliacao-*): nada aqui mexe no resto da landing. Fechado, o <dialog> fica
+   com o display: none do navegador; nada aqui o mostra sem o atributo open. Alvos de toque de 44 a 48 px
+   e nenhuma rolagem horizontal a partir de 320 px.
+   ============================================================ */
+
+/* ---- Botão ou link da seção, conforme quem visita ---- */
+.avaliacao-cta { margin: 28px auto 0; text-align: center; }
+.avaliacao-cta > .btn-nexo { white-space: normal; text-align: center; line-height: 1.35; }
+.avaliacao-cta .commercial-note { max-width: 600px; margin: 10px auto 0; }
+.avaliacao-cta .avaliacao-cta-motivo { margin: 0 auto 14px; }
+
+/* ---- Diálogo ---- */
+html.avaliacao-aberta { overflow: hidden; }
+
+.avaliacao-modal {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--nexo-text);
+  background: var(--nexo-surface);
+  border: 1px solid var(--nexo-border-strong);
+  border-radius: var(--nexo-radius);
+  box-shadow: var(--nexo-shadow-lg);
+  color-scheme: dark;
+  overflow-wrap: anywhere;
+  /* O diálogo fica dentro do bloco centralizado da seção: o texto dele volta ao início da linha. */
+  text-align: start;
+}
+.avaliacao-modal::backdrop {
+  background: rgba(8, 8, 13, 0.8);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+/* Sem suporte a <dialog> (navegador antigo), o elemento fechado continuaria visível: o atributo open manda. */
+.avaliacao-modal:not([open]) { display: none; }
+.avaliacao-modal[open] { animation: avaliacao-modal-entrada 180ms ease-out; }
+@keyframes avaliacao-modal-entrada { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.avaliacao-modal-caixa { position: relative; padding: 32px 28px 28px; }
+.avaliacao-modal-fechar {
+  position: absolute; top: 10px; right: 10px; z-index: 1;
+  display: grid; place-items: center;
+  width: 44px; height: 44px; padding: 0;
+  color: var(--nexo-text-2); background: transparent;
+  border: 1px solid transparent; border-radius: 10px;
+  cursor: pointer;
+}
+.avaliacao-modal-fechar:hover { color: var(--nexo-text); background: var(--nexo-surface-2); border-color: var(--nexo-border-strong); }
+.avaliacao-modal-fechar:disabled { opacity: 0.5; cursor: not-allowed; }
+.avaliacao-modal-fechar svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.avaliacao-modal-titulo { margin: 0 52px 8px 0; font-size: 1.3rem; }
+.avaliacao-modal-titulo:focus { outline: none; }
+.avaliacao-modal-intro { margin: 0 0 22px; font-size: 0.93rem; line-height: 1.7; }
+
+.avaliacao-modal-form { display: grid; gap: 20px; }
+.avaliacao-modal-form[hidden] { display: none; }
+.avaliacao-modal-rotulo { display: block; margin: 0 0 6px; color: var(--nexo-text); font-size: 0.92rem; font-weight: 600; line-height: 1.45; }
+.avaliacao-modal-obrigatorio { color: var(--nexo-accent-text); font-weight: 700; }
+.avaliacao-modal-campo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.avaliacao-modal-dica { margin: 0; color: var(--nexo-text-3); font-size: 0.8rem; line-height: 1.6; }
+
+/* ---- Estrelas: rádios nativos de 1 a 5. O rádio transparente cobre a estrela inteira (48 px): clique,
+   toque e leitor de tela chegam nele; o contorno de foco vai na estrela. ---- */
+.avaliacao-modal-estrelas { min-width: 0; margin: 0; padding: 0; border: 0; }
+/* O <legend> do Bootstrap flutua e tem fonte grande: aqui ele é um rótulo comum. */
+.avaliacao-modal-estrelas > legend { float: none; width: auto; padding: 0; }
+.avaliacao-modal-opcoes { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -6px; }
+.avaliacao-modal-estrela {
+  position: relative; display: grid; place-items: center;
+  width: 48px; height: 48px; border-radius: 12px; cursor: pointer;
+}
+.avaliacao-modal-estrela > input {
+  position: absolute; inset: 0; z-index: 1;
+  width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer;
+}
+.avaliacao-modal-estrela svg {
+  width: 34px; height: 34px; overflow: visible; pointer-events: none;
+  fill: rgba(255, 255, 255, 0.05); stroke: rgba(255, 255, 255, 0.62); stroke-width: 0.8; stroke-linejoin: round;
+  transition: fill 0.12s ease, stroke 0.12s ease, transform 0.12s ease;
+}
+/* Selecionada: a estrela marcada e todas as anteriores. */
+.avaliacao-modal-estrela:has(input:checked) svg,
+.avaliacao-modal-estrela:has(~ .avaliacao-modal-estrela input:checked) svg { fill: #fbbf24; stroke: #fbbf24; }
+.avaliacao-modal-estrela:has(input:checked) svg { transform: scale(1.08); }
+.avaliacao-modal-estrela:has(input:focus-visible) { outline: 3px solid #d4b1ff; outline-offset: 0; }
+.avaliacao-modal-estrelas[aria-invalid="true"] .avaliacao-modal-estrela svg { stroke: #fca5a5; }
+@media (hover: hover) {
+  /* Pré-visualização: sob o cursor vale a estrela apontada e as anteriores; ao sair, volta a marcada. */
+  .avaliacao-modal-opcoes:has(.avaliacao-modal-estrela:hover) .avaliacao-modal-estrela svg { fill: rgba(255, 255, 255, 0.05); stroke: rgba(255, 255, 255, 0.62); }
+  .avaliacao-modal-opcoes:has(.avaliacao-modal-estrela:hover) .avaliacao-modal-estrela:hover svg,
+  .avaliacao-modal-opcoes:has(.avaliacao-modal-estrela:hover) .avaliacao-modal-estrela:has(~ .avaliacao-modal-estrela:hover) svg { fill: #fcd56b; stroke: #fcd56b; }
+  .avaliacao-modal-estrela:hover { background: rgba(251, 191, 36, 0.08); }
+}
+.avaliacao-modal-significado { min-height: 1.5em; margin: 4px 0 0; color: #fbd07a; font-size: 0.86rem; font-weight: 600; line-height: 1.5; }
+
+/* ---- Comentário ---- */
+.avaliacao-modal-campo textarea {
+  width: 100%; min-height: 112px; padding: 10px 12px;
+  font: inherit; font-size: 0.95rem; line-height: 1.55;
+  color: var(--nexo-text); background: var(--nexo-bg-2);
+  border: 1px solid var(--nexo-border-strong); border-radius: var(--nexo-radius-xs);
+  resize: vertical;
+}
+.avaliacao-modal-campo textarea::placeholder { color: var(--nexo-text-3); opacity: 1; }
+.avaliacao-modal-campo textarea:focus-visible { outline: 3px solid #d4b1ff; outline-offset: 2px; border-color: var(--nexo-accent); }
+.avaliacao-modal-campo textarea[aria-invalid="true"] { border-color: var(--nexo-danger); }
+.avaliacao-modal-rodape-campo { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.avaliacao-modal-contador { flex: 0 0 auto; color: var(--nexo-text-3); font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; font-variant-numeric: tabular-nums; line-height: 1.6; }
+.avaliacao-modal-contador.is-perto { color: #fbd07a; }
+.avaliacao-modal-contador.is-limite { color: #fca5a5; font-weight: 700; }
+.avaliacao-modal-erro { margin: 0; color: #fca5a5; font-size: 0.84rem; font-weight: 600; line-height: 1.5; }
+
+/* ---- Autorização de publicação (desmarcada) ---- */
+.avaliacao-modal-autorizacao {
+  display: flex; align-items: flex-start; gap: 12px; min-height: 44px;
+  color: var(--nexo-text-2); font-size: 0.9rem; line-height: 1.6; cursor: pointer;
+}
+.avaliacao-modal-autorizacao input { width: 20px; height: 20px; margin: 3px 0 0; flex-shrink: 0; accent-color: var(--nexo-action); cursor: pointer; }
+.avaliacao-modal-autorizacao input:focus-visible { outline: 3px solid #d4b1ff; outline-offset: 2px; }
+.avaliacao-modal-autorizacao a { color: var(--nexo-accent-text); text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---- Resumo dos erros e mensagens do envio ---- */
+.avaliacao-modal-resumo {
+  padding: 12px 14px; color: var(--nexo-text); font-size: 0.88rem; line-height: 1.6;
+  background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.45); border-radius: var(--nexo-radius-sm);
+}
+.avaliacao-modal-resumo:focus { outline: none; }
+.avaliacao-modal-resumo:focus-visible { outline: 3px solid #d4b1ff; outline-offset: 2px; }
+.avaliacao-modal-resumo p { margin: 0; color: var(--nexo-text); }
+.avaliacao-modal-resumo ul { margin: 6px 0 0; padding-left: 20px; }
+.avaliacao-modal-resumo a { display: inline-block; min-height: 24px; color: #fecaca; text-decoration: underline; text-underline-offset: 3px; }
+.avaliacao-modal-resumo p + a { margin-top: 8px; font-weight: 600; }
+
+/* ---- Botões e mensagem final ---- */
+.avaliacao-modal-acoes { display: flex; flex-wrap: wrap; gap: 12px; }
+.avaliacao-modal-acoes .btn-nexo { flex: 1 1 200px; min-height: 48px; white-space: normal; text-align: center; line-height: 1.35; }
+.avaliacao-modal-acoes .btn-nexo[aria-busy="true"] { cursor: progress; }
+.avaliacao-modal-final { display: grid; gap: 22px; }
+.avaliacao-modal-final[hidden] { display: none; }
+.avaliacao-modal-final-texto { margin: 0; color: var(--nexo-text); font-size: 1rem; line-height: 1.7; }
+.avaliacao-modal-final-texto:focus { outline: none; }
+
+@media (max-width: 600px) {
+  .avaliacao-modal-caixa { padding: 34px 18px 22px; }
+  .avaliacao-modal-titulo { font-size: 1.15rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avaliacao-modal[open] { animation: none; }
+  .avaliacao-modal-estrela svg { transition: none; }
+  .avaliacao-modal-estrela:has(input:checked) svg { transform: none; }
+}
+/* Alto contraste do sistema: as cores acima são descartadas; o preenchimento e as bordas continuam. */
+@media (forced-colors: active) {
+  .avaliacao-modal, .avaliacao-modal-fechar, .avaliacao-modal-campo textarea, .avaliacao-modal-resumo { border: 1px solid ButtonText; }
+  .avaliacao-modal-estrela svg { fill: none; stroke: CanvasText; }
+  .avaliacao-modal-estrela:has(input:checked) svg,
+  .avaliacao-modal-estrela:has(~ .avaliacao-modal-estrela input:checked) svg { fill: Highlight; stroke: Highlight; }
+  .avaliacao-modal-estrela:has(input:focus-visible) { outline: 3px solid Highlight; }
+}

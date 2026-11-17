@@ -8,7 +8,9 @@ padrão; os leads dele aparecem aqui com a origem "site". Ver Docs/PRE_CADASTRO_
   POST /admin/leads                  → lê os relatórios do lead e grava a avaliação
   GET  /admin/leads/<id>             → resumo executivo do caixa resgatável, matriz de triagem, marcas,
                                        matriz por categoria, inteligência de estoque e de preço (com o
-                                       simulador pelos mesmos parâmetros da rota JSON) e os itens de cada bloco
+                                       simulador pelos mesmos parâmetros da rota JSON), os itens de cada bloco
+                                       e o aceite dos termos que o visitante deu na landing (revisão
+                                       c8e2a4f6b0d1, gravado pelo microsserviço do Raio-X)
   GET  /admin/leads/<id>/diagnostico.json → o mesmo diagnóstico em JSON (diagnostico_cenario.montar_payload),
                                        com as séries para gráficos em "visualizacoes"
   POST /admin/leads/<id>/reenviar    → troca os dados do lead pelos de um novo envio
@@ -49,7 +51,7 @@ import avaliacao_cenario
 import avaliacao_motor
 from blueprints.admin import admin_required
 import diagnostico_cenario
-from configuracoes_conta import DadoInvalido, limpar_telefone
+from configuracoes_conta import TIPOS_DOCUMENTO, DadoInvalido, limpar_telefone, rotulo_versao
 from contas_email import normalizar_email
 from emails import email_valido
 import entitlements
@@ -61,8 +63,8 @@ import inteligencia_estoque
 import leads_avaliacao
 from leads_avaliacao import RETENCAO_DIAS
 import whatsapp_service
-from models import (BrainstormingDadosPdv, LeadAvaliacao, ROTULOS_FAIXAS_DE_FATURAMENTO,
-                    ROTULOS_PLANOS_DE_INTERESSE)
+from models import (AceiteDocumentoLead, BrainstormingDadosPdv, DocumentoLegal, LeadAvaliacao,
+                    ROTULOS_FAIXAS_DE_FATURAMENTO, ROTULOS_PLANOS_DE_INTERESSE)
 import raio_x
 import triagem_cenario
 
@@ -432,6 +434,49 @@ def _limiares_legiveis(lead: LeadAvaliacao):
         return None
 
 
+# A tabela do aceite do lead (revisão c8e2a4f6b0d1) pode não existir ainda: o mesmo critério de esquema_disponivel,
+# com a presença fixa para o engine e a ausência reavaliada a cada 30 s.
+_aceite_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
+
+
+def _aceite_dos_termos_disponivel() -> bool:
+    engine = db.session.get_bind()
+    estado = _aceite_por_engine.get(engine)
+    if estado is True:
+        return True
+    if estado is not None and time.monotonic() - estado < _REVERIFICAR_ESQUEMA_SEGUNDOS:
+        return False
+    presente = inspect(db.session.connection()).has_table(AceiteDocumentoLead.__tablename__)
+    _aceite_por_engine[engine] = True if presente else time.monotonic()
+    return presente
+
+
+def _aceites_dos_termos(lead: LeadAvaliacao):
+    """Os aceites dos Termos de Uso e da Política de Privacidade que o visitante deu na landing (gravados pelo
+    microsserviço do Raio-X): o documento, o rótulo da versão aceita, o instante e o IP, na ordem dos documentos.
+    Lista vazia quando o lead não tem aceite; None quando a tabela ainda não existe neste banco ou a leitura falha
+    (num SAVEPOINT: no PostgreSQL, a consulta que falha não aborta a transação da página, que segue sem o bloco)."""
+    ordem = {tipo: indice for indice, tipo in enumerate(TIPOS_DOCUMENTO)}
+    try:
+        with db.session.begin_nested():
+            if not _aceite_dos_termos_disponivel():
+                return None
+            linhas = db.session.execute(
+                select(DocumentoLegal.tipo, DocumentoLegal.versao_maior, DocumentoLegal.versao_menor,
+                       AceiteDocumentoLead.aceito_em, AceiteDocumentoLead.ip)
+                .join(DocumentoLegal, DocumentoLegal.id_documento == AceiteDocumentoLead.id_documento)
+                .where(AceiteDocumentoLead.id_lead == lead.id)
+            ).all()
+    except SQLAlchemyError as erro:
+        _aceite_por_engine.pop(db.session.get_bind(), None)
+        current_app.logger.warning("Aceite dos termos do lead não lido (%s).", type(erro).__name__)
+        return None
+    linhas = sorted(linhas, key=lambda linha: (ordem.get(linha.tipo, len(ordem)), linha.aceito_em))
+    return [{"documento": TIPOS_DOCUMENTO.get(linha.tipo, linha.tipo),
+             "versao": rotulo_versao(linha.versao_maior, linha.versao_menor),
+             "aceito_em": linha.aceito_em, "ip": linha.ip} for linha in linhas]
+
+
 def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None) -> dict:
     """Resumo gravado e, enquanto os dados de PDV existirem e forem da versão atual, a matriz por
     categoria, a inteligência de estoque e de preço e os itens de cada bloco com os motivos (o mesmo
@@ -489,6 +534,8 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
         "max_arquivos": raio_x.MAX_ARQUIVOS, "itens_por_bloco": ITENS_POR_BLOCO, "retencao_dias": RETENCAO_DIAS,
         # O que o visitante escolheu no Raio-X público (lead com origem "site").
         "rotulos_planos_interesse": ROTULOS_PLANOS_DE_INTERESSE, "rotulos_faixas_faturamento": ROTULOS_FAIXAS_DE_FATURAMENTO,
+        # O aceite dos termos na landing (o bloco "Aceite dos termos"); None sem a tabela.
+        "aceites_termos": _aceites_dos_termos(lead),
     }
 
 

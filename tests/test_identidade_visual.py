@@ -18,6 +18,7 @@ from flask import render_template
 from PIL import Image
 
 from tests.deploy_support import DeployTestCase, ROOT
+from tests.landing_support import servir_bootstrap
 from tests.test_nexobot_navegador import _CONECTAR_LOCAL
 
 try:
@@ -212,8 +213,11 @@ class IdentidadeVisualBrowserTests(DeployTestCase):
 
         def rota(requisicao):
             url = requisicao.request.url
-            if url.startswith(self.base) or "/bootstrap@5.3.3/dist/css/bootstrap.min.css" in url:
+            if url.startswith(self.base):
                 requisicao.continue_()
+            elif "/bootstrap@5.3.3/dist/css/bootstrap.min.css" in url:
+                # A cópia íntegra local, quando existe (sem rede externa); senão, como na CI.
+                servir_bootstrap(requisicao)
             else:
                 requisicao.abort()
         pagina.route("**/*", rota)

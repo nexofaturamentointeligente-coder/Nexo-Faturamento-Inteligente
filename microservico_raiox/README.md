@@ -7,18 +7,21 @@ Decisões do dono em 15/11/2026:
 - e-mail e nome da empresa são obrigatórios;
 - os interesses 1, 2 e 3 são as saídas da Etapa 3 do pré-cadastro, e só o 1 aceita relatórios.
 
+Decisão do dono em 16/11/2026 (redesign da landing): o aceite do lead fica ligado à versão exata dos Termos de Uso e da Política de Privacidade publicadas no banco (`documento_legal`), com data, hora e IP, numa tabela própria (`aceite_documento_lead`, migração `c8e2a4f6b0d1`). A variável `TERMOS_VERSAO` deixa de ser usada.
+
 ## Arquivos
 
 | Arquivo | Papel |
 | :--- | :--- |
 | `app.py` | Rotas, CORS, ordem das checagens e a gravação (Storage e banco) |
-| `configuracao.py` | Variáveis de ambiente e a lista de problemas de configuração |
-| `validacao.py` | Campos do formulário (nome, empresa, e-mail, WhatsApp, interesse, termos) |
+| `configuracao.py` | Variáveis de ambiente, a lista de problemas de configuração e os avisos da subida |
+| `validacao.py` | Campos do formulário (nome, empresa, e-mail, WhatsApp, interesse, termos e os ids dos documentos lidos) e o IP do visitante para o aceite |
 | `sanitizacao.py` | Triagem de cada relatório pelo conteúdo |
 | `armazenamento.py` | Cliente do Storage do Supabase (biblioteca padrão, HTTPS, sem redirecionamento) |
-| `repositorio.py` | INSERT do lead, teto diário sob trava, conferência do lead gravado e da tabela (psycopg2) |
+| `repositorio.py` | INSERT do lead e do aceite de cada documento, teto diário e versões vigentes conferidos sob trava na mesma transação, conferência do lead gravado e das tabelas (psycopg2) |
 | `limite.py` | Limite de envios por IP (IPv6 pela rede /64), em memória |
-| `wsgi.py` | Entrada do gunicorn e a conferência do banco e do bucket na subida |
+| `wsgi.py` | Entrada do gunicorn (nenhuma thread nasce na importação) |
+| `gunicorn.conf.py` | Lido sozinho pelo gunicorn: formato do log de acesso sem dado pessoal e a conferência do banco e do bucket na subida do worker (`post_worker_init`) |
 | `preparar_bucket.py` | Cria ou confere o bucket privado `leads-raio-x` |
 | `instalar_dependencias.py` | Build verificado: pip fixado e conferido por SHA-256 antes de instalar os requisitos |
 | `.python-version` | Python 3.12.10, o mesmo da aplicação principal |
@@ -26,9 +29,9 @@ Decisões do dono em 15/11/2026:
 
 ## API
 
-### `GET /` e `GET /ping`
+### `GET /ping`, `GET /health` e `GET /`
 
-Keep-alive para o serviço não dormir: um agendador externo chama a cada 10 minutos. Responde `{"status": "online", "service": "nexo-raiox"}`, sem tocar no banco nem no Storage. Antes de ligar o agendador, leia o aviso das horas do plano Free em **Implantação**.
+Keep-alive para o serviço não dormir: um agendador externo chama a cada 10 minutos (o Render Free dorme depois de 15 minutos sem tráfego). As três rotas são a mesma função e respondem só `{"status": "alive"}`, com HTTP 200, em JSON compacto: o corpo exato é `{"status":"alive"}` seguido de quebra de linha. No agendador, confira o HTTP 200 (ou a palavra-chave `alive`), e não o texto com espaço. Não tocam no banco nem no Storage, não passam pelo CORS nem pelo limite por IP e não executam regra de negócio. Aceitam só `GET` e `HEAD`; outro método, inclusive `OPTIONS`, recebe 405 com o cabeçalho `Allow` (GET e HEAD). Respondem mesmo com a configuração incompleta e com o banco ou o Storage fora do ar, enquanto houver thread livre no gunicorn (ver **Limites conhecidos**). O `/ping` é também o health check do Render. Antes de ligar o agendador, leia o aviso das horas do plano Free em **Implantação**.
 
 ### `POST /api/leads/raio-x` (multipart/form-data)
 
@@ -40,8 +43,18 @@ Keep-alive para o serviço não dormir: um agendador externo chama a cada 10 min
 | `whatsapp` | Obrigatório, do Brasil, com DDD (regra abaixo). Guardado só com DDD e número. |
 | `interesse` | `1` (quer o Raio-X, com relatórios), `2` (quer ajuda com os relatórios) ou `3` (só contato). Gravado como `raio_x`, `ajuda_relatorios` ou `so_contato`. |
 | `termos_aceitos` | Tem de vir marcado: `true`, `1`, `on` ou `sim`. Falso ou ausente: 400. |
+| `documento_termos` | O `id` da versão dos Termos de Uso que a landing mostrou (`documento_legal.id_documento`, o `id` de `GET /documentos-legais/vigentes` da aplicação principal). Obrigatório: inteiro positivo, só dígitos, sem zero à esquerda. |
+| `documento_privacidade` | O `id` da versão da Política de Privacidade que a landing mostrou. Obrigatório, com a mesma regra, e diferente do anterior. |
 | `arquivos` | Um ou mais relatórios, **só no interesse 1** (e obrigatórios nele): até 12, até 15 MB somados. |
 | `campo_isca` | Opcional, invisível na landing: preenchido, o envio é recusado (robô). |
+
+O aceite dos termos:
+- `termos_aceitos` desmarcado, ou um dos dois ids ausente ou que não é inteiro positivo: 400 no campo `termos_aceitos`, "Leia e aceite os Termos de Uso e a Política de Privacidade.";
+- sem versão publicada de um dos dois documentos: 503, "Os termos ainda não estão disponíveis. Tente mais tarde." (nada é gravado);
+- ids diferentes das versões vigentes (o admin publicou outra enquanto o visitante lia, ou um id forjado): 409 no campo `termos_aceitos`, "Os termos foram atualizados enquanto você lia. Leia a versão atual e confirme de novo." Nada é gravado, e os relatórios que este envio já guardou no Storage são apagados. A landing busca as vigentes de novo e pede o aceite outra vez;
+- com os ids certos, o lead é gravado com uma linha por documento em `aceite_documento_lead`: a versão aceita, o instante (o `now()` do banco, o mesmo de `termos_aceitos_em` do lead) e o IP do visitante. O lead guarda também o resumo das versões em `termos_versao`, como `TU-v1.0 PP-v1.0` (até 40 caracteres).
+
+O IP do aceite é o mesmo endereço que o limite por IP conta: o do visitante, tirado do `X-Forwarded-For` com `PROXIES_CONFIAVEIS` (ver Segurança). Ele é normalizado: o IPv4 mapeado em IPv6 vira o IPv4 e o IPv6 sai na forma curta; o que não é IP, ou é endereço com escopo (`fe80::1%eth0`), fica nulo. O IP nunca vai para o log.
 
 O WhatsApp segue as regras do envio pela Evolution da aplicação principal, mais estritas no que é ambíguo, para o número nunca virar o de outra pessoa:
 - com `+` ou `00`, só o DDI 55 seguido de DDD e número;
@@ -70,12 +83,13 @@ Erros (sempre `{"erro": "...", "campo": "..."}`, com `campo` quando há):
 
 | Código | Quando |
 | :--- | :--- |
-| 400 | Campo inválido, termos não aceitos, campo isca, regra dos arquivos pelo interesse, mais de 12 arquivos |
+| 400 | Campo inválido, termos não aceitos ou ids dos documentos ausentes ou inválidos, campo isca, regra dos arquivos pelo interesse, mais de 12 arquivos |
 | 403 | Origem fora da lista (CORS estrito), inclusive com `CORS_ORIGENS` vazia: a origem é conferida antes de tudo |
+| 409 | O visitante leu uma versão dos termos que não é a vigente (na primeira conferência ou na gravação), no campo `termos_aceitos` |
 | 413 | Mais de 15 MB, um campo de texto enorme ou partes demais no formulário (dezenas de arquivos): a mensagem cita os dois limites |
 | 415 | Pedido que não é multipart/form-data |
 | 429 | Limite por IP (com `Retry-After`, legível pela landing pelo `Access-Control-Expose-Headers`) ou teto diário do serviço |
-| 503 | Configuração incompleta (com a origem liberada), banco ou Storage fora do ar, fila da triagem cheia (na hora, com `Retry-After`) ou a vez na triagem que não chega dentro da espera |
+| 503 | Configuração incompleta (com a origem liberada), sem versão publicada de um dos documentos, banco ou Storage fora do ar, fila da triagem cheia (na hora, com `Retry-After`) ou a vez na triagem que não chega dentro da espera |
 
 ### Ordem das checagens
 
@@ -85,20 +99,25 @@ Erros (sempre `{"erro": "...", "campo": "..."}`, com `campo` quando há):
 4. Formato do pedido.
 5. Tamanho.
 6. Campo isca.
-7. Aceite dos termos.
+7. Aceite dos termos: a caixa marcada e os ids dos dois documentos lidos.
 8. Campos.
 9. Regra dos arquivos pelo interesse.
-10. Teto diário (primeira conferência, antes do trabalho pesado).
-11. Triagem de cada relatório: uma por vez no processo, em ordem de chegada, com prazo por envio (`PRAZO_DA_TRIAGEM`). Só os envios com relatório entram na fila; os dos interesses 2 e 3 passam direto. Até dois envios esperam a vez; o seguinte recebe 503 na hora, com `Retry-After`. Assim os envios na fila nunca ocupam as 8 threads do gunicorn, e o `/ping` do health check continua respondendo. A espera vai até duas vezes o prazo, mais 10 s (70 s no padrão); depois, 503, também com `Retry-After`.
+10. Primeira conferência, antes do trabalho pesado, numa ida ao banco: o teto diário (429) e as versões vigentes dos termos (503 sem documento publicado, 409 com ids de outra versão). Nada foi guardado ainda.
+11. Triagem de cada relatório: uma por vez no processo, em ordem de chegada, com prazo por envio (`PRAZO_DA_TRIAGEM`). Só os envios com relatório entram na fila; os dos interesses 2 e 3 passam direto. Até dois envios esperam a vez; o seguinte recebe 503 na hora, com `Retry-After`. A fila protege só a triagem: pedidos presos em outra fase podem ocupar as 8 threads (ver **Limites conhecidos**). A espera vai até duas vezes o prazo, mais 10 s (70 s no padrão); depois, 503, também com `Retry-After`.
 12. Gravação dos relatórios aprovados no Storage.
-13. Gravação do lead no banco, com o teto diário conferido de novo sob uma trava consultiva (`pg_advisory_xact_lock`): envios simultâneos não passam juntos do teto.
+13. Gravação do lead e do aceite de cada documento no banco, numa transação só:
+    1. a trava consultiva (`pg_advisory_xact_lock`) e o teto diário conferido de novo: envios simultâneos não passam juntos do teto;
+    2. `documento_legal` travada em `SHARE MODE` e as versões vigentes lidas de novo. A trava espera a publicação de um documento que esteja em andamento (e a versão nova é vista) e faz esperar a que chegar depois, até o COMMIT. Assim o aceite gravado é sempre o da versão vigente no instante do COMMIT. Ela só disputa com a publicação: a leitura dos documentos e o aceite do cliente do portal não esperam;
+    3. com ids de outra versão (a publicada durante o envio), nada é gravado: 409, e os relatórios deste envio saem do Storage;
+    4. o INSERT do lead e o de um aceite por documento, com o mesmo `now()`.
 
-O log nunca leva nome, e-mail, WhatsApp, IP, a configuração nem as credenciais. O problema de configuração diz a variável, sem o valor.
+O log da aplicação nunca leva nome, e-mail, WhatsApp, IP, a configuração nem as credenciais. O problema de configuração diz a variável, sem o valor. O log de acesso do gunicorn, que o Render liga por padrão, sai no formato do `gunicorn.conf.py`: instante, método, caminho sem a query, status e duração, sem IP, User-Agent nem Referer. No caminho, tudo o que não é ASCII visível, mais aspas, barra invertida e `%`, vira `%XX` antes de chegar ao log: ninguém forja linhas nele nem falsifica o status e a duração de uma linha.
 
 ### O que acontece quando algo falha no meio
 
 - **O Storage falha num relatório.** Os relatórios deste envio são apagados, inclusive o que estava a caminho: o Storage pode ter gravado e a resposta se perdido (prazo esgotado, 502 do gateway). Apagar um objeto que não existe não é erro. Mas o Storage só cria o registro do objeto no fim da gravação, então o que estava a caminho pode ainda não existir na hora do DELETE e aparecer depois. Por isso, quando ele não é achado para apagar, o caminho vai para o log ("Relatório a caminho não achado para apagar"), para a conferência. Resposta 503.
 - **O teto do dia fecha entre a primeira conferência e a gravação.** Os relatórios saem e a resposta é 429.
+- **O admin publica uma versão nova dos termos durante o envio.** A gravação vê a versão nova (ver o passo 13): nem o lead nem o aceite são gravados, os relatórios saem e a resposta é 409.
 - **O banco não confirma a gravação.** O COMMIT pode ter sido aplicado e só a resposta ter se perdido. Por isso o serviço confere, numa conexão nova, se o lead ficou gravado:
   - se ficou, responde 201 e não apaga nada;
   - se não ficou, apaga os relatórios e responde 503;
@@ -185,7 +204,7 @@ O que ainda pode deixar órfão sem registro é o processo morto no meio do envi
 | `SUPABASE_URL` | não | `https://<projeto>.supabase.co`. Sem ela, sai do `DATABASE_URL`: da conexão direta (`db.<projeto>.supabase.co`) ou do usuário `<papel>.<projeto>` do pooler, de qualquer papel. |
 | `CORS_ORIGENS` | sim, em produção | Origens da landing, separadas por vírgula (`https://host`, sem caminho). **Fica vazia até a LGPD estar resolvida** (pendências): sem ela, todo POST e todo preflight recebem 403 (a origem é conferida antes de tudo), e o `/ping` continua no ar. Uma entrada inválida vai para o log pela posição na lista, sem o valor. |
 | `PERMITIR_LOCALHOST` | não | `1` aceita `http://localhost` e `http://127.0.0.1` (só para testes). |
-| `TERMOS_VERSAO` | sim | Versão do texto dos termos que a landing mostra (até 40 caracteres). Vai para o lead com o instante do aceite. |
+| `TERMOS_VERSAO` | não (ignorada) | Não é mais usada: a versão aceita vem dos documentos publicados no banco, lida na gravação do lead. Se estiver no ambiente, a subida deixa um aviso no log (sem o valor); pode tirá-la. |
 | `SUPABASE_BUCKET` | não | Padrão `leads-raio-x`. |
 | `LIMITE_POR_HORA`, `LIMITE_POR_DIA`, `TETO_DIARIO` | não | Padrão 5, 10 e 100. Números inteiros, só com dígitos ASCII. |
 | `PRAZO_DA_TRIAGEM` | não | Segundos de triagem por envio, de 1 a 300. Padrão 30. A espera pela vez acompanha: duas vezes o prazo, mais 10 s. |
@@ -202,19 +221,40 @@ O lead vai para `lead_avaliacao`, com cinco colunas novas da migração aditiva 
 | `interesse` | `raio_x`, `ajuda_relatorios` ou `so_contato` |
 | `status_arquivo` | `sem_arquivo`, `aprovado`, `parcial` ou `recusado` |
 | `arquivos_storage` | O JSON dos relatórios no bucket |
-| `termos_aceitos_em` | O instante do aceite dos termos da landing |
-| `termos_versao` | A `TERMOS_VERSAO` aceita |
+| `termos_aceitos_em` | O instante do aceite dos termos da landing (o mesmo de `aceite_documento_lead.aceito_em`) |
+| `termos_versao` | O resumo das versões aceitas, como `TU-v1.0 PP-v1.0` (a prova é `aceite_documento_lead`) |
 
 O microsserviço grava origem `site` e status `pendente`. O aceite dos termos fica em colunas próprias. Assim, quando o consultor processa os relatórios pela tela do lead (o reenvio, que reescreve `consentimento_em` e `versao_autorizacao`), o registro do aceite do visitante não se perde. `consentimento_em` e `versao_autorizacao` ficam nulos no lead do microsserviço. Os dados da avaliação ficam nulos até o consultor processar.
 
-**A migração precisa estar aplicada antes de o serviço receber envios.** No banco da aplicação principal, com backup antes, como as anteriores:
-
-```
-flask db upgrade e7a1c3f5b9d2:f2b6d8a4c1e9 --sql   (prévia)
-flask db upgrade f2b6d8a4c1e9
-```
-
 A aplicação principal funciona com ou sem a migração, porque as cinco colunas ficam fora do mapeamento do ORM (`exclude_properties` no modelo). Elas estão só na tabela, para o Alembic e o `create_all`, e nenhum INSERT ou SELECT do ORM as cita. O downgrade recusa enquanto houver lead com qualquer uma delas preenchida.
+
+## Banco: a migração `c8e2a4f6b0d1` (o aceite dos termos do lead)
+
+Tabela nova `aceite_documento_lead`, da migração aditiva `c8e2a4f6b0d1` (depois da `f2b6d8a4c1e9`), com o modelo `AceiteDocumentoLead` no `models.py`. É a prova do aceite do lead, como `aceite_documento` é a do cliente do portal (aquela não serve ao lead: o usuário é obrigatório nela).
+
+| Coluna | Conteúdo |
+| :--- | :--- |
+| `id_aceite` | Chave |
+| `id_lead` | O lead (`lead_avaliacao.id`), com `ON DELETE CASCADE`: o aceite sai com o lead |
+| `id_documento` | A versão aceita (`documento_legal.id_documento`), sem cascata: a versão aceita não pode ser apagada |
+| `aceito_em` | O instante do aceite (o `now()` do banco, o mesmo do lead) |
+| `ip` | O IP do visitante, normalizado; nulo quando ausente ou inválido. Até 45 caracteres |
+
+Uma linha por documento e lead (`UNIQUE(id_lead, id_documento)`), com índice em `id_documento`. No PostgreSQL, RLS ligado, com as políticas `deny_api_access` (restritiva, para `anon` e `authenticated`) e `acesso_servidor` (para `postgres` e `service_role`), como em `lead_avaliacao`; os privilégios de `anon` e `authenticated` na tabela e na sequência da chave são revogados. O downgrade recusa enquanto houver aceite gravado.
+
+A aplicação principal só lê a tabela, no bloco "Aceite dos termos" da página do lead (`/admin/leads/<id>`): os documentos, as versões, a data e a hora (horário de Brasília) e o IP. Sem a tabela, a página sai sem o bloco.
+
+**Ordem da implantação: as migrações antes do deploy do serviço.** O deploy do Render não migra sozinho, e o serviço sem a tabela responde 503 a todo envio (nada é gravado). No banco da aplicação principal, com backup antes, como as anteriores:
+
+```
+flask db upgrade f2b6d8a4c1e9:c8e2a4f6b0d1 --sql   (prévia, num banco já na f2b6d8a4c1e9)
+flask db upgrade c8e2a4f6b0d1
+```
+
+Num banco ainda na `e7a1c3f5b9d2`, a prévia é `e7a1c3f5b9d2:c8e2a4f6b0d1`, e o upgrade aplica as duas. Depois, nesta ordem:
+1. publicar os Termos de Uso e a Política de Privacidade (Configurações › Documentos Legais da aplicação principal). Sem as duas versões publicadas, o envio responde 503;
+2. implantar esta versão do serviço e conferir a conferência da subida no log (ver Implantação);
+3. ligar a landing, que manda os ids das versões que mostrou.
 
 ## Storage
 
@@ -233,19 +273,26 @@ O backup do banco (`pg_dump`) não leva os objetos do Storage, só os caminhos g
 - **Python:** 3.12.10, pelo `.python-version` da pasta (ou `PYTHON_VERSION=3.12.10` nas variáveis). O `psycopg2-binary` 2.9.9 não tem wheel para o 3.13.
 - **Build:** `python -I instalar_dependencias.py`. É a mesma proteção da SEC-006B da aplicação principal (`tools/install_dependencies.py`): mesmo pip, mesmo SHA-256 e as mesmas variáveis de ambiente repassadas. O pip da imagem não processa os requisitos. O pip 26.2.2 é baixado de files.pythonhosted.org e conferido pelo SHA-256. A versão é confirmada pelos metadados e pelo módulo importado, e só então ele instala o `requirements.txt`, sem cache e sem configuração herdada.
 - **Start:** `gunicorn -w 1 --threads 8 --timeout 60 -b 0.0.0.0:$PORT wsgi:app`
-- **Health check:** `/ping`. A fila da triagem tem no máximo dois envios esperando, então sobram threads para ele.
+- **`gunicorn.conf.py`:** o gunicorn o procura na pasta em que o comando começa, antes de aplicar qualquer `--chdir`, e essa pasta tem de ser a do serviço (o diretório raiz `microservico_raiox`). Um `-c`, no start ou no `GUNICORN_CMD_ARGS`, faz ele ler outro arquivo no lugar deste. Em qualquer dos dois desvios, o log de acesso volta ao formato padrão, com IP, e a conferência da subida não roda. Ele fixa o formato do log de acesso sem dado pessoal e começa a conferência da subida no worker, depois do fork. O Render põe por padrão `GUNICORN_CMD_ARGS="--preload --access-logfile - --bind=0.0.0.0:10000"` nos serviços Python: o log de acesso fica ligado, o app é importado no processo mestre (por isso nenhuma thread nasce na importação) e o `-b` do start vence o `--bind`. No primeiro deploy, confira que as linhas de acesso saem sem IP.
+- **Health check:** `/ping`. Ele não toca no banco nem no Storage, mas usa uma das 8 threads do gunicorn como qualquer pedido (ver **Limites conhecidos**).
 - **Variáveis:** as da tabela acima.
 
 Um worker só: o limite por IP fica em memória.
 
 **Conferências no log, antes de abrir a origem.** Nenhuma delas grava dado pessoal.
-- Na subida, numa thread à parte, o serviço lê a tabela de leads pelas colunas da migração e lê o bucket. O log mostra "Conferência da subida: banco ok, com as colunas da migração f2b6d8a4c1e9." e "Conferência da subida: bucket ok, privado." Senão, mostra o tipo do erro: por exemplo, `OperationalError` para a URL direta no Render, `UndefinedColumn` sem a migração e 401 ou 403 para uma chave recusada.
+- Na subida do worker, numa thread à parte (gancho `post_worker_init` do `gunicorn.conf.py`, depois do fork), o serviço lê as tabelas pelas colunas das migrações (a de leads, a do aceite e as versões vigentes de `documento_legal`), trava `documento_legal` como a gravação trava e lê o bucket. O log mostra "Conferência da subida: banco ok, com as tabelas das migrações f2b6d8a4c1e9 e c8e2a4f6b0d1." e "Conferência da subida: bucket ok, privado." Senão, mostra o tipo do erro: por exemplo, `OperationalError` para a URL direta no Render, `UndefinedColumn` ou `UndefinedTable` sem as migrações, `InsufficientPrivilege` para um papel que não pode travar `documento_legal` e 401 ou 403 para uma chave recusada. Sem versão publicada de um dos documentos, o log avisa: "Conferência da subida: documento sem versão publicada (...); os envios respondem 503 até a publicação." Com `TERMOS_VERSAO` no ambiente, avisa que ela é ignorada.
 - Na primeira vez que aparece cada contagem de entradas do `X-Forwarded-For` (de 0 a 6, e "7 ou mais"), o log mostra só a contagem: "X-Forwarded-For com N entrada(s); PROXIES_CONFIAVEIS=2." Com o serviço no ar, abra `https://<serviço>/ping` no navegador, de fora, e procure a linha do mesmo instante (cada linha tem a hora). Se ela disser 2, o padrão está certo. Se disser outro número, use esse número em `PROXIES_CONFIAVEIS`. Se nenhuma linha nova aparecer, a sua contagem já tinha aparecido antes. A contagem 0 é a do health check interno do Render.
+
+**Limites conhecidos (threads do gunicorn).**
+- As 8 threads atendem tudo, inclusive o `/ping`. Oito pedidos presos ao mesmo tempo deixam o `/ping` sem resposta até um deles soltar, e o health check do Render pode tirar a instância do tráfego. Prendem a thread: o banco ou o Storage lentos, o corpo do envio chegando devagar e o corpo que o app não leu, de qualquer pedido (qualquer método e rota, inclusive o `/ping`: 403, 404, 405, 413, 415, 429, 503 e até o 200 de um GET com corpo), que o gunicorn descarta depois da resposta, em keep-alive, sem prazo. A fila da triagem limita só a triagem.
+- Isso só vale se o proxy do Render (e o Cloudflare na frente dele) repassar o corpo em fluxo. Antes de abrir a origem, meça de fora: 6 a 8 uploads com `curl --limit-rate 1k` enquanto chama o `/ping`.
+- Se o corpo chegar em fluxo, a defesa que cobre o descarte é fechar no gunicorn a conexão de todo pedido com corpo (`Content-Length` ou `Transfer-Encoding`), de qualquer método, num `pre_request` com `req.force_close()`, ou `keepalive = 0`; o custo é que a resposta antecipada (413, 429, 503) pode virar um erro de conexão na landing. Prazo para a leitura do corpo e teto de envios simultâneos por IP cobrem só o corpo que o app está lendo, não o descarte. Um teto global de envios sem teto por IP foi testado e descartado: cinco conexões lentas de um só IP bastavam para recusar todos os envios, sem nenhum alerta, porque o `/ping` seguia respondendo.
 
 **Plano e keep-alive.**
 - O plano Free do Render dá 750 horas por mês por workspace, somando todos os serviços Free. Um serviço acordado o mês inteiro gasta de 720 a 744 horas.
 - Com a aplicação principal no Free e acordada (ela tem o próprio despertador `/ping`), um segundo serviço Free acordado estoura as horas por volta do dia 15. Aí o Render suspende todos os serviços Free do workspace, inclusive a aplicação principal, até o mês seguinte.
-- Por isso: o microsserviço no plano Starter (não dorme, dispensa o agendador e tem 0,5 de CPU para a triagem), ou a aplicação principal num plano pago. Agendador externo chamando `GET /ping` a cada 10 minutos só com as horas conferidas.
+- Por isso: o microsserviço no plano Starter (não dorme, dispensa o agendador e tem 0,5 de CPU para a triagem), ou a aplicação principal num plano pago. Agendador externo chamando `GET /ping` (ou `GET /health`) a cada 10 minutos só com as horas conferidas.
+- O `/ping` não consulta o banco, de propósito. Com o Supabase no plano Free, o projeto pausa depois de 7 dias sem consultas: mantenha no monitor também o `/healthz/db` (`SELECT 1`) da aplicação principal, como em `Docs/WHATSAPP_EVOLUTION.md`. Com o projeto pausado, o `/ping` continua respondendo `alive`, mas os envios recebem 503.
 
 ## Testes
 
@@ -255,28 +302,30 @@ Na pasta do microsserviço:
 python -m unittest discover -s tests -t .
 ```
 
-Os testes não usam rede, banco nem Storage reais. O banco e o Storage entram como dublês, o cliente do Storage é testado contra um servidor HTTP local, e o repositório, com uma conexão espiã: a trava consultiva tem de vir antes da contagem, na mesma transação. O instalador é testado com o download e os processos simulados.
+Os testes não usam rede, banco nem Storage reais. O banco e o Storage entram como dublês, o cliente do Storage é testado contra um servidor HTTP local, e o repositório, com uma conexão espiã: a trava consultiva tem de vir antes da contagem, e a trava de `documento_legal` e a leitura das versões vigentes antes do INSERT, na mesma transação. As regras do aceite têm testes próprios: os ids ausentes ou inválidos (400), sem documento publicado (503), os ids de outra versão na primeira conferência (409, sem nada no Storage) e na gravação (409, com os relatórios apagados), o IP do visitante pelo `X-Forwarded-For` e o IP fora do log. O instalador é testado com o download e os processos simulados.
 
-O ensaio da gravação num PostgreSQL de verdade, com a migração aplicada, é a etapa 6d de `tests/test_leads_postgresql.py`, na aplicação principal. Ela cobre o lead gravado, a conferência do lead e as CHECKs. Cobre também o teto exato com oito envios simultâneos, com a janela entre a contagem e o INSERT alargada: sem a trava, os oito passariam juntos.
+O ensaio da gravação num PostgreSQL de verdade, com as migrações aplicadas, é a etapa 6d de `tests/test_leads_postgresql.py`, na aplicação principal. Ela cobre o lead gravado, a conferência do lead e as CHECKs. Cobre também o teto exato com oito envios simultâneos, com a janela entre a contagem e o INSERT alargada: sem a trava, os oito passariam juntos. E o aceite: os documentos publicados pelo caminho do admin; dois aceites com o IP e o instante do lead; sem documento publicado, nada gravado; ids antigos, trocados ou forjados, nada gravado; a publicação em andamento, que a gravação espera e cuja versão nova ela recusa; a publicação que chega durante a gravação, que espera o COMMIT do lead; as restrições, o RLS, as políticas e os privilégios da tabela e da sequência; e o downgrade recusado com aceite, aceito sem ele e o novo upgrade. Sem a trava de `documento_legal`, ou com ela solta antes do COMMIT, o ensaio falha (as duas mutações foram conferidas em 16/11/2026).
 
 ## Pendências antes de ligar na landing
 
 Cada passo depende de autorização do dono.
 
 1. **LGPD**, antes de qualquer dado entrar:
-   - texto dos termos publicado (a versão vai em `TERMOS_VERSAO`);
+   - os Termos de Uso e a Política de Privacidade publicados em Configurações › Documentos Legais (a versão 1.0 virá dos textos do dono); a versão aceita vai para `aceite_documento_lead`, e `TERMOS_VERSAO` não é mais usada;
    - base legal;
+   - prazo de guarda da prova do aceite: hoje ela sai com o lead (`ON DELETE CASCADE`), como a do cliente sai com o usuário;
    - prazo de retenção dos relatórios no bucket, com uma rotina que apague os vencidos e os prefixos `AAAA/MM/<id>` sem lead no banco (hoje eles ficam até alguém apagar);
-   - atendimento a pedido de exclusão (o lead e os arquivos dele).
-2. Aplicar a migração `f2b6d8a4c1e9` no banco de produção, com backup.
+   - atendimento a pedido de exclusão (o lead, os aceites e os arquivos dele).
+2. Aplicar as migrações `f2b6d8a4c1e9` e `c8e2a4f6b0d1` no banco de produção, com backup, **antes** de implantar esta versão do serviço (ver "Banco: a migração `c8e2a4f6b0d1`").
 3. Criar o bucket com `preparar_bucket.py`, com a chave secreta (`sb_secret_...`).
-4. Implantar o serviço (plano conforme o aviso das horas) com `CORS_ORIGENS` vazia. Conferir no log a conferência da subida e a contagem do `X-Forwarded-For`, e ajustar `PROXIES_CONFIAVEIS` se preciso (ver Implantação). Preencher a origem só depois do passo 1.
+4. Implantar o serviço (plano conforme o aviso das horas) com `CORS_ORIGENS` vazia. Conferir no log a conferência da subida e a contagem do `X-Forwarded-For`, e ajustar `PROXIES_CONFIAVEIS` se preciso (ver Implantação). O IP gravado no aceite é o que essa contagem acha: com o valor errado, ele vira o da borda do Cloudflare, e não serve de prova. Preencher a origem só depois do passo 1.
 5. Ligar a landing a este endpoint (hoje o pré-cadastro só monta a mensagem do WhatsApp). Na aplicação principal, que serve a landing:
    - a CSP de `seguranca_http.py` precisa liberar a origem exata do microsserviço em `connect-src` (envio por `fetch`) ou em `form-action` (envio por formulário);
    - hoje ela só permite `'self'`, e o navegador bloquearia o envio.
 6. Processar os relatórios guardados no Raio-X do consultor (hoje eles só ficam no Storage, com o lead pendente).
 7. Recomendado: um papel próprio no banco para o serviço, no lugar do usuário da aplicação principal.
    - `lead_avaliacao` tem RLS, e a única política que libera acesso é a de `postgres` e `service_role` (a outra nega `anon` e `authenticated`). O papel novo precisa de políticas próprias de INSERT e de SELECT, sem BYPASSRLS: o SELECT conta o teto e confere o lead gravado. Só com GRANT, todo envio falha.
+   - Também precisa de uma política de SELECT em `documento_legal` (RLS ligado, sem política) e de INSERT em `aceite_documento_lead`, e de poder travar `documento_legal` em `SHARE MODE`: o PostgreSQL só deixa o dono da tabela, quem tem UPDATE, DELETE ou TRUNCATE nela, ou MAINTAIN a partir da versão 17. Use o UPDATE: com RLS e sem política de UPDATE para o papel, ele não muda nenhuma linha. O TRUNCATE não passa pelo RLS e não serve. A conferência da subida mostra `InsufficientPrivilege` se faltar.
    - O `SUPABASE_URL` continua saindo do usuário `<papel>.<projeto>` do pooler.
 
 ### Na aplicação principal (fora do escopo autorizado desta entrega)

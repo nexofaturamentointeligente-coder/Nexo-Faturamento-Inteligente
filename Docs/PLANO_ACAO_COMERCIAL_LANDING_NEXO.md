@@ -143,3 +143,27 @@ comercial ou documento jurídico foi considerado oficial por aparecer como exemp
 A ausência de conteúdo autorizado não é falha a ser preenchida com exemplos.
 A ativação de aquisição e a publicação de documentos/depoimentos dependem de dados
 e aprovação do proprietário. A COM-002 continua planejada e não implementada.
+
+## Redesenho de 16/11/2026 (decisões do dono que atualizam a COM-001)
+
+O dono pediu o redesenho da landing em três frentes (visual, navegação com cadastro do lead frio e o envio da
+Avaliação de Cenário Externo ao microsserviço) e confirmou os contatos oficiais. O que mudou em relação aos
+itens acima; os testes da landing acompanharam cada mudança (`Docs/PRE_CADASTRO_LANDING.md`, seção 9).
+
+| ID | Antes (COM-001) | Agora (decisão do dono, 16/11/2026) | Onde |
+| -- | --------------- | ----------------------------------- | ---- |
+| 1.2 | "Acessar Portal" como única ação do cabeçalho | "Entrar" (link de texto para o login) e "Cadastre-se" (botão de destaque que abre o cadastro do lead frio; sem JavaScript, leva aos contatos do rodapé) | `templates/landing.html`; `static/js/landing-captacao.js` |
+| 2.1 | Gráficos demonstrativos preservados no hero | Hero centralizado, sem a tag, sem a frase de público (tintas), sem a nota de baixo dos botões e sem o painel da direita; o texto vale para qualquer varejo | `templates/landing.html`; `static/css/landing.css`; `static/js/landing.js` |
+| 3.1 | Cards de oportunidades com nota de não garantia | Quatro benefícios financeiros (vender abaixo do custo, descontos fora do preço normal, capital parado, dinheiro recuperável e Plano de Ação), cada um com ícone próprio, só com o que o sistema mostra e sem prometer resultado; sem a tag e sem a nota | `templates/landing.html` |
+| 3.2 | Revisão pela equipe informada também abaixo dos passos | A nota de baixo dos quatro passos saiu; a revisão pela equipe continua no subtítulo do Método | `templates/landing.html` |
+| 4.1-CTA | "Deixar Avaliação" desabilitado | Continua desabilitado até a junção com o módulo de avaliações (marcador `AVALIACOES_LANDING`); a tag virou "Avaliações", um pouco maior, e os cards mostram a nota em estrelas quando o DTO a trouxer | `templates/landing.html`; `static/css/landing.css` |
+| 5.1 | Explicação longa da estimativa do Indicador de Pressão de Estoque | O texto longo saiu; os itens estimados levam o selo "Estimativa". A lista cresceu para o que já tem tela no portal (Raio-X do caixa, Auditoria de custos com o selo "Prata em diante", Plano de Ação e Evolução & Conquistas); os indicadores executivos calculados sem tela não são anunciados | `templates/landing.html` |
+| 5.2 | Painel demonstrativo | Vídeo e player intactos; o painel ganhou a cara do portal atual (janela, menu lateral, quatro KPIs) e produtos genéricos de varejo, com os mesmos valores ilustrativos | `templates/landing.html`; `static/js/landing.js` |
+| 5.3 | Três planos e o CONTRATAR abaixo da grade | Quatro cards (BRONZE, PRATA, OURO "Mais completo" e PERSONALIZADO / ENTERPRISE), todos "Sob consulta", sem botão, com as entregas reais; o "Contrate pelo WhatsApp..." e o "Como obter acesso ao NEXO" de baixo dos cards saíram | `templates/landing.html` |
+| 6.1 | Título, subtítulo, "Falar com a equipe NEXO" e "Como obter acesso" | Só o título e, logo abaixo, o CONTRATAR, que abre o pré-cadastro | `templates/landing.html` |
+| 6.2 | Contatos e CNPJ pendentes | Rodapé de ponta a ponta com o e-mail de suporte confirmado (`suportenexocolab@gmail.com`), o WhatsApp oficial (só com número configurado), o Instagram, o crédito do desenvolvedor e o CNPJ só com `CNPJ_EMPRESA` válida. Os documentos legais entram no marcador `{# LINKS_LEGAIS #}` quando as páginas públicas existirem | `templates/landing.html`; `config.py` |
+
+Continuam valendo: nada de preço inventado, depoimento fictício ou texto jurídico escrito pela equipe técnica;
+sem número de WhatsApp, a página não menciona o WhatsApp; CDN só com versão exata e SRI; CSP sem script inline
+sem nonce. A CSP da landing passou a liberar só a origem do microsserviço do Raio-X no `connect-src`
+(`seguranca_http.py`).

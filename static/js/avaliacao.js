@@ -6,7 +6,8 @@
  * - contadores de caracteres, com aviso ao leitor de tela só perto do limite;
  * - validação antes do envio: erro por campo, resumo e foco no primeiro inválido;
  * - envio por fetch com todos os estados. Sucesso só depois da resposta 200: o
- *   flash já está na sessão e a página de destino o exibe;
+ *   destino traz o código da confirmação (?confirmacao=), que "Minha avaliação"
+ *   exibe; a resposta JSON não usa flash;
  * - rascunho na sessionStorage quando a sessão cai: o cliente precisa sair da
  *   página para entrar de novo e o texto volta depois. Vale só para esta aba e
  *   este usuário; as autorizações nunca são restauradas, precisam ser marcadas de novo.

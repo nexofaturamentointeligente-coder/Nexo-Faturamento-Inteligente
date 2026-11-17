@@ -1485,6 +1485,37 @@ class LeadAvaliacao(db.Model):
     )
 
 
+class AceiteDocumentoLead(db.Model):
+    """
+    Aceite dos Termos de Uso e da Política de Privacidade pelo lead da landing (revisão c8e2a4f6b0d1): uma linha
+    por documento aceito no pré-cadastro, com a versão exata (id_documento), o instante (o now() do banco, o mesmo
+    de termos_aceitos_em do lead) e o IP do visitante, normalizado (nulo quando ausente ou inválido).
+
+    Quem grava é o microsserviço do Raio-X (microservico_raiox/), na transação do lead e só com as versões vigentes
+    nela; a aplicação só lê (o bloco "Aceite dos termos" da página do lead, com falha aberta sem a tabela). É a
+    prova do aceite do lead, como AceiteDocumento é a do cliente do portal, que não serve ao lead (id_usuario
+    obrigatório). Sai com o lead (ON DELETE CASCADE); a versão aceita não pode ser apagada (FK sem cascata).
+    """
+    __tablename__ = "aceite_documento_lead"
+
+    id_aceite: Mapped[int] = mapped_column(primary_key=True)
+    id_lead: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lead_avaliacao.id", ondelete="CASCADE", name="fk_aceite_documento_lead_lead"), nullable=False,
+    )
+    id_documento: Mapped[int] = mapped_column(
+        ForeignKey("documento_legal.id_documento", name="fk_aceite_documento_lead_documento"), nullable=False,
+    )
+    aceito_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    ip: Mapped[Optional[str]] = mapped_column(String(45))
+
+    documento = relationship("DocumentoLegal")
+
+    __table_args__ = (
+        UniqueConstraint("id_lead", "id_documento", name="uq_aceite_lead_documento"),
+        Index("ix_aceite_documento_lead", "id_documento"),
+    )
+
+
 class BrainstormingDadosPdv(db.Model):
     """
     Uma linha por produto e ano de exercício do PDV enviado pelo lead: quantidade, venda
@@ -1597,4 +1628,200 @@ class BrainstormingDadosPdv(db.Model):
                         "BETWEEN '2000-01-01' AND '2100-12-31'", name="ck_brainstorming_dados_pdv_ultima_venda"),
         Index("ix_brainstorming_dados_pdv_lead", "lead_id"),
         Index("ix_brainstorming_dados_pdv_criado_em", "criado_em"),
+    )
+
+
+# =====================================================================
+# Avaliações dos clientes (COM-002; revisão d3f5b7a9c1e2)
+# =====================================================================
+# As quatro tabelas têm a estrutura exata da revisão c5e8a1f4b7d2 (02/11/2026), que já as criou no banco do .env:
+# a d3f5b7a9c1e2 as cria onde não existem e, onde existem, as adota depois de conferi-las contra estes modelos.
+# Regras do módulo em avaliacoes.py; rotas em blueprints/avaliacoes.py.
+STATUS_MODERACAO = ("PENDENTE", "APROVADA", "REJEITADA")
+STATUS_SUGESTAO = ("NOVA", "EM_ANALISE", "CONCLUIDA")
+COMENTARIO_PUBLICO_MAX = 1000
+SUGESTAO_PRIVADA_MAX = 2000
+NOME_EXIBICAO_MAX = 60
+
+
+class AvaliacaoCliente(db.Model):
+    """
+    Avaliação do SERVIÇO NEXO por um usuário CLIENTE (uma por usuário; editar
+    reenvia para moderação). Não confundir com `avaliacao_analise`, a tabela
+    documental do schema histórico, que avaliaria UMA análise específica.
+
+    Aprovação administrativa e autorização do cliente são condições distintas.
+    O CHECK ck_avaliacao_publicacao garante no banco que nada fica "no ar"
+    (publicada_em sem retirada_em) sem aprovação E consentimento vigente; a
+    consulta pública (avaliacoes.depoimentos_publicos) soma a isso a situação
+    atual do usuário e da empresa. A sugestão privada mora em SugestaoMelhoria,
+    tabela que a consulta pública nunca toca.
+    """
+    __tablename__ = "avaliacao_cliente"
+
+    id_avaliacao: Mapped[int] = mapped_column(primary_key=True)
+    id_usuario: Mapped[int] = mapped_column(ForeignKey("usuario.id_usuario"), nullable=False)
+    id_empresa: Mapped[int] = mapped_column(ForeignKey("empresa.id_empresa"), nullable=False)
+    nota: Mapped[int] = mapped_column(Integer, nullable=False)
+    comentario_publico: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL = identificação anônima ("Cliente NEXO") no conteúdo público.
+    nome_exibicao: Mapped[Optional[str]] = mapped_column(String(NOME_EXIBICAO_MAX))
+    autoriza_publicacao: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    autoriza_nome_empresa: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # Evidência do consentimento vigente; o histórico fica em EventoAvaliacao.
+    consentimento_versao: Mapped[Optional[str]] = mapped_column(String(20))
+    consentimento_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    consentimento_retirado_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    status_moderacao: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDENTE")
+    motivo_rejeicao: Mapped[Optional[str]] = mapped_column(Text)
+    moderada_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    id_usuario_moderador: Mapped[Optional[int]] = mapped_column(ForeignKey("usuario.id_usuario"))
+    publicada_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    retirada_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    retirada_motivo: Mapped[Optional[str]] = mapped_column(Text)
+    # Controle otimista: o moderador aprova a versão que leu, nunca uma posterior.
+    versao: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    data_criacao: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc)
+    data_atualizacao: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc)
+
+    usuario = relationship("Usuario", foreign_keys=[id_usuario])
+    empresa = relationship("Empresa")
+    moderador = relationship("Usuario", foreign_keys=[id_usuario_moderador])
+    sugestao = relationship("SugestaoMelhoria", back_populates="avaliacao", uselist=False)
+    eventos = relationship(
+        "EventoAvaliacao", back_populates="avaliacao",
+        order_by="[EventoAvaliacao.ocorrido_em, EventoAvaliacao.id_evento]",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("id_usuario", name="uq_avaliacao_cliente_usuario"),
+        CheckConstraint("nota BETWEEN 1 AND 5", name="ck_avaliacao_nota"),
+        CheckConstraint(
+            f"length(trim(comentario_publico)) > 0 AND length(comentario_publico) <= {COMENTARIO_PUBLICO_MAX}",
+            name="ck_avaliacao_comentario",
+        ),
+        CheckConstraint(
+            "status_moderacao IN ('PENDENTE', 'APROVADA', 'REJEITADA')",
+            name="ck_avaliacao_status",
+        ),
+        CheckConstraint(
+            "autoriza_publicacao = false OR (consentimento_em IS NOT NULL "
+            "AND consentimento_versao IS NOT NULL AND consentimento_retirado_em IS NULL)",
+            name="ck_avaliacao_consentimento",
+        ),
+        CheckConstraint(
+            "autoriza_nome_empresa = false OR autoriza_publicacao = true",
+            name="ck_avaliacao_nome_empresa",
+        ),
+        CheckConstraint(
+            "status_moderacao = 'PENDENTE' OR "
+            "(moderada_em IS NOT NULL AND id_usuario_moderador IS NOT NULL)",
+            name="ck_avaliacao_moderacao",
+        ),
+        CheckConstraint(
+            "status_moderacao <> 'REJEITADA' OR motivo_rejeicao IS NOT NULL",
+            name="ck_avaliacao_rejeicao",
+        ),
+        CheckConstraint(
+            "publicada_em IS NULL OR retirada_em IS NOT NULL OR "
+            "(status_moderacao = 'APROVADA' AND autoriza_publicacao = true)",
+            name="ck_avaliacao_publicacao",
+        ),
+        CheckConstraint(
+            "retirada_em IS NULL OR publicada_em IS NOT NULL", name="ck_avaliacao_retirada",
+        ),
+        CheckConstraint("versao >= 1", name="ck_avaliacao_versao"),
+        Index("ix_avaliacao_cliente_empresa", "id_empresa"),
+        Index("ix_avaliacao_cliente_moderacao", "status_moderacao", "data_atualizacao"),
+        Index("ix_avaliacao_cliente_publicacao", "status_moderacao", "autoriza_publicacao", "publicada_em"),
+    )
+
+    @property
+    def no_ar(self) -> bool:
+        """Conteúdo liberado para o carrossel, sem considerar usuário e empresa."""
+        return (self.status_moderacao == "APROVADA" and bool(self.autoriza_publicacao)
+                and self.publicada_em is not None and self.retirada_em is None)
+
+
+class SugestaoMelhoria(db.Model):
+    """Sugestão enviada junto da avaliação. Tabela própria: nenhum endpoint
+    público a consulta e o acompanhamento independe da moderação pública."""
+    __tablename__ = "sugestao_melhoria"
+
+    id_sugestao: Mapped[int] = mapped_column(primary_key=True)
+    id_avaliacao: Mapped[int] = mapped_column(
+        ForeignKey("avaliacao_cliente.id_avaliacao", ondelete="CASCADE"), nullable=False,
+    )
+    texto: Mapped[str] = mapped_column(Text, nullable=False)
+    status_acompanhamento: Mapped[str] = mapped_column(String(20), nullable=False, default="NOVA")
+    data_criacao: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc)
+    data_atualizacao: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False, default=agora_utc)
+    status_alterado_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    id_usuario_admin_status: Mapped[Optional[int]] = mapped_column(ForeignKey("usuario.id_usuario"))
+
+    avaliacao = relationship("AvaliacaoCliente", back_populates="sugestao")
+    admin_status = relationship("Usuario", foreign_keys=[id_usuario_admin_status])
+
+    __table_args__ = (
+        UniqueConstraint("id_avaliacao", name="uq_sugestao_avaliacao"),
+        CheckConstraint(
+            f"length(trim(texto)) > 0 AND length(texto) <= {SUGESTAO_PRIVADA_MAX}",
+            name="ck_sugestao_texto",
+        ),
+        CheckConstraint(
+            "status_acompanhamento IN ('NOVA', 'EM_ANALISE', 'CONCLUIDA')",
+            name="ck_sugestao_status",
+        ),
+        Index("ix_sugestao_status", "status_acompanhamento", "data_atualizacao"),
+    )
+
+
+class EventoAvaliacao(db.Model):
+    """Decisões de moderação e manifestações de consentimento, gravadas na MESMA
+    transação da mudança; a aplicação nunca altera nem apaga eventos. Não guarda
+    o comentário nem a sugestão: só tipo, autor, instante e justificativa."""
+    __tablename__ = "evento_avaliacao"
+
+    id_evento: Mapped[int] = mapped_column(primary_key=True)
+    id_avaliacao: Mapped[int] = mapped_column(
+        ForeignKey("avaliacao_cliente.id_avaliacao", ondelete="CASCADE"), nullable=False,
+    )
+    tipo: Mapped[str] = mapped_column(String(40), nullable=False)
+    ocorrido_em: Mapped[datetime] = mapped_column(InstanteUTC(), nullable=False)
+    id_usuario_responsavel: Mapped[int] = mapped_column(ForeignKey("usuario.id_usuario"), nullable=False)
+    justificativa: Mapped[Optional[str]] = mapped_column(Text)
+    consentimento_versao: Mapped[Optional[str]] = mapped_column(String(20))
+
+    avaliacao = relationship("AvaliacaoCliente", back_populates="eventos")
+    responsavel = relationship("Usuario", foreign_keys=[id_usuario_responsavel])
+
+    __table_args__ = (
+        CheckConstraint(
+            "tipo IN ('CRIADA', 'EDITADA', 'APROVADA', 'REJEITADA', 'PUBLICADA', 'RETIRADA', "
+            "'CONSENTIMENTO_CONCEDIDO', 'CONSENTIMENTO_RETIRADO', 'SUGESTAO_ATUALIZADA')",
+            name="ck_evento_avaliacao_tipo",
+        ),
+        Index("ix_evento_avaliacao", "id_avaliacao", "ocorrido_em"),
+    )
+
+
+class SolicitacaoAvaliacao(db.Model):
+    """Estado persistente do pedido de avaliação de um usuário: sobrevive a
+    reinícios e vale para todas as abas e processos. Sem linha = nunca exibido."""
+    __tablename__ = "solicitacao_avaliacao"
+
+    id_usuario: Mapped[int] = mapped_column(
+        ForeignKey("usuario.id_usuario", ondelete="CASCADE"), primary_key=True, autoincrement=False,
+    )
+    ultima_exibicao_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    adiada_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    proxima_exibicao_em: Mapped[Optional[datetime]] = mapped_column(InstanteUTC())
+    qtd_adiamentos: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint("qtd_adiamentos >= 0", name="ck_solicitacao_adiamentos"),
     )

@@ -2203,8 +2203,17 @@ input, textarea, select, option,
   white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.88rem;
   border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
 }
+.config-documento-texto:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+/* Aceite pelas Configurações do cliente: a regra da rolagem do modal, com a barra sempre à vista. */
+.config-documento-texto.is-aceite { overflow-y: scroll; }
+.config-documento-links { margin: 10px 0 0; font-size: 0.86rem; }
 .config-documento form { margin-top: 14px; }
 .config-documento textarea { min-height: 260px; font-size: 0.88rem; }
+/* Editar, sem JavaScript: o formulário fica num <details>, aberto de saída com rascunho recusado ou sem
+   versão publicada; o rótulo do resumo troca para "Fechar o editor" quando ele está aberto. */
+.config-editor > summary { width: fit-content; list-style: none; }
+.config-editor > summary::-webkit-details-marker { display: none; }
+.config-editor:not([open]) .config-editor-aberto, .config-editor[open] .config-editor-fechado { display: none; }
 .config-alteracao { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; padding: 0; border: 0; }
 .config-alteracao legend { width: 100%; float: none; margin-bottom: 4px; }
 .config-historico { margin-top: 18px; }
@@ -2224,12 +2233,22 @@ body.termos-bloqueio { overflow: hidden; }
 .termos-documento { min-width: 0; margin-top: 18px; }
 .termos-documento + .termos-documento { padding-top: 18px; border-top: 1px solid var(--glass-border); }
 .termos-documento h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 1rem; font-weight: 700; }
+/* Regra da rolagem (static/js/aceite-rolagem.js): cada texto rola na própria caixa, com a barra sempre à
+   vista; a caixa "Li e concordo" e o botão só liberam no fim de cada um. A altura acompanha a janela, e o
+   texto curto que cabe inteiro libera na hora. O marcador .aceite-fim é o último filho do texto. */
 .termos-documento-texto {
   margin-top: 10px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.88rem;
   border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  max-height: clamp(160px, 45vh, 420px); overflow-y: scroll;
 }
 .termos-documento-texto:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+.aceite-fim { display: block; height: 1px; }
+.aceite-aviso { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0; font-weight: 600; }
+.aceite-aviso .bi { flex-shrink: 0; }
+.aceite-aviso .aceite-aviso-pronto, [data-aceite-liberado] .aceite-aviso .aceite-aviso-pendente { display: none; }
+[data-aceite-liberado] .aceite-aviso .aceite-aviso-pronto { display: inline-block; }
 .termos-rodape { flex-direction: column; align-items: stretch; }
+.termos-rodape .aceite-aviso { margin: 0; }
 .termos-form { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 0; }
 .termos-form .form-check { margin: 0; }
 .termos-saidas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -2245,6 +2264,10 @@ body.termos-bloqueio { overflow: hidden; }
 .termos-modal .form-check-input:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.25); }
 .termos-modal .form-check-input:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
 .termos-modal .form-check-label { color: var(--text); }
+/* Travada pela regra da rolagem, a caixa fica apagada, mas o texto do aceite continua legível (o
+   Bootstrap deixaria o rótulo com metade da opacidade). */
+.termos-modal .form-check-input:disabled { opacity: 0.55; }
+.termos-modal .form-check-input:disabled ~ .form-check-label { opacity: 1; }
 /* Pouca altura (celular deitado, zoom de 200%): o diálogo de altura fixa espremeria o texto e
    cortaria o rodapé com as saídas. Ele cresce, e quem rola é o próprio modal. */
 @media (max-height: 600px) {

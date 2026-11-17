@@ -7,6 +7,7 @@ e evita espalhar os.environ.get() pelo código.
 """
 
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -78,6 +79,74 @@ def _env_texto(nome: str, padrao=None):
         return padrao
     valor = valor.strip()
     return valor or padrao
+
+
+# Contatos públicos da landing (decisões do dono, 16/11/2026).
+WHATSAPP_EMPRESA_PADRAO = "5561999055282"
+EMAIL_SUPORTE_PADRAO = "suportenexocolab@gmail.com"
+MICROSSERVICO_RAIOX_PADRAO = "https://nexo-externo.onrender.com"
+# A forma de e-mail que o microsserviço do Raio-X aceita (microservico_raiox/validacao.py), em minúsculas.
+_FORMA_DO_EMAIL = re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+_HOST_DNS = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_PESOS_DO_CNPJ = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def _whatsapp_empresa() -> str:
+    """WHATSAPP_EMPRESA_NUMERO do ambiente. Sem a variável, vale o número oficial da NEXO; presente e vazia (ou
+    só com espaços), fica vazia, que é o jeito de esconder os botões de WhatsApp (os testes contam com isso)."""
+    valor = os.environ.get("WHATSAPP_EMPRESA_NUMERO")
+    if valor is None:
+        return WHATSAPP_EMPRESA_PADRAO
+    return valor.strip()
+
+
+def email_publico(valor) -> str:
+    """O e-mail em minúsculas, se tiver a forma que o serviço aceita; senão, vazio."""
+    texto = valor.strip().lower() if isinstance(valor, str) else ""
+    if len(texto) > 254 or ".." in texto or not _FORMA_DO_EMAIL.fullmatch(texto):
+        return ""
+    return texto
+
+
+def _digito_do_cnpj(base: str) -> str:
+    soma = sum(int(numero) * peso for numero, peso in zip(base, _PESOS_DO_CNPJ[-len(base):]))
+    resto = soma % 11
+    return "0" if resto < 2 else str(11 - resto)
+
+
+def cnpj_valido(valor) -> str:
+    """Os 14 dígitos de um CNPJ com dígitos verificadores corretos (a pontuação de sempre é aceita) ou vazio."""
+    texto = valor.strip() if isinstance(valor, str) else ""
+    if not re.fullmatch(r"[0-9./\- ]{14,22}", texto):
+        return ""
+    digitos = re.sub(r"[^0-9]", "", texto)
+    if len(digitos) != 14 or len(set(digitos)) == 1:
+        return ""
+    base = digitos[:12]
+    primeiro = _digito_do_cnpj(base)
+    if digitos[12:] != primeiro + _digito_do_cnpj(base + primeiro):
+        return ""
+    return digitos
+
+
+def origem_https(valor) -> str:
+    """https://host[:porta] em minúsculas e sem barra final, ou vazio se o valor não for uma origem https (sem
+    caminho, consulta, fragmento nem usuário). Vai para a CSP (connect-src) e para um atributo da landing."""
+    if not isinstance(valor, str):
+        return ""
+    texto = valor.strip()
+    if any(caractere.isspace() or not caractere.isprintable() for caractere in texto):
+        return ""
+    try:
+        partes = urlsplit(texto)
+        porta = partes.port
+    except ValueError:
+        return ""
+    host = partes.hostname or ""
+    if (partes.scheme.lower() != "https" or "@" in partes.netloc or partes.path not in ("", "/") or partes.query
+            or partes.fragment or not _HOST_DNS.fullmatch(host)):
+        return ""
+    return f"https://{host}" + (f":{porta}" if porta not in (None, 443) else "")
 
 
 def _env_booleano(nome: str, padrao: bool) -> bool:
@@ -317,8 +386,24 @@ class Config:
     EVOLUTION_INSTANCE_NAME = _env_texto("EVOLUTION_INSTANCE_NAME")
     # Número comercial da NEXO com DDI (ex.: 5562999999999), dos botões wa.me das
     # telas. A factory o normaliza (só dígitos, com o 55); vazio ou inválido esconde
-    # os botões, e as telas mostram os textos de sempre.
-    WHATSAPP_EMPRESA_NUMERO = _env_texto("WHATSAPP_EMPRESA_NUMERO") or ""
+    # os botões, e as telas mostram os textos de sempre. Sem a variável no ambiente,
+    # vale o número oficial (WHATSAPP_EMPRESA_PADRAO, decisão do dono em 16/11/2026);
+    # a variável presente e vazia continua desligando os botões.
+    WHATSAPP_EMPRESA_NUMERO = _whatsapp_empresa()
+
+    # === Contatos e captação da landing (decisões do dono, 16/11/2026) ===
+    # E-mail de suporte do rodapé (mailto) e das mensagens de falha dos cadastros;
+    # vazio na variável vale o padrão, e um valor sem forma de e-mail some da tela.
+    EMAIL_SUPORTE = email_publico(_env_texto("EMAIL_SUPORTE", EMAIL_SUPORTE_PADRAO))
+    # CNPJ da NEXO no rodapé: só com os 14 dígitos de um CNPJ válido (com ou sem
+    # pontuação). Vazio ou inválido, o rodapé não mostra CNPJ nenhum.
+    CNPJ_EMPRESA = cnpj_valido(_env_texto("CNPJ_EMPRESA") or "")
+    # Microsserviço do Raio-X (captação de leads): os diálogos da landing enviam o
+    # lead para <origem>/api/leads/raio-x, e a origem entra no connect-src da CSP
+    # da landing (seguranca_http.py). Só https://host[:porta], sem caminho; vazio
+    # na variável vale o padrão, e um valor inválido desliga o envio (a landing
+    # avisa que o serviço está indisponível e oferece os outros contatos).
+    MICROSSERVICO_RAIOX_URL = origem_https(_env_texto("MICROSSERVICO_RAIOX_URL", MICROSSERVICO_RAIOX_PADRAO))
 
     # === Raio-X público (captação pelo site) — blueprints/avaliacao_publica.py ===
     # DESLIGADO por padrão (decisão do dono em 15/11/2026): desligado, /avaliacao-inicial responde 404 e
@@ -326,6 +411,15 @@ class Config:
     # e7a1c3f5b9d2 e das pendências de Docs/PRE_CADASTRO_LANDING.md (texto da autorização revisado, LGPD
     # do lead e capacidade no Render).
     AVALIACAO_PUBLICA_ATIVA = _env_booleano("AVALIACAO_PUBLICA_ATIVA", False)
+
+    # === Avaliações dos clientes (COM-002, avaliacoes.py) ===
+    # Só o pedido automático do painel usa estes valores: avaliar é possível a qualquer momento, pela landing ou
+    # pelo portal. O painel ainda não mostra o pedido, mas as rotas dele (/cliente/avaliacao/solicitacao/*) leem
+    # as chaves.
+    AVALIACAO_DIAS_GATILHO = 60           # dias corridos desde Empresa.data_contratacao
+    AVALIACAO_DIAS_ADIAMENTO = 30         # "Mais tarde": espera até pedir de novo
+    AVALIACAO_MAX_ADIAMENTOS = 3          # depois disso o portal para de pedir
+    AVALIACAO_HORAS_REEXIBICAO = 24       # exibido e ignorado: não volta antes disso
 
 
 class DevelopmentConfig(Config):
