@@ -1,0 +1,121 @@
+/* ===================================================================
+   NEXO — Leads do consultor: tabela, painel lateral e planilhas do lead
+   -------------------------------------------------------------------
+   Carregada por templates/admin/leads.html (a tabela e o <dialog> do
+   "Ver Avaliação de Cenário", static/js/leads-painel.js) e por
+   templates/admin/lead.html (a seção "Planilhas enviadas pelo lead").
+   Só tokens de nexo.css: o tema claro (nexo-tema-claro.css redefine os
+   tokens) vale sem regra própria, e o conteúdo do painel usa os mesmos
+   componentes da página do lead.
+   =================================================================== */
+
+/* ---- Tabela dos leads: um respiro menor que o padrão, para as nove colunas ---- */
+.tabela-leads thead th, .tabela-leads tbody td { padding-left: 14px; padding-right: 14px; }
+.tabela-leads .t-email { min-width: 180px; }
+.link-whatsapp-lead { white-space: nowrap; }
+
+/* ---- Painel lateral (slide-over) ---- */
+/* A página atrás do painel aberto não rola: só o corpo do painel. */
+html.painel-lead-aberto { overflow: hidden; }
+
+.painel-lead {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(1100px, 96vw);
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--glass-border-2);
+  border-radius: 0;
+  background:
+    radial-gradient(900px 520px at 100% 0%, var(--primary-soft), transparent 62%),
+    var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.painel-lead[open] { display: flex; flex-direction: column; }
+.painel-lead::backdrop { background: rgba(3, 0, 12, 0.6); }
+@media (prefers-reduced-motion: no-preference) {
+  .painel-lead[open] { animation: painel-lead-entra 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
+}
+@keyframes painel-lead-entra {
+  from { transform: translateX(32px); opacity: 0; }
+}
+
+.painel-lead-topo {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 14px 22px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--glass-border);
+}
+.painel-lead-titulo {
+  flex: 1 1 260px; min-width: 0; margin: 0;
+  font-size: 1.12rem; font-weight: 800; letter-spacing: -0.01em;
+  color: var(--text); overflow-wrap: anywhere;
+}
+.painel-lead-titulo:focus { outline: none; }
+.painel-lead-titulo:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 4px; border-radius: 6px; }
+.painel-lead-acoes { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.painel-lead-fechar {
+  width: 40px; height: 40px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border: 1px solid var(--glass-border); border-radius: 12px;
+  background: transparent; color: var(--text); font-size: 1.05rem;
+}
+.painel-lead-fechar:hover { background: var(--primary-soft); border-color: var(--glass-border-2); }
+.painel-lead-fechar:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+
+.painel-lead-avisos { flex: 0 0 auto; padding: 14px 22px 0; }
+.painel-lead-avisos[hidden] { display: none; }
+
+/* Só o corpo rola; nada estoura na horizontal (as tabelas rolam ou viram cartões dentro dele). */
+.painel-lead-corpo {
+  flex: 1 1 auto; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  padding: 20px 22px 32px;
+}
+.painel-lead-conteudo { min-width: 0; }
+.painel-lead .t-mut { color: var(--text-muted); }
+.painel-lead-identidade { min-width: 0; }
+.painel-lead-identidade .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.painel-lead-carregando { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--text-muted); }
+.painel-lead-girador {
+  width: 18px; height: 18px; flex: 0 0 auto;
+  border: 2px solid var(--glass-border-2); border-top-color: var(--primary); border-radius: 50%;
+  animation: painel-lead-gira 0.8s linear infinite;
+}
+@keyframes painel-lead-gira { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .painel-lead-girador { animation: none; } }
+
+/* Celular: o painel ocupa a tela toda, e o título fica em até duas linhas (o nome inteiro está no cabeçalho do
+   lead, logo abaixo, e no nome acessível do painel). */
+@media (max-width: 575.98px) {
+  .painel-lead { width: 100%; border-left: 0; }
+  .painel-lead-topo { padding: 12px 14px; }
+  .painel-lead-titulo {
+    font-size: 1rem;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
+  .painel-lead-avisos { padding: 12px 14px 0; }
+  .painel-lead-corpo { padding: 14px 12px 28px; }
+}
+
+/* ---- Planilhas enviadas pelo lead (painel e página do lead) ---- */
+.planilhas-lead-lista li {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 8px 14px; padding: 10px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.planilhas-lead-lista li:first-child { padding-top: 0; }
+.planilhas-lead-lista li:last-child { border-bottom: 0; }
+.planilhas-lead-nome { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.planilhas-lead-meta { display: block; margin-top: 2px; color: var(--text-muted); font-size: 0.8rem; }
+.planilhas-lead-acoes { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.planilhas-lead .btn-ghost:disabled, .planilhas-lead .btn-nexo:disabled { opacity: 0.55; cursor: not-allowed; }

@@ -286,6 +286,17 @@ class EnvioTests(_PublicaCase):
         for texto in ("Raio-X público", f"protocolo {lead.protocolo}", "plano de interesse: Prata",
                       "faturamento: Até R$ 50 mil", "Principal dificuldade: Repor sem excesso"):
             self.assertIn(texto, detalhe)
+        # O painel "Ver Avaliação de Cenário" da lista mostra o mesmo, com a autorização que o visitante marcou, e o
+        # diagnóstico inteiro: o desfoque é só da vitrine do visitante.
+        import blueprints.avaliacao_publica as publica
+        painel = self.client.get(f"/admin/leads/{lead.id}/painel").get_data(as_text=True)
+        for texto in (f"protocolo {lead.protocolo}", "<dt>Plano de interesse</dt><dd>Prata</dd>",
+                      "<dt>Faturamento</dt><dd>Até R$ 50 mil</dd>", "Repor sem excesso", "Sem aceite dos termos",
+                      f"Autorização dos relatórios: {publica.VERSAO_AUTORIZACAO}", "Matriz de triagem"):
+            self.assertIn(texto, painel)
+        for bloqueio in ("publica-borrao", "publica-bloqueado", "Conteúdo bloqueado"):
+            self.assertNotIn(bloqueio, painel)
+        self.assertIn("Sem aceite dos termos", lista)
 
 
 # =============================================================================

@@ -1,0 +1,559 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_planos.html" as pl %}
+
+{% block title %}{{ lead.nome_loja }} · Avaliação de Cenário — NEXO Admin{% endblock %}
+{% block page_title %}Avaliação de Cenário{% endblock %}
+
+{% macro pct(valor) %}{% if valor is not none %}{{ ('%.1f'|format(valor * 100))|replace('.', ',') }}%{% else %}—{% endif %}{% endmacro %}
+{% macro reais(valor) %}{% if valor is not none %}R$ {{ m.brl(valor) }}{% else %}—{% endif %}{% endmacro %}
+{% macro dias(valor) %}{% if valor is not none %}{{ m.num(valor) }} dia{% if valor != 1 %}s{% endif %}{% else %}—{% endif %}{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1 class="text-break">{{ lead.nome_loja }}</h1>
+        <p class="sub text-break">{{ lead.nome_contato }} · <span class="t-email">{{ lead.email }}</span>{% if lead.whatsapp %} · WhatsApp {{ lead.whatsapp }}{% endif %}</p>
+        {%- if lead.origem == 'site' %}
+        <p class="sub text-break"><span class="nexo-badge b-purple"><span class="dot"></span>Site</span> Raio-X público · protocolo {{ lead.protocolo }}{% if lead.plano_interesse %} · plano de interesse: {{ rotulos_planos_interesse.get(lead.plano_interesse, lead.plano_interesse) }}{% endif %}{% if lead.faixa_faturamento %} · faturamento: {{ rotulos_faixas_faturamento.get(lead.faixa_faturamento, lead.faixa_faturamento) }}{% endif %}</p>
+        {%- if lead.dificuldade %}
+        <p class="sub text-break">Principal dificuldade: {{ lead.dificuldade }}</p>
+        {%- endif %}
+        {%- endif %}
+    </div>
+    <div class="page-head-actions">
+        <a href="{{ url_for('leads.lista') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar aos leads</a>
+        {% if situacao == 'atual' %}<a href="{{ url_for('leads.diagnostico_json', lead_id=lead.id) }}" class="btn-ghost"><i class="bi bi-filetype-json" aria-hidden="true"></i> Diagnóstico em JSON</a>{% endif %}
+    </div>
+</div>
+
+{#- O aceite dos termos que o visitante deu na landing (aceite_documento_lead, gravado pelo microsserviço do Raio-X).
+    Sem a tabela no banco (aceites_termos nulo), o bloco não aparece; no lead do site sem aceite, aparece o aviso. #}
+{% set aceite_lido = aceites_termos is defined and aceites_termos is not none %}
+{% if aceite_lido and (aceites_termos or lead.origem == 'site') %}
+<section class="nexo-card mb-4" aria-labelledby="aceiteTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="aceiteTitulo"><i class="bi bi-file-earmark-check text-purple" aria-hidden="true"></i> Aceite dos termos</h2>
+            <p class="sub">Versões que o visitante leu e aceitou no pré-cadastro do site, com a data e a hora (horário de Brasília) e o IP de onde veio o envio.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if aceites_termos %}
+        <ul class="list-unstyled mb-0">
+            {% for aceite in aceites_termos %}
+            <li class="{{ 'mb-3' if not loop.last else '' }}">
+                <strong class="text-break">{{ aceite.documento }} {{ aceite.versao }}</strong>
+                <br><small>Aceito em {{ m.horario(aceite.aceito_em) }}</small>
+                <br><small class="t-mut text-break">{% if aceite.ip %}IP {{ aceite.ip }}{% else %}IP não registrado{% endif %}</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="t-mut mb-0">Nenhum aceite registrado: este lead não passou pelo aceite dos Termos de Uso e da Política de Privacidade do pré-cadastro.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+
+{% if lead.status == 'expirado' or not linhas_pdv or situacao == 'expirado' %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-hourglass-bottom" aria-hidden="true"></i>
+    <div>
+        <strong>Dados de PDV indisponíveis.</strong>
+        <p>Os totais por produto e ano saem {{ retencao_dias }} dias depois do envio; o resumo abaixo fica. Para ver os itens de novo, envie os relatórios outra vez.</p>
+    </div>
+</div>
+{% elif expira_em %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-shield-lock" aria-hidden="true"></i>
+    <div>
+        <strong>Retenção dos dados de PDV.</strong>
+        <p>Os totais por produto e ano deste lead, e com eles a matriz por categoria, saem em {{ m.horario(expira_em) }}, se ele não virar cliente. O resumo da avaliação fica.</p>
+    </div>
+</div>
+{% if not linhas_atuais %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+    <div>
+        <strong>Dados gravados por outra versão das regras.</strong>
+        <p>Os blocos e os itens abaixo são os da avaliação original; motivos, impacto e matriz por categoria só aparecem com um novo envio dos relatórios.</p>
+    </div>
+</div>
+{% elif not triagem_da_versao_atual %}
+<div class="aviso-contrato" role="status">
+    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+    <div>
+        <strong>Triagem feita com regras anteriores.</strong>
+        <p>Os blocos e os itens abaixo são os da versão {{ lead.versao_triagem or 'sem versão' }}; os motivos e o impacto de cada produto e a matriz por categoria só aparecem com as regras atuais. Use "Refazer a triagem" ou envie os relatórios de novo.</p>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Saúde do cadastro</span><span class="kpi-icon is-info"><i class="bi bi-heart-pulse" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}<small> / 100</small>{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Parte do faturamento com custo informado e cadastro sem conflito.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Potencial recuperável</span><span class="kpi-icon is-amber"><i class="bi bi-cash-coin" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Retroativo: vendas abaixo do preço de referência ou do custo, somadas por produto e ano{% if custo_a_confirmar_por_ano %}; no ano de custo a confirmar, só a venda abaixo do preço de referência{% endif %}.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Plano sugerido</span><span class="kpi-icon is-green"><i class="bi bi-award" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">{% if lead.periodo_inicio and lead.periodo_fim %}{{ m.periodo(lead.periodo_inicio, lead.periodo_fim) }} · {% endif %}<span title="O arquivo que traz a data de cada venda conta um relatório por mês.">{{ lead.arquivos or 0 }} relatório(s)</span></div>
+        </div>
+    </div>
+    {% if triagem_com_marcas_da_etapa_2 %}
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens sem custo em nenhuma venda</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_sem_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos nos relatórios com a coluna de custo sem nenhum custo informado.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com alguma venda abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_abaixo_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos com ao menos uma venda por valor menor que o custo da própria venda{% if custo_a_confirmar_por_ano %}, fora o ano de custo a confirmar (custo implausível){% endif %}.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6 col-xl-4">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com omissão no ERP</span><span class="kpi-icon is-amber"><i class="bi bi-clipboard-x" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{% if lead.itens_omissao_erp is not none %}{{ m.num(lead.itens_omissao_erp) }}{% else %}—{% endif %}</div>
+            <div class="kpi-foot">Conflito de cadastro, custo só em parte das vendas ou implausível, estoque negativo, sem NCM ou sem categoria.</div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12 col-sm-6">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com venda sem custo</span><span class="kpi-icon is-red"><i class="bi bi-question-diamond" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_sem_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos sem custo de aquisição cadastrado no PDV em algum ano.</div>
+        </div>
+    </div>
+    <div class="col-12 col-sm-6">
+        <div class="kpi-tile">
+            <div class="kpi-top"><span class="kpi-label">Itens com preço médio abaixo do custo</span><span class="kpi-icon is-red"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span></div>
+            <div class="kpi-value">{{ m.num(lead.itens_venda_abaixo_custo or 0) }}</div>
+            <div class="kpi-foot">Produtos vendidos, em algum ano, por valor médio inferior ao custo médio registrado.</div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if caixa_resgatavel %}
+<section class="nexo-card mb-4" aria-labelledby="caixaTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="caixaTitulo"><i class="bi bi-safe2 text-purple" aria-hidden="true"></i> Resumo executivo: caixa resgatável</h2>
+            <p class="sub">Quatro fontes de caixa de naturezas diferentes: não se somam.{% if inteligencia is none %} Valores do resumo gravado no envio de {{ m.horario(lead.consentimento_em or lead.criado_em) }}.{% endif %}</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <ul class="list-unstyled mb-0">
+            {% for parcela in caixa_resgatavel %}
+            <li class="{{ 'mb-3' if not loop.last else '' }}">
+                <div class="d-flex justify-content-between flex-wrap gap-2"><span class="text-break">{{ parcela.rotulo }}</span><strong class="fw-num">{{ reais(parcela.valor) }}</strong></div>
+                {# Barra só decorativa: o valor está no texto; sem valor, nada de barra (nulo não é zero). #}
+                {% if parcela.valor is not none %}<div class="progress mt-1" style="height: .5rem" aria-hidden="true"><div class="progress-bar" style="width: {{ parcela.proporcao }}%"></div></div>{% endif %}
+                <small class="t-mut">{{ parcela.natureza }}</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% if itens_sem_estoque_com_custo %}<p class="field-hint mt-2 mb-0">{{ m.num(itens_sem_estoque_com_custo) }} produto(s) com custo e sem estoque informado ficam fora das parcelas de estoque: as somas de estoque são parciais.</p>{% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="nexo-card mb-4" aria-labelledby="triagemTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="triagemTitulo"><i class="bi bi-diagram-3 text-purple" aria-hidden="true"></i> Matriz de triagem</h2>
+            <p class="sub">Produtos de cada bloco, com o faturamento e o potencial recuperável do resumo gravado, e os motivos mais frequentes.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Bloco</th><th class="text-end">Produtos</th><th class="text-end">Faturamento</th><th class="text-end">Potencial recuperável</th><th>Motivos mais frequentes</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in matriz_triagem %}
+                    <tr>
+                        <td class="col-nome"><a href="#bloco{{ linha.bloco }}">{{ linha.rotulo }}</a></td>
+                        <td class="text-end fw-num">{% if linha.itens is not none %}{{ m.num(linha.itens) }}{% else %}—{% endif %}</td>
+                        <td class="text-end fw-num">{{ reais(linha.faturamento) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.recuperavel) }}</td>
+                        <td>{% for rotulo, quantos in linha.motivos %}{{ rotulo }}: {{ m.num(quantos) }}{% if not loop.last %}; {% endif %}{% else %}—{% endfor %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+    </div>
+</section>
+
+{% if situacao == 'atual' and totais %}
+<section class="nexo-card mb-4" aria-labelledby="matrizTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="matrizTitulo"><i class="bi bi-grid-3x3-gap text-purple" aria-hidden="true"></i> Matriz por categoria</h2>
+            <p class="sub">Margem e custo informados pelo PDV nas vendas com custo, como no Raio-X; não é a margem de lucro nem o CMV contábil. Ordenada por impacto no último ano.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% for aviso in avisos %}<p class="field-hint mb-2">{{ aviso }}</p>{% endfor %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Categoria</th><th class="text-end">Itens</th><th class="text-end">Faturamento no último ano</th><th class="text-end">Participação</th><th class="text-end">Margem bruta estimada</th><th class="text-end">CMV líquido</th><th class="text-end">Vendas abaixo do custo</th><th class="text-end">Potencial recuperável</th><th class="text-end">Impacto</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in (categorias or []) %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ linha.categoria }}</span>{% if linha.a_confirmar.itens %}<br><small class="t-mut">{{ m.num(linha.a_confirmar.itens) }} item(ns) a confirmar</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(linha.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.faturamento_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.participacao_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.margem_bruta_estimada.percentual if linha.margem_bruta_estimada else none) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.cmv_liquido) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.vendas_abaixo_do_custo) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{{ reais(linha.impacto) }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="fw-bold">
+                        <td>Total{% if totais.a_confirmar.itens %}<br><small class="t-mut">{{ m.num(totais.a_confirmar.itens) }} item(ns) a confirmar</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(totais.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.faturamento_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(totais.participacao_ultimo_ano) }}</td>
+                        <td class="text-end fw-num">{{ pct(totais.margem_bruta_estimada.percentual if totais.margem_bruta_estimada else none) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.cmv_liquido) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.vendas_abaixo_do_custo) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{{ reais(totais.impacto) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        </div>
+        <p class="field-hint mt-2 mb-0">Faturamento de itens de venda contínua: {{ reais(totais.faturamento_venda_continua) }} · estoque parado: {{ reais(totais.estoque_parado) }} · perdas operacionais: não calculadas (exigem relatório de perdas ou inventário).</p>
+    </div>
+</section>
+{% endif %}
+
+{% if inteligencia %}
+{% set estoque = inteligencia.estoque %}
+{% if estoque %}
+<section class="nexo-card mb-4" aria-labelledby="estoqueTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="estoqueTitulo"><i class="bi bi-box-seam text-purple" aria-hidden="true"></i> Estoque parado e excedente</h2>
+            <p class="sub">Capital em estoque de {{ reais(estoque.capital_em_estoque) }} (estoque informado no relatório de vendas × custo médio). Dias sem venda contados só nos períodos cobertos pelos relatórios: são um piso.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Sem venda há</th><th class="text-end">Produtos</th><th class="text-end">Capital imobilizado</th><th class="text-end">Acumulado (esta faixa ou mais)</th></tr>
+                </thead>
+                <tbody>
+                    {% for faixa in estoque.parado.faixas %}
+                    {% set acumulado = estoque.parado.acima_de[faixa.dias_minimos | string] %}
+                    <tr>
+                        <td class="col-nome">{{ faixa.faixa }}</td>
+                        <td class="text-end fw-num">{{ m.num(faixa.itens) }}</td>
+                        <td class="text-end fw-num">{{ reais(faixa.capital) }}</td>
+                        <td class="text-end fw-num">{{ reais(acumulado.capital) }} · {{ m.num(acumulado.itens) }} produto(s)</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        <p class="field-hint mt-2">Parado: {{ reais(estoque.parado.capital) }}, {{ pct(estoque.parado.participacao_no_estoque) }} do capital em estoque{% if estoque.parado.itens_com_lacuna %}; {{ m.num(estoque.parado.itens_com_lacuna) }} produto(s) com mês sem relatório no meio (a venda pode ter acontecido nele){% endif %}. Fora da conta: {{ m.num(estoque.itens_sem_custo) }} sem custo e {{ m.num(estoque.itens_sem_estoque_informado) }} sem estoque informado.</p>
+        {% if estoque.parado.lista %}
+        <h3 class="h6 mt-3">Maiores capitais parados</h3>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Sem venda há</th><th class="text-end">Estoque</th><th class="text-end">Custo médio</th><th class="text-end">Capital</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in estoque.parado.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ dias(item.dias_sem_venda) }}{% if item.com_lacuna %}<br><small class="t-mut">piso, com lacuna</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ pl.qtd(item.estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.custo_medio) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+        <h3 class="h6 mt-3">Estoque excedente (giro baixo de quem ainda vende)</h3>
+        <p class="field-hint">{{ m.num(estoque.excedente.itens) }} produto(s) com estoque para mais de {{ dias(estoque.excedente.cobertura_alvo_dias) }} no ritmo de venda do último ano; acima disso, {{ reais(estoque.excedente.capital_liberavel) }} ao custo podem ser liberados sem faltar produto.</p>
+        {% if estoque.excedente.lista %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Dias de estoque</th><th class="text-end">Estoque</th><th class="text-end">Capital em estoque</th><th class="text-end">Capital liberável</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in estoque.excedente.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ m.num(item.dias_de_estoque) }}</td>
+                        <td class="text-end fw-num">{{ pl.qtd(item.estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital_em_estoque) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.capital_liberavel) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="nexo-card mb-4" aria-labelledby="simuladorTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="simuladorTitulo"><i class="bi bi-calculator text-purple" aria-hidden="true"></i> Simulador de liberação de caixa (Urgência)</h2>
+            <p class="sub">Projeção sobre o estoque dos produtos da Urgência ao preço médio praticado no último ano com venda: não é sugestão de desconto nem garantia de venda.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if erro_parametros %}<div class="aviso-contrato is-alerta mb-3" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><div><strong>Parâmetros não aplicados.</strong><p>{{ erro_parametros }} Os valores abaixo usam os parâmetros padrão.</p></div></div>{% endif %}
+        {% set simulador = inteligencia.simulador %}
+        {% if simulador %}
+        <p class="field-hint">{{ m.num(simulador.itens) }} produto(s) da Urgência com estoque, custo e preço: {{ reais(simulador.receita_a_preco_medio) }} a preço médio, {{ reais(simulador.capital_ao_custo) }} ao custo{% set equilibrio = simulador.desconto_de_equilibrio %}{% if simulador.abaixo_do_custo_sem_desconto %}; mesmo sem desconto o caixa fica abaixo do custo (só empataria vendendo {% if equilibrio is none or (0 - equilibrio) < 0.001 %}menos de 0,1%{% else %}{{ pct(0 - equilibrio) }}{% endif %} acima do preço médio){% elif equilibrio is not none %}; o caixa empata com o custo com {{ pct(equilibrio) }} de desconto{% endif %}. Fora: {{ m.num(simulador.itens_fora.sem_estoque_informado) }} sem estoque informado, {{ m.num(simulador.itens_fora.estoque_zerado) }} com estoque zerado ou negativo, {{ m.num(simulador.itens_fora.sem_custo) }} sem custo, {{ m.num(simulador.itens_fora.sem_preco) }} sem preço e {{ m.num(simulador.itens_fora.a_confirmar) }} a confirmar.</p>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Desconto</th><th class="text-end">Fração do estoque vendida</th><th class="text-end">Caixa</th><th class="text-end">Resultado contra o custo</th></tr>
+                </thead>
+                <tbody>
+                    {% for cenario in simulador.cenarios %}
+                    <tr>
+                        <td class="col-nome fw-num">{{ pct(cenario.desconto) }}</td>
+                        <td class="text-end fw-num">{{ pct(cenario.fracao_liquidada) }}</td>
+                        <td class="text-end fw-num">{{ reais(cenario.caixa) }}</td>
+                        <td class="text-end fw-num">{{ reais(cenario.resultado_contra_o_custo) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% else %}
+        <p class="t-mut">Os relatórios não trazem estoque informado (a coluna falta ou vem vazia): sem estoque, não há o que simular.</p>
+        {% endif %}
+        <form method="GET" action="{{ url_for('leads.detalhe', lead_id=lead.id) }}#simuladorTitulo" class="mt-3">
+            <div class="row g-3">
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simDescontos">Descontos</label>
+                    <input type="text" class="form-control" id="simDescontos" name="descontos" maxlength="60" value="{{ simulador_descontos }}" aria-describedby="simDescontosDica">
+                    <p class="field-hint mt-1 mb-0" id="simDescontosDica">Frações separadas por vírgula (0.1,0.25) ou, com vírgula decimal, por ponto e vírgula (0,1;0,25): 10% e 25%. Os dois formatos não se misturam.</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simFracao">Fração do estoque vendida</label>
+                    <input type="text" class="form-control" id="simFracao" name="fracao_liquidada" maxlength="8" inputmode="decimal" value="{{ simulador_fracao }}" aria-describedby="simFracaoDica">
+                    <p class="field-hint mt-1 mb-0" id="simFracaoDica">Maior que 0 e até 1, com ponto ou vírgula (0,5 = metade).</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simMarkup">Markup do segmento</label>
+                    <input type="text" class="form-control" id="simMarkup" name="markup_informado" maxlength="8" inputmode="decimal" value="{{ request.args.get('markup_informado', '') }}" aria-describedby="simMarkupDica">
+                    <p class="field-hint mt-1 mb-0" id="simMarkupDica">Opcional; 0,35 = 35%. Sem ele, a referência é a da categoria.</p>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label class="nexo-label" for="simCobertura">Cobertura-alvo (dias)</label>
+                    <input type="text" class="form-control" id="simCobertura" name="cobertura_alvo_dias" maxlength="4" inputmode="numeric" value="{{ request.args.get('cobertura_alvo_dias', '') }}" aria-describedby="simCoberturaDica">
+                    <p class="field-hint mt-1 mb-0" id="simCoberturaDica">Opcional; padrão de 60 dias no excedente.</p>
+                </div>
+            </div>
+            <button type="submit" class="btn-ghost mt-3"><i class="bi bi-calculator" aria-hidden="true"></i> Simular</button>
+        </form>
+    </div>
+</section>
+
+{% set auditoria = inteligencia.auditoria_de_preco %}
+{% if auditoria %}
+<section class="nexo-card mb-4" aria-labelledby="auditoriaTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="auditoriaTitulo"><i class="bi bi-tags text-purple" aria-hidden="true"></i> Auditoria de preço</h2>
+            <p class="sub">Último ano ({{ auditoria.ano }}), vendas com custo: preço praticado médio contra custo médio × (1 + markup de referência){% if auditoria.base == 'informado' %}, com o markup informado de {{ pct(auditoria.markup_informado) }}{% else %}, com a referência de cada categoria (o menor entre o markup agregado e a mediana dos produtos dela){% endif %}. Não considera demanda, concorrência nem promoção.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        <p class="field-hint">{{ m.num(auditoria.itens_avaliados) }} produto(s) avaliado(s): {{ m.num(auditoria.itens_abaixo) }} abaixo e {{ m.num(auditoria.itens_acima) }} acima da referência. Diferença de {{ reais(auditoria.diferenca_total) }}, da qual {{ reais(auditoria.ja_contado_no_recuperavel) }} já estão no potencial recuperável; adicional: {{ reais(auditoria.adicional) }}.{% if auditoria.sem_referencia.itens %} Sem referência: {{ m.num(auditoria.sem_referencia.itens) }} produto(s), {{ reais(auditoria.sem_referencia.venda) }} de venda.{% endif %}</p>
+        {% if auditoria.categorias %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Categoria</th><th class="text-end">Produtos abaixo</th><th class="text-end">Markup de referência</th><th class="text-end">Diferença</th></tr>
+                </thead>
+                <tbody>
+                    {% for linha in auditoria.categorias[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ linha.categoria or 'Sem categoria' }}</span></td>
+                        <td class="text-end fw-num">{{ m.num(linha.itens) }}</td>
+                        <td class="text-end fw-num">{{ pct(linha.markup_referencia) }}<br><small class="t-mut">{{ 'informado' if linha.origem == 'informado' else ('agregado da categoria' if linha.origem == 'agregado' else 'mediana da categoria') }}</small></td>
+                        <td class="text-end fw-num">{{ reais(linha.diferenca) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+        {% if auditoria.lista %}
+        <h3 class="h6 mt-3">Maiores diferenças por produto</h3>
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th class="text-end">Preço praticado</th><th class="text-end">Preço pela referência</th><th class="text-end">Diferença por unidade</th><th class="text-end">Diferença</th><th class="text-end">Já no recuperável</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in auditoria.lista[:10] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
+                        <td class="text-end fw-num">{{ reais(item.preco_praticado) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.preco_pelo_markup) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.diferenca_por_unidade) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.diferenca) }}</td>
+                        <td class="text-end fw-num">{{ reais(item.ja_contado_no_recuperavel) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+{% endif %}
+
+{% for bloco in ['urgencia', 'atencao', 'eletiva'] %}
+{% set resumo = resumos[bloco] %}
+<section class="nexo-card mb-4" aria-labelledby="bloco{{ bloco }}">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="bloco{{ bloco }}">{{ rotulos_blocos[bloco] }}{% if resumo %} · {{ m.num(resumo.itens) }} produto(s){% endif %}</h2>
+            {% if resumo %}<p class="sub">Faturamento R$ {{ m.brl(resumo.faturamento) }} · potencial recuperável R$ {{ m.brl(resumo.recuperavel) }}</p>{% endif %}
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if resumo and resumo.motivos %}
+        <ul class="mb-3">
+            {% for motivo, quantos in resumo.motivos.items() %}
+            <li>{{ rotulo_do_motivo(motivo) }}: {{ m.num(quantos) }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% if itens[bloco] %}
+        <div class="table-wrap">
+        <div class="table-responsive-x">
+            <table class="nexo-table">
+                <thead>
+                    <tr><th>Produto</th><th>Anos</th><th class="text-end">Faturamento</th><th class="text-end">Potencial recuperável</th><th class="text-end">Impacto</th><th>Motivos</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in itens[bloco] %}
+                    <tr>
+                        <td class="col-nome"><span class="text-break">{{ item.produto }}</span>{% if item.codigo %}<br><small class="t-mut t-mono">{{ item.codigo }}</small>{% endif %}{% if item.categoria %}<br><small class="t-mut">{{ item.categoria }}</small>{% endif %}</td>
+                        <td class="t-mono">{{ item.anos | join(', ') }}</td>
+                        <td class="text-end fw-num">R$ {{ m.brl(item.faturamento) }}</td>
+                        <td class="text-end fw-num">R$ {{ m.brl(item.potencial_recuperavel) }}</td>
+                        <td class="text-end fw-num">{% if item.a_confirmar %}a confirmar{% elif item.impacto is none %}—{% else %}R$ {{ m.brl(item.impacto) }}{% endif %}</td>
+                        <td>{{ item.motivos | map(attribute='rotulo') | join('; ') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        </div>
+        {% if resumo and resumo.itens > itens[bloco] | length %}<p class="field-hint mt-2 mb-0">Mostrando os {{ itens[bloco] | length }} de maior {{ 'impacto' if situacao == 'atual' else 'potencial recuperável' }}.</p>{% endif %}
+        {% elif not resumo or not resumo.itens %}
+        <p class="t-mut mb-0">Nenhum produto neste bloco.</p>
+        {% endif %}
+    </div>
+</section>
+{% endfor %}
+
+<section class="nexo-card mb-4" aria-labelledby="refazerTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="refazerTitulo"><i class="bi bi-arrow-repeat text-purple" aria-hidden="true"></i> Refazer a avaliação</h2>
+            <p class="sub">Refazer a triagem usa os dados gravados, as regras atuais ({{ versao_triagem_atual }}; a deste lead é {{ lead.versao_triagem or 'sem versão' }}) e os limiares gravados no lead; um novo envio troca os dados do lead pelos dos relatórios enviados.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if linhas_pdv and lead.status != 'expirado' and situacao != 'expirado' and linhas_atuais %}
+        <form method="POST" action="{{ url_for('leads.retriar', lead_id=lead.id) }}" class="mb-4" data-envio-unico>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-ghost"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refazer a triagem</button>
+        </form>
+        {% endif %}
+        {% if lead.status != 'convertido' %}
+        {% set teto_bytes = config.MAX_CONTENT_LENGTH or 20971520 %}
+        <form method="POST" action="{{ url_for('leads.reenviar', lead_id=lead.id) }}" enctype="multipart/form-data" data-envio-unico data-envio-longo>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="dropzone" data-dz data-dz-multiplo data-max-arquivos="{{ max_arquivos }}" data-max-bytes="{{ teto_bytes }}">
+                <div class="dz-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></div>
+                <div class="dz-estado" id="dzEstadoReenvio" data-dz-estado data-vazio=""></div>
+                <div class="dz-title" id="dzNomeReenvio" data-dz-label data-vazio="Arraste os relatórios ou clique para selecionar">Arraste os relatórios ou clique para selecionar</div>
+                <div class="dz-hint" id="dzHintReenvio">De 1 a {{ max_arquivos }} arquivos .csv, .xlsx, .xls ou .xml (Planilha XML 2003), até {{ teto_bytes // 1048576 }} MB somados.</div>
+                <div class="dz-erro" data-dz-erro role="alert"></div>
+                <input type="file" name="arquivos" accept=".csv,.xlsx,.xls,.xml" multiple data-dz-input
+                       aria-labelledby="refazerTitulo dzEstadoReenvio dzNomeReenvio" aria-describedby="dzHintReenvio">
+            </label>
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="reenvioAutorizacao" name="autorizacao" value="1" required>
+                <label class="form-check-label" for="reenvioAutorizacao">O lead autorizou o uso destes relatórios nesta avaliação.</label>
+            </div>
+            <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="reenvioAvisoWhatsapp" name="aviso_whatsapp" value="1" aria-describedby="reenvioAvisoWhatsappDica">
+                <label class="form-check-label" for="reenvioAvisoWhatsapp">O lead aceitou receber pelo WhatsApp o aviso de que a avaliação ficou pronta.</label>
+                <p class="field-hint mt-1 mb-0" id="reenvioAvisoWhatsappDica">Opcional. Sem esta confirmação, nenhuma mensagem é enviada ao lead.</p>
+            </div>
+            <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Avaliar com os novos relatórios</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+{% endblock %}

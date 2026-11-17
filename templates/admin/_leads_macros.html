@@ -1,0 +1,64 @@
+{#- Macros das telas de leads do consultor (lista e painel lateral). Importar com:
+    {% import "admin/_leads_macros.html" as lm %}
+    Como as de _macros.html, não leem o contexto: recebem tudo por argumento. #}
+{%- import "_macros.html" as m -%}
+
+{# ---- Selo da situação do lead (LeadAvaliacao.status) ---- #}
+{%- macro badge_lead(status) -%}
+{%- set cores = {'concluido': 'b-green', 'convertido': 'b-purple', 'expirado': 'b-muted'} -%}
+{%- set textos = {'pendente': 'PENDENTE', 'em_processamento': 'EM PROCESSAMENTO', 'concluido': 'CONCLUÍDA',
+                  'processamento_manual': 'REVISÃO MANUAL', 'convertido': 'CONVERTIDO', 'expirado': 'DADOS EXPIRADOS'} -%}
+<span class="nexo-badge {{ cores.get(status, 'b-amber') }}">{{ textos.get(status, status|upper) }}</span>
+{%- endmacro %}
+
+{# ---- WhatsApp do lead: link wa.me (macro link_whatsapp) com o número higienizado (filtro numero_whatsapp,
+   o mesmo dos avisos pela Evolution), mostrado como (DD) NNNNN-NNNN; o número que não dá para usar no wa.me sai
+   como texto, e sem número, "—". Sem mensagem pronta: quem escreve é o consultor. ---- #}
+{%- macro whatsapp(valor, nome) -%}
+{%- set numero = valor | numero_whatsapp -%}
+{%- if numero -%}
+{{ m.link_whatsapp(numero, '', '(' ~ numero[2:4] ~ ') ' ~ numero[4:-4] ~ '-' ~ numero[-4:], classe='link-whatsapp-lead', contexto='de ' ~ nome) }}
+{%- elif valor -%}<span class="t-mono text-break">{{ valor }}</span>
+{%- else -%}—{%- endif -%}
+{%- endmacro %}
+
+{# ---- O que o visitante escolheu na landing e a situação dos relatórios, em texto curto (lead do site) ---- #}
+{%- macro situacao_do_site(site, rotulos_interesse, rotulos_status_arquivo) -%}
+{%- if site and site.interesse -%}
+<small class="d-block t-mut">{{ rotulos_interesse.get(site.interesse, site.interesse) }}</small>
+{%- if site.status_arquivo %}<small class="d-block t-mut">{{ rotulos_status_arquivo.get(site.status_arquivo, site.status_arquivo) }}</small>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{# ---- Indicador do aceite dos termos (blueprints/leads.py:_conformidade). completo=false: a célula da lista
+   (as versões numa linha, os IPs e o instante mais recente); completo=true: o cabeçalho do painel, uma linha por
+   documento aceito, com o instante e o IP de cada um. ---- #}
+{%- macro conformidade(c, completo=false) -%}
+{%- if not c or c.tipo == 'indisponivel' -%}—
+{%- elif c.tipo == 'aceite' -%}
+<span class="nexo-badge b-green"><span class="dot"></span>Termos aceitos</span>
+{%- if completo %}
+<ul class="list-unstyled mb-0 mt-1">
+    {%- for aceite in c.aceites %}
+    <li><span class="text-break">{{ aceite.documento }} {{ aceite.versao }}</span> <small class="t-mut">· {{ m.horario(aceite.aceito_em) }} · {% if aceite.ip %}IP {{ aceite.ip }}{% else %}IP não registrado{% endif %}</small></li>
+    {%- endfor %}
+</ul>
+{%- else %}
+<small class="d-block text-break">{% for aceite in c.aceites %}{{ aceite.documento }} {{ aceite.versao }}{% if not loop.last %} · {% endif %}{% endfor %}</small>
+<small class="d-block t-mut text-break">{% if c.ips %}IP {{ c.ips | join(', ') }}{% else %}IP não registrado{% endif %} · {{ m.horario(c.instante) }}</small>
+{%- endif %}
+{%- elif c.tipo == 'termos' -%}
+<span class="nexo-badge b-green"><span class="dot"></span>Termos aceitos</span>
+<small class="d-block text-break">{{ c.versao or 'versão não registrada' }}</small>
+<small class="d-block t-mut">IP não registrado{% if c.instante %} · {{ m.horario(c.instante) }}{% endif %}</small>
+{%- elif c.tipo == 'consultor' -%}
+<span class="nexo-badge b-info"><span class="dot"></span>Autorização do consultor</span>
+<small class="d-block t-mut">{% if c.instante %}Confirmada em {{ m.horario(c.instante) }}{% else %}Uso dos relatórios autorizado pelo lead, confirmado pelo consultor{% endif %}</small>
+{%- elif c.tipo == 'visitante' -%}
+<span class="nexo-badge b-amber"><span class="dot"></span>Sem aceite dos termos</span>
+<small class="d-block text-break">Autorização dos relatórios: {{ c.versao }}</small>
+{%- if c.instante %}<small class="d-block t-mut">{{ m.horario(c.instante) }}</small>{% endif %}
+{%- else -%}
+<span class="nexo-badge b-amber"><span class="dot"></span>Sem aceite registrado</span>
+{%- endif -%}
+{%- endmacro %}

@@ -1,0 +1,72 @@
+{#- "Planilhas enviadas pelo lead": os relatórios que o microsserviço do Raio-X aprovou na triagem de segurança da
+    landing e guardou no bucket privado do Storage (armazenamento_leads.planilhas_do_lead: só os caminhos deste
+    lead, conferidos). Na página do lead e no painel da lista, com o contexto de _contexto_detalhe; só para o lead
+    que veio do microsserviço (site.interesse). O nome original é o que o visitante deu ao arquivo e sai escapado.
+    Sem SUPABASE_KEY (ou fora do banco do Supabase), os botões ficam desabilitados com a orientação.
+    prefixo_ids: o mesmo do diagnóstico (o painel passa "painel-"). #}
+{%- import "_macros.html" as m -%}
+{%- set pid = prefixo_ids | default('') -%}
+{%- macro tamanho(valor) -%}
+{%- if valor >= 1048576 -%}{{ ('%.1f'|format(valor / 1048576))|replace('.', ',') }} MB
+{%- elif valor >= 1024 -%}{{ m.num(valor / 1024) }} KB
+{%- else -%}{{ m.num(valor) }} bytes{%- endif -%}
+{%- endmacro %}
+{% if site and site.interesse %}
+{% set processavel = planilhas and lead.status not in ('convertido', 'expirado') %}
+{#- Passada a retenção, a planilha original também não sai (LGPD): sem link de baixar, como a rota (404). #}
+{% set baixavel = lead.status != 'expirado' %}
+<section class="nexo-card mb-4 planilhas-lead" aria-labelledby="{{ pid }}planilhasTitulo">
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="{{ pid }}planilhasTitulo"><i class="bi bi-file-earmark-spreadsheet text-purple" aria-hidden="true"></i> Planilhas enviadas pelo lead</h2>
+            <p class="sub">{{ rotulos_interesse.get(site.interesse, site.interesse) }}{% if site.status_arquivo %} · {{ rotulos_status_arquivo.get(site.status_arquivo, site.status_arquivo) }}{% endif %}. Os relatórios que passaram na triagem de segurança do site ficam no Storage, como o lead os enviou.</p>
+        </div>
+    </div>
+    <div class="nexo-card-body">
+        {% if planilhas %}
+        <ul class="planilhas-lead-lista list-unstyled mb-3">
+            {% for planilha in planilhas %}
+            <li>
+                <span class="planilhas-lead-nome"><i class="bi bi-filetype-{{ planilha.formato }}" aria-hidden="true"></i> <span class="text-break">{{ planilha.nome }}</span>
+                    <small class="planilhas-lead-meta">{{ planilha.formato | upper }} · {{ tamanho(planilha.tamanho) }}</small></span>
+                {% if not baixavel %}
+                {% elif armazenamento_pronto %}
+                <a class="btn-ghost btn-sm-x" href="{{ url_for('leads.arquivo', lead_id=lead.id, indice=planilha.indice) }}" download><i class="bi bi-download" aria-hidden="true"></i> Baixar<span class="visually-hidden"> {{ planilha.nome }}</span></a>
+                {% else %}
+                <button type="button" class="btn-ghost btn-sm-x" disabled aria-describedby="{{ pid }}planilhasSemStorage"><i class="bi bi-download" aria-hidden="true"></i> Baixar<span class="visually-hidden"> {{ planilha.nome }}</span></button>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% if baixavel %}
+        <div class="planilhas-lead-acoes">
+            {% if armazenamento_pronto %}
+            <a class="btn-ghost" href="{{ url_for('leads.arquivos_zip', lead_id=lead.id) }}" download><i class="bi bi-file-earmark-zip" aria-hidden="true"></i> Baixar planilhas originais</a>
+            {% else %}
+            <button type="button" class="btn-ghost" disabled aria-describedby="{{ pid }}planilhasSemStorage"><i class="bi bi-file-earmark-zip" aria-hidden="true"></i> Baixar planilhas originais</button>
+            {% endif %}
+            {% if processavel %}
+            <form method="POST" action="{{ url_for('leads.processar', lead_id=lead.id) }}" class="m-0" data-envio-unico data-envio-longo data-processar-planilhas>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn-nexo"{% if not armazenamento_pronto %} disabled aria-describedby="{{ pid }}planilhasSemStorage"{% endif %}><i class="bi bi-activity" aria-hidden="true"></i> {{ 'Processar relatórios do lead' if lead.status == 'pendente' else 'Processar de novo' }}</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% if lead.status == 'expirado' %}
+        <p class="field-hint mt-2 mb-0">Os dados deste lead passaram dos {{ retencao_dias }} dias de retenção: as planilhas não são baixadas nem processadas de novo.</p>
+        {% elif not armazenamento_pronto %}
+        <p class="field-hint mt-2 mb-0" id="{{ pid }}planilhasSemStorage">{{ mensagem_sem_armazenamento }}.</p>
+        {% elif processavel %}
+        <p class="field-hint mt-2 mb-0">O processamento baixa as planilhas do Storage e roda a Avaliação de Cenário no processo isolado{% if lead.status != 'pendente' %}, trocando os dados da avaliação atual{% endif %}: com muitos meses, pode levar até dois minutos. Nenhuma mensagem é enviada ao lead.</p>
+        {% elif lead.status == 'convertido' %}
+        <p class="field-hint mt-2 mb-0">Lead já convertido em cliente: as planilhas não são processadas de novo.</p>
+        {% endif %}
+        {% elif site.interesse == 'raio_x' %}
+        <p class="t-mut mb-0">Nenhuma planilha disponível: {% if site.status_arquivo == 'recusado' %}os relatórios enviados foram recusados na triagem de segurança do site{% else %}o registro dos arquivos deste lead não confere e nada foi pedido ao Storage{% endif %}.</p>
+        {% else %}
+        <p class="t-mut mb-0">O lead não enviou relatórios: escolheu "{{ rotulos_interesse.get(site.interesse, site.interesse) }}" no pré-cadastro do site.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}

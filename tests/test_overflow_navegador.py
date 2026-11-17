@@ -547,6 +547,20 @@ class OverflowNavegadorTests(NavegadorCase):
                 self.assert_layout(pagina, largura, f"{caminho} @ {largura}px")
             pagina.context.close()
 
+    def test_painel_do_lead_sem_cortes_em_todas_as_larguras(self):
+        """O painel "Ver Avaliação de Cenário" da lista, aberto pelo ?ver= com o lead extenso (o diagnóstico inteiro,
+        com as tabelas da inteligência): as mesmas medidas das páginas, com o painel na frente da lista."""
+        for largura, altura in LARGURAS:
+            pagina = self.abrir(largura, altura)
+            self.entrar(pagina, "admin-test@example.invalid")
+            self.ir(pagina, f"/admin/leads?ver={self.lead_id}")
+            pagina.wait_for_function("""() => { const c = document.querySelector('[data-painel-corpo]');
+                return !!c && c.getAttribute('aria-busy') === 'false' && !!c.querySelector('[data-painel-fragmento]'); }""",
+                                     timeout=20000)
+            pagina.wait_for_timeout(200)  # o ajuste das tabelas e dos KPIs do painel
+            self.assert_layout(pagina, largura, f"painel do lead @ {largura}px")
+            pagina.context.close()
+
     def test_lead_extenso_desenha_as_tabelas_da_inteligencia(self):
         # O assert_layout só mede as tabelas que existem: aqui se confere que as mais largas existem.
         pagina = self.abrir(1280, 800)

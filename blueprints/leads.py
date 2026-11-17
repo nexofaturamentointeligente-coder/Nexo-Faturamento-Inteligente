@@ -4,15 +4,24 @@ NEXO - Avaliação de Cenário (blueprint `leads`, só consultores)
 Rotas (todas admin_required: aqui o consultor envia em nome do lead. A captação pelo site é o Raio-X
 público de blueprints/avaliacao_publica.py, atrás do interruptor AVALIACAO_PUBLICA_ATIVA, desligado por
 padrão; os leads dele aparecem aqui com a origem "site". Ver Docs/PRE_CADASTRO_LANDING.md):
-  GET  /admin/leads                  → leads avaliados e o formulário de nova avaliação
+  GET  /admin/leads                  → a tabela dos leads (empresa, contato, e-mail, WhatsApp, data, aceite dos
+                                       termos, situação e caixa resgatável) com o "Ver Avaliação de Cenário" de
+                                       cada um, e o formulário de nova avaliação; ?ver=<id> abre o painel daquele
+                                       lead ao carregar (a volta do processamento)
   POST /admin/leads                  → lê os relatórios do lead e grava a avaliação
   GET  /admin/leads/<id>             → resumo executivo do caixa resgatável, matriz de triagem, marcas,
                                        matriz por categoria, inteligência de estoque e de preço (com o
-                                       simulador pelos mesmos parâmetros da rota JSON), os itens de cada bloco
-                                       e o aceite dos termos que o visitante deu na landing (revisão
-                                       c8e2a4f6b0d1, gravado pelo microsserviço do Raio-X)
+                                       simulador pelos mesmos parâmetros da rota JSON), os itens de cada bloco,
+                                       o aceite dos termos que o visitante deu na landing (revisão
+                                       c8e2a4f6b0d1, gravado pelo microsserviço do Raio-X) e as planilhas que ele
+                                       enviou por lá
+  GET  /admin/leads/<id>/painel      → o mesmo diagnóstico, sem base.html: o fragmento do painel lateral da
+                                       lista (static/js/leads-painel.js), com o contato, o aceite e as planilhas
   GET  /admin/leads/<id>/diagnostico.json → o mesmo diagnóstico em JSON (diagnostico_cenario.montar_payload),
                                        com as séries para gráficos em "visualizacoes"
+  GET  /admin/leads/<id>/arquivos/<n> → uma planilha original do lead, do bucket privado do Storage do Supabase
+  GET  /admin/leads/<id>/arquivos.zip → todas elas num .zip (armazenamento_leads, só leitura)
+  POST /admin/leads/<id>/processar   → baixa as planilhas do lead da landing e grava a avaliação com elas
   POST /admin/leads/<id>/reenviar    → troca os dados do lead pelos de um novo envio
   POST /admin/leads/<id>/retriar     → refaz marcas e triagem a partir dos dados gravados
 
@@ -22,7 +31,15 @@ Regras:
     O processo isolado tem vaga própria (etl_runtime): ocupada, a resposta é a mesma.
   - Antes do processo isolado (até 2 minutos), a transação da requisição é encerrada: nada fica
     travado nem segura conexão do pooler enquanto os arquivos são lidos.
-  - 20 envios por hora por consultor, somando novo envio e reenvio.
+  - 20 envios por hora por consultor, somando novo envio, reenvio e processamento das planilhas do site; 60
+    downloads de planilha por hora por consultor, somando os avulsos e os .zip.
+  - Planilhas do lead da landing (armazenamento_leads): o JSON arquivos_storage é conferido antes de qualquer
+    pedido ao Storage (só os caminhos deste lead viram pedido), o conteúdo baixado tem de bater com o tamanho e o
+    SHA-256 registrados, e nenhuma resposta ou log leva a chave, o endereço ou o caminho do objeto. Sem
+    SUPABASE_KEY (ou fora do banco do Supabase), os botões ficam desabilitados com a orientação.
+  - As cinco colunas do microsserviço (revisão f2b6d8a4c1e9) ficam fora do mapeamento do ORM: são lidas pela
+    tabela, numa consulta só para a lista inteira, e o aceite dos termos também (nunca uma por lead). Banco sem a
+    revisão: a tela segue sem o dado.
   - Diagnóstico (tela e JSON): as linhas do lead numa consulta só, sem objetos do ORM, e um cache por
     processo (_CacheDoDiagnostico) cuja chave leva o conteúdo das linhas e os campos do lead: a mesma
     leitura não refaz a triagem, a matriz e a inteligência, e qualquer mudança gera outra chave. A
@@ -35,10 +52,13 @@ Regras:
 from collections import OrderedDict, namedtuple
 from datetime import timedelta
 from decimal import Decimal
+import io
 import json
 import re
 import threading
 import time
+from urllib.parse import quote
+import uuid
 from weakref import WeakKeyDictionary
 
 from flask import (Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template,
@@ -46,7 +66,9 @@ from flask import (Blueprint, abort, current_app, flash, jsonify, make_response,
 from flask_login import current_user
 from sqlalchemy import String, cast, func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.datastructures import FileStorage
 
+import armazenamento_leads
 import avaliacao_cenario
 import avaliacao_motor
 from blueprints.admin import admin_required
@@ -63,14 +85,29 @@ import inteligencia_estoque
 import leads_avaliacao
 from leads_avaliacao import RETENCAO_DIAS
 import whatsapp_service
-from models import (AceiteDocumentoLead, BrainstormingDadosPdv, DocumentoLegal, LeadAvaliacao,
-                    ROTULOS_FAIXAS_DE_FATURAMENTO, ROTULOS_PLANOS_DE_INTERESSE)
+from models import (AceiteDocumentoLead, BrainstormingDadosPdv, COLUNAS_DO_MICROSSERVICO, DocumentoLegal,
+                    LeadAvaliacao, ROTULOS_FAIXAS_DE_FATURAMENTO, ROTULOS_PLANOS_DE_INTERESSE)
 import raio_x
 import triagem_cenario
 
 leads_bp = Blueprint("leads", __name__, url_prefix="/admin/leads")
 
 limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_func=chave_limite_usuario)
+# Downloads das planilhas originais do lead da landing (avulsas e .zip, somados), por consultor.
+limite_download = limiter.shared_limit("60 per hour", scope="planilhas-lead", key_func=chave_limite_usuario)
+
+# O que o visitante escolheu na Etapa 3 do pré-cadastro da landing (models.INTERESSES_DO_LEAD: os botões 1, 2 e 3)
+# e a situação dos relatórios na triagem do microsserviço (models.SITUACOES_DOS_ARQUIVOS), em texto curto.
+ROTULOS_INTERESSE = {"raio_x": "Raio-X com relatórios", "ajuda_relatorios": "Pediu ajuda com os relatórios",
+                     "so_contato": "Só contato, sem Raio-X"}
+ROTULOS_STATUS_ARQUIVO = {"sem_arquivo": "sem relatórios", "aprovado": "relatórios aprovados",
+                          "parcial": "parte dos relatórios recusada", "recusado": "relatórios recusados"}
+# Os ids do fragmento do painel levam este prefixo: não colidem com os da página da lista.
+PREFIXO_DO_PAINEL = "painel-"
+# Cabeçalho que marca o fragmento do painel: o script só põe no <dialog> a resposta que o traz.
+CABECALHO_DO_PAINEL = "X-Nexo-Painel"
+MENSAGEM_STORAGE_FALHOU = ("Não foi possível baixar as planilhas do lead no Storage agora. Tente de novo em "
+                           "instantes.")
 
 MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
                     "nenhum arquivo foi lido.")
@@ -160,8 +197,10 @@ def expurgo_oportunista() -> None:
 PROTOCOLO_VALIDO = re.compile(r"[0-9A-Fa-f]{8}")
 
 
-def _contexto_lista(formulario=None, protocolo=None) -> dict:
-    # Ordem da coluna "Avaliado em": a última autorização (renovada a cada reenvio) ou a criação.
+def _contexto_lista(formulario=None, protocolo=None, ver=None) -> dict:
+    """A tabela dos leads: os mais recentes (ou os do protocolo), com o aceite dos termos e o que o microsserviço
+    gravou lidos numa consulta só para a lista inteira. `ver`: o lead cujo painel abre ao carregar."""
+    # Ordem: a última avaliação (a autorização, renovada a cada reenvio e processamento) ou a criação.
     avaliado_em = func.coalesce(LeadAvaliacao.consentimento_em, LeadAvaliacao.criado_em)
     consulta = select(LeadAvaliacao)
     if protocolo:
@@ -170,31 +209,38 @@ def _contexto_lista(formulario=None, protocolo=None) -> dict:
         consulta = consulta.where(cast(LeadAvaliacao.id, String).like(f"{protocolo.lower()}%"))
     leads = db.session.scalars(consulta.order_by(avaliado_em.desc(), LeadAvaliacao.criado_em.desc())
                                .limit(LEADS_NA_LISTA)).all()
+    ids = [lead.id for lead in leads]
+    aceites = _aceites_dos_leads(ids)
+    sites = _dados_do_site(ids)
+    conformidades = {lead.id: _conformidade(lead, None if aceites is None else aceites.get(lead.id, []),
+                                            (sites or {}).get(lead.id), sites is not None) for lead in leads}
     return {"leads": leads, "formulario": formulario or {}, "max_arquivos": raio_x.MAX_ARQUIVOS,
             "protocolo": protocolo or "",
             "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS, "retencao_dias": RETENCAO_DIAS,
-            "disponivel": True, "paineis": {lead.id: _painel_da_lista(lead) for lead in leads},
+            "disponivel": True, "parados": {lead.id: _parado_da_lista(lead) for lead in leads},
+            "sites": sites or {}, "conformidades": conformidades,
+            "rotulos_interesse": ROTULOS_INTERESSE, "rotulos_status_arquivo": ROTULOS_STATUS_ARQUIVO,
+            "painel_abrir": url_for("leads.painel", lead_id=ver) if ver else "",
+            "painel_pagina": url_for("leads.detalhe", lead_id=ver) if ver else "",
             "total_leads": db.session.scalar(select(func.count()).select_from(LeadAvaliacao))}
 
 
-def _painel_da_lista(lead: LeadAvaliacao) -> dict:
-    """O que a lista mostra de cada lead além das colunas: os produtos de cada bloco da triagem (do
-    resumo gravado) e o resumo gravado da inteligência (capital parado, excedente), sem refazer nada."""
+def _parado_da_lista(lead: LeadAvaliacao):
+    """O capital parado que a coluna "Caixa resgatável" mostra junto do potencial recuperável: a menor faixa do
+    resumo gravado da inteligência (60 dias ou mais sem venda), sem refazer nada. None sem estoque informado. A
+    triagem, as marcas, a saúde e o plano sugerido de cada lead estão no painel (o diagnóstico completo)."""
     try:
-        resumos = {bloco: _resumo(lead, bloco) for bloco in triagem_cenario.BLOCOS}
         inteligencia = _resumo_inteligencia(lead)
-        parado = None
-        if inteligencia and inteligencia["com_estoque"] and inteligencia.get("capital_parado"):
-            dias = min(inteligencia["capital_parado"], key=int)
-            # Parcial só quando algum produto com custo e sem saldo informado já está nessa faixa sem venda: o
-            # capital dele falta na soma (quem ainda vende, ou não tem custo, não entraria nela com saldo nenhum).
-            parado = {"dias": int(dias), "capital": inteligencia["capital_parado"][dias],
-                      "parcial": bool(inteligencia.get("itens_parados_sem_estoque_informado"))}
+        if not (inteligencia and inteligencia["com_estoque"] and inteligencia.get("capital_parado")):
+            return None
+        dias = min(inteligencia["capital_parado"], key=int)
+        # Parcial só quando algum produto com custo e sem saldo informado já está nessa faixa sem venda: o
+        # capital dele falta na soma (quem ainda vende, ou não tem custo, não entraria nela com saldo nenhum).
+        return {"dias": int(dias), "capital": inteligencia["capital_parado"][dias],
+                "parcial": bool(inteligencia.get("itens_parados_sem_estoque_informado"))}
     except (ValueError, TypeError, KeyError, AttributeError, ArithmeticError, RecursionError):
         # Um lead com gravação que nenhuma validação previu não derruba a lista dos outros.
-        return {"triagem": {bloco: None for bloco in triagem_cenario.BLOCOS}, "inteligencia": None, "parado": None}
-    return {"triagem": {bloco: (resumo["itens"] if resumo else None) for bloco, resumo in resumos.items()},
-            "inteligencia": inteligencia, "parado": parado}
+        return None
 
 
 def _objeto_json(texto):
@@ -451,36 +497,128 @@ def _aceite_dos_termos_disponivel() -> bool:
     return presente
 
 
-def _aceites_dos_termos(lead: LeadAvaliacao):
-    """Os aceites dos Termos de Uso e da Política de Privacidade que o visitante deu na landing (gravados pelo
-    microsserviço do Raio-X): o documento, o rótulo da versão aceita, o instante e o IP, na ordem dos documentos.
-    Lista vazia quando o lead não tem aceite; None quando a tabela ainda não existe neste banco ou a leitura falha
-    (num SAVEPOINT: no PostgreSQL, a consulta que falha não aborta a transação da página, que segue sem o bloco)."""
+def _aceites_dos_leads(ids):
+    """{id do lead: aceites} dos leads `ids`, numa consulta só (a lista inteira nunca pede um por lead): os aceites
+    dos Termos de Uso e da Política de Privacidade que o visitante deu na landing (gravados pelo microsserviço do
+    Raio-X), cada um com o documento, o rótulo da versão aceita, o instante e o IP, na ordem dos documentos. O lead
+    sem aceite fica fora do dicionário. None quando a tabela ainda não existe neste banco ou a leitura falha (num
+    SAVEPOINT: no PostgreSQL, a consulta que falha não aborta a transação da página, que segue sem o dado)."""
+    ids = list(ids)
+    if not ids:
+        return {}
     ordem = {tipo: indice for indice, tipo in enumerate(TIPOS_DOCUMENTO)}
     try:
         with db.session.begin_nested():
             if not _aceite_dos_termos_disponivel():
                 return None
             linhas = db.session.execute(
-                select(DocumentoLegal.tipo, DocumentoLegal.versao_maior, DocumentoLegal.versao_menor,
-                       AceiteDocumentoLead.aceito_em, AceiteDocumentoLead.ip)
+                select(AceiteDocumentoLead.id_lead, DocumentoLegal.tipo, DocumentoLegal.versao_maior,
+                       DocumentoLegal.versao_menor, AceiteDocumentoLead.aceito_em, AceiteDocumentoLead.ip)
                 .join(DocumentoLegal, DocumentoLegal.id_documento == AceiteDocumentoLead.id_documento)
-                .where(AceiteDocumentoLead.id_lead == lead.id)
+                .where(AceiteDocumentoLead.id_lead.in_(ids))
             ).all()
     except SQLAlchemyError as erro:
         _aceite_por_engine.pop(db.session.get_bind(), None)
         current_app.logger.warning("Aceite dos termos do lead não lido (%s).", type(erro).__name__)
         return None
-    linhas = sorted(linhas, key=lambda linha: (ordem.get(linha.tipo, len(ordem)), linha.aceito_em))
-    return [{"documento": TIPOS_DOCUMENTO.get(linha.tipo, linha.tipo),
-             "versao": rotulo_versao(linha.versao_maior, linha.versao_menor),
-             "aceito_em": linha.aceito_em, "ip": linha.ip} for linha in linhas]
+    por_lead = {}
+    for linha in sorted(linhas, key=lambda linha: (ordem.get(linha.tipo, len(ordem)), linha.aceito_em)):
+        por_lead.setdefault(linha.id_lead, []).append({
+            "documento": TIPOS_DOCUMENTO.get(linha.tipo, linha.tipo),
+            "versao": rotulo_versao(linha.versao_maior, linha.versao_menor),
+            "aceito_em": linha.aceito_em, "ip": linha.ip})
+    return por_lead
+
+
+def _aceites_dos_termos(lead: LeadAvaliacao):
+    """Os aceites dos termos de um lead (_aceites_dos_leads): lista vazia sem aceite; None sem a tabela ou com
+    falha na leitura."""
+    aceites = _aceites_dos_leads([lead.id])
+    return None if aceites is None else aceites.get(lead.id, [])
+
+
+# As cinco colunas que só o microsserviço do Raio-X grava (revisão f2b6d8a4c1e9) estão na tabela, mas fora do
+# mapeamento do ORM (models.LeadAvaliacao): são lidas pela tabela, com o mesmo critério de esquema do aceite.
+DadosDoSite = namedtuple("DadosDoSite", COLUNAS_DO_MICROSSERVICO)
+_site_por_engine: "WeakKeyDictionary" = WeakKeyDictionary()
+
+
+def _colunas_do_site_disponiveis() -> bool:
+    engine = db.session.get_bind()
+    estado = _site_por_engine.get(engine)
+    if estado is True:
+        return True
+    if estado is not None and time.monotonic() - estado < _REVERIFICAR_ESQUEMA_SEGUNDOS:
+        return False
+    colunas = {coluna["name"] for coluna in inspect(db.session.connection()).get_columns(LeadAvaliacao.__tablename__)}
+    presentes = set(COLUNAS_DO_MICROSSERVICO) <= colunas
+    _site_por_engine[engine] = True if presentes else time.monotonic()
+    return presentes
+
+
+def _dados_do_site(ids):
+    """{id do lead: DadosDoSite} dos leads `ids`, numa consulta só: o interesse, a situação dos arquivos, o JSON dos
+    caminhos no Storage e o resumo do aceite (termos_aceitos_em e termos_versao), nulos nos leads que não vieram do
+    microsserviço. None quando as colunas ainda não existem neste banco ou a leitura falha (num SAVEPOINT, como o
+    aceite): a tela segue sem o dado, nunca com erro 500."""
+    ids = list(ids)
+    if not ids:
+        return {}
+    tabela = LeadAvaliacao.__table__
+    try:
+        with db.session.begin_nested():
+            if not _colunas_do_site_disponiveis():
+                return None
+            linhas = db.session.execute(
+                select(tabela.c.id, *(tabela.c[nome] for nome in COLUNAS_DO_MICROSSERVICO))
+                .where(tabela.c.id.in_(ids))
+            ).all()
+    except SQLAlchemyError as erro:
+        _site_por_engine.pop(db.session.get_bind(), None)
+        current_app.logger.warning("Dados do microsserviço dos leads não lidos (%s).", type(erro).__name__)
+        return None
+    return {linha[0]: DadosDoSite(*linha[1:]) for linha in linhas}
+
+
+def _planilhas_do_lead(lead: LeadAvaliacao) -> list:
+    """As planilhas válidas que o lead enviou pela landing (armazenamento_leads.planilhas_do_lead); vazio sem elas,
+    sem as colunas no banco ou com o JSON fora do formato."""
+    sites = _dados_do_site([lead.id])
+    site = sites.get(lead.id) if sites else None
+    return armazenamento_leads.planilhas_do_lead(lead.id, site.arquivos_storage) if site else []
+
+
+def _conformidade(lead: LeadAvaliacao, aceites, site, colunas_lidas: bool) -> dict:
+    """O indicador do aceite dos termos de um lead, na lista e no painel, pelo "tipo":
+      - "aceite": as versões que o visitante aceitou de cada documento (aceite_documento_lead), com o instante e o
+        IP de cada uma;
+      - "termos": sem linha de aceite, o resumo gravado no lead pelo microsserviço (termos_versao e o instante);
+      - "consultor": lead do consultor sem aceite: quem confirmou a autorização do uso dos relatórios foi ele;
+      - "visitante": lead do Raio-X público sem aceite dos termos, com a versão do texto da autorização que o
+        visitante marcou;
+      - "sem_aceite": lead do site sem nenhum registro;
+      - "indisponivel": banco sem a tabela do aceite e sem as colunas do microsserviço (a tela mostra "—")."""
+    if aceites:
+        return {"tipo": "aceite", "aceites": aceites, "instante": max(aceite["aceito_em"] for aceite in aceites),
+                "ips": list(dict.fromkeys(aceite["ip"] for aceite in aceites if aceite["ip"]))}
+    if site is not None and (site.termos_versao or site.termos_aceitos_em):
+        return {"tipo": "termos", "versao": site.termos_versao, "instante": site.termos_aceitos_em}
+    # O reenvio do consultor troca a autorização do visitante pela dele (avaliacao_cenario._gravar).
+    if lead.origem == "consultor" or (lead.registrado_por is not None and not lead.versao_autorizacao):
+        return {"tipo": "consultor", "instante": lead.consentimento_em}
+    if aceites is None and not colunas_lidas:
+        return {"tipo": "indisponivel"}
+    if lead.versao_autorizacao:
+        return {"tipo": "visitante", "versao": lead.versao_autorizacao, "instante": lead.consentimento_em}
+    return {"tipo": "sem_aceite"}
 
 
 def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None) -> dict:
     """Resumo gravado e, enquanto os dados de PDV existirem e forem da versão atual, a matriz por
     categoria, a inteligência de estoque e de preço e os itens de cada bloco com os motivos (o mesmo
-    diagnóstico da rota JSON, com os mesmos parâmetros do simulador)."""
+    diagnóstico da rota JSON, com os mesmos parâmetros do simulador). Também o aceite dos termos, o que o
+    microsserviço gravou (interesse, situação e planilhas no Storage) e se o Storage está configurado. Serve à
+    página do lead e ao fragmento do painel da lista, que mostram o mesmo diagnóstico."""
     diagnostico = _diagnostico(lead, ITENS_POR_BLOCO, parametros)
     payload = diagnostico.payload
     meta = _objeto_json(lead.meta_json) or {}
@@ -507,6 +645,10 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
     # A tela mostra o diagnóstico inteiro (e o contato): a leitura fica no log, como na rota JSON, só com os
     # identificadores, inclusive quando vem do cache.
     current_app.logger.info("Diagnóstico do lead %s lido pelo consultor %s.", lead.id, current_user.id_usuario)
+    aceites_termos = _aceites_dos_termos(lead)
+    sites = _dados_do_site([lead.id])
+    site = sites.get(lead.id) if sites else None
+    planilhas = armazenamento_leads.planilhas_do_lead(lead.id, site.arquivos_storage) if site else []
     return {
         "itens_sem_estoque_com_custo": itens_sem_estoque_com_custo,
         "caixa_resgatavel": _caixa_resgatavel(payload["visualizacoes"] or {}),
@@ -535,7 +677,17 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
         # O que o visitante escolheu no Raio-X público (lead com origem "site").
         "rotulos_planos_interesse": ROTULOS_PLANOS_DE_INTERESSE, "rotulos_faixas_faturamento": ROTULOS_FAIXAS_DE_FATURAMENTO,
         # O aceite dos termos na landing (o bloco "Aceite dos termos"); None sem a tabela.
-        "aceites_termos": _aceites_dos_termos(lead),
+        "aceites_termos": aceites_termos,
+        "conformidade": _conformidade(lead, aceites_termos, site, sites is not None),
+        # O que o microsserviço gravou (None no lead do consultor e no banco sem a revisão f2b6d8a4c1e9) e as
+        # planilhas válidas no Storage, com o estado da configuração para os botões de baixar e processar.
+        "site": site, "planilhas": planilhas,
+        "armazenamento_pronto": armazenamento_leads.do_app(current_app.config) is not None,
+        "mensagem_sem_armazenamento": armazenamento_leads.MENSAGEM_SEM_CONFIGURACAO,
+        "rotulos_interesse": ROTULOS_INTERESSE, "rotulos_status_arquivo": ROTULOS_STATUS_ARQUIVO,
+        # Lead que ainda não foi processado (o da landing, pendente): o painel mostra isso no lugar dos números.
+        "sem_diagnostico": (lead.arquivos is None and lead.score_saude_cadastral is None
+                            and not diagnostico.linhas_pdv),
     }
 
 
@@ -577,6 +729,91 @@ def _ocupado(template: str, contexto: dict):
     resposta = make_response(render_template(template, **contexto), 503)
     resposta.headers["Retry-After"] = str(ESPERA_SEGUNDOS)
     return resposta
+
+
+# =====================================================================
+# Contato do lead nas telas
+# =====================================================================
+@leads_bp.app_template_filter("numero_whatsapp")
+def numero_whatsapp(valor) -> str:
+    """O WhatsApp do lead como o wa.me o aceita (só dígitos, com o DDI 55), pela mesma higienização dos avisos pela
+    Evolution (whatsapp_service.higienizar_telefone); vazio quando o número é ambíguo ou inválido. A macro
+    link_whatsapp de _macros.html confere de novo antes de desenhar o link."""
+    return whatsapp_service.higienizar_telefone(valor) or ""
+
+
+@leads_bp.app_template_filter("endereco_mailto")
+def endereco_mailto(email) -> str:
+    """O href mailto: do e-mail do lead, com os caracteres que mudariam o sentido do endereço (?, #, %, &, espaço)
+    codificados; a arroba e o ponto ficam."""
+    return "mailto:" + quote(str(email or ""), safe="@.+-_")
+
+
+# =====================================================================
+# Respostas das planilhas e do painel
+# =====================================================================
+def _do_painel(resposta):
+    """Marca a resposta como fragmento do painel (static/js/leads-painel.js só põe no <dialog> o que vier
+    marcado) e sem cache: o fragmento leva o contato e o diagnóstico do lead."""
+    resposta.headers[CABECALHO_DO_PAINEL] = "1"
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+def _resposta_curta(texto: str, status: int):
+    """Texto puro e curto, sem detalhe interno: o que um download que falhou mostra."""
+    resposta = make_response(texto, status)
+    resposta.headers["Content-Type"] = "text/plain; charset=utf-8"
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+def _anexo(conteudo: bytes, nome: str, tipo: str):
+    """O arquivo para baixar: Content-Disposition attachment com o nome em ASCII e em UTF-8 (RFC 5987), o tipo do
+    formato, sem farejar o tipo nem guardar em cache."""
+    seguro = nome.encode("ascii", "ignore").decode("ascii").replace('"', "").replace("\\", "") or "arquivo"
+    resposta = make_response(conteudo)
+    resposta.headers["Content-Type"] = tipo
+    resposta.headers["Content-Disposition"] = (f'attachment; filename="{seguro}"; '
+                                               f"filename*=UTF-8''{quote(nome, safe='')}")
+    resposta.headers["X-Content-Type-Options"] = "nosniff"
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+def _preparar_download(lead_id):
+    """(lead, planilhas, None) para as rotas de download, ou (None, None, resposta curta): banco sem as migrações
+    (503), lead inexistente, com os dados expirados ou sem planilha válida (404). Passada a retenção, a planilha
+    original também não sai (LGPD): o mesmo que a tela mostra, sem link de baixar."""
+    if not esquema_disponivel():
+        resposta = _resposta_curta(MENSAGEM_SEM_ESQUEMA, 503)
+        resposta.headers["Retry-After"] = str(ESPERA_SEGUNDOS)
+        return None, None, resposta
+    lead = db.session.get(LeadAvaliacao, lead_id)
+    if lead is None or lead.status == "expirado":
+        abort(404)
+    planilhas = _planilhas_do_lead(lead)
+    if not planilhas:
+        abort(404)
+    return lead, planilhas, None
+
+
+def _armazenamento_ou_resposta():
+    """(cliente do Storage, None) ou (None, 503 com a orientação de configurar SUPABASE_KEY)."""
+    armazenamento = armazenamento_leads.do_app(current_app.config)
+    if armazenamento is None:
+        return None, _resposta_curta(armazenamento_leads.MENSAGEM_SEM_CONFIGURACAO + ".", 503)
+    return armazenamento, None
+
+
+def _uuid_da_consulta(valor):
+    """O uuid de um parâmetro da consulta (?ver=), ou None se não for um."""
+    if not isinstance(valor, str) or not valor or len(valor) > 64:
+        return None
+    try:
+        return uuid.UUID(valor.strip())
+    except ValueError:
+        return None
 
 
 # =====================================================================
@@ -656,7 +893,9 @@ def lista():
     if protocolo and not PROTOCOLO_VALIDO.fullmatch(protocolo):
         flash("Protocolo inválido: use os 8 caracteres que vêm na mensagem do Raio-X público.", "warning")
         protocolo = ""
-    return render_template("admin/leads.html", **_contexto_lista(protocolo=protocolo or None))
+    # ?ver=<id>: o painel daquele lead abre ao carregar (a volta do processamento); outro valor é ignorado.
+    return render_template("admin/leads.html", **_contexto_lista(protocolo=protocolo or None,
+                                                                  ver=_uuid_da_consulta(request.args.get("ver"))))
 
 
 @leads_bp.route("", methods=["POST"])
@@ -706,6 +945,27 @@ def detalhe(lead_id):
     except ValueError as erro:
         parametros, erro_parametros = None, str(erro)
     return render_template("admin/lead.html", **_contexto_detalhe(lead, parametros, erro_parametros))
+
+
+@leads_bp.route("/<uuid:lead_id>/painel")
+@admin_required
+def painel(lead_id):
+    """O fragmento HTML do painel lateral da lista ("Ver Avaliação de Cenário"), sem base.html: o cabeçalho do lead
+    (empresa, contato, e-mail, WhatsApp, data e o aceite dos termos), as planilhas que ele enviou pela landing e o
+    diagnóstico completo, o mesmo da página do lead (_contexto_detalhe, com os ids prefixados). Sem desfoque nem
+    bloqueio: é a tela do consultor. As mesmas checagens do detalhe, sem cache, e a leitura no log só com os ids."""
+    if not esquema_disponivel():
+        resposta = make_response(render_template("admin/_lead_painel.html", disponivel=False,
+                                                 mensagem_sem_esquema=MENSAGEM_SEM_ESQUEMA), 503)
+        resposta.headers["Retry-After"] = str(ESPERA_SEGUNDOS)
+        return _do_painel(resposta)
+    expurgo_oportunista()
+    lead = db.session.get(LeadAvaliacao, lead_id)
+    if lead is None:
+        abort(404)
+    html = render_template("admin/_lead_painel.html", disponivel=True, prefixo_ids=PREFIXO_DO_PAINEL,
+                           **_contexto_detalhe(lead))
+    return _do_painel(make_response(html))
 
 
 @leads_bp.route("/<uuid:lead_id>/diagnostico.json")
@@ -802,3 +1062,131 @@ def retriar(lead_id):
         if aviso_limiares:
             flash(aviso_limiares, "warning")
     return redirect(url_for("leads.detalhe", lead_id=lead_id), 303)
+
+
+# =====================================================================
+# Planilhas do lead da landing (Storage do Supabase, só leitura)
+# =====================================================================
+@leads_bp.route("/<uuid:lead_id>/arquivos/<int:indice>")
+@admin_required
+@limite_download
+def arquivo(lead_id, indice):
+    """Uma planilha original do lead (o NN do caminho no Storage), conferida com o tamanho e o SHA-256 registrados
+    pelo microsserviço. Índice que não é de uma planilha válida: 404; Storage sem configuração: 503; falha do
+    Storage: 502, sempre sem detalhe interno."""
+    _lead, planilhas, resposta = _preparar_download(lead_id)
+    if resposta is not None:
+        return resposta
+    planilha = next((planilha for planilha in planilhas if planilha.indice == indice), None)
+    if planilha is None:
+        abort(404)
+    armazenamento, resposta = _armazenamento_ou_resposta()
+    if resposta is not None:
+        return resposta
+    consultor = current_user.id_usuario
+    # A conexão do banco volta ao pool antes da rede (até 30 s pelo arquivo).
+    db.session.rollback()
+    try:
+        conteudo = armazenamento.baixar(planilha)
+    except armazenamento_leads.ErroDeArmazenamento as erro:
+        current_app.logger.warning("Planilha %s do lead %s não baixada do Storage (%s).", indice, lead_id, erro)
+        return _resposta_curta(MENSAGEM_STORAGE_FALHOU, 502)
+    current_app.logger.info("Planilha %s do lead %s baixada pelo consultor %s.", indice, lead_id, consultor)
+    return _anexo(conteudo, planilha.nome_para_baixar, planilha.tipo)
+
+
+@leads_bp.route("/<uuid:lead_id>/arquivos.zip")
+@admin_required
+@limite_download
+def arquivos_zip(lead_id):
+    """Todas as planilhas válidas do lead num .zip (nomes únicos, na ordem do envio), com as mesmas conferências e
+    respostas da planilha avulsa."""
+    lead, planilhas, resposta = _preparar_download(lead_id)
+    if resposta is not None:
+        return resposta
+    armazenamento, resposta = _armazenamento_ou_resposta()
+    if resposta is not None:
+        return resposta
+    nome, consultor = f"planilhas-lead-{lead.protocolo}.zip", current_user.id_usuario
+    # A conexão do banco volta ao pool antes da rede (até 30 s por arquivo).
+    db.session.rollback()
+    try:
+        conteudos = [armazenamento.baixar(planilha) for planilha in planilhas]
+    except armazenamento_leads.ErroDeArmazenamento as erro:
+        current_app.logger.warning("Planilhas do lead %s não baixadas do Storage (%s).", lead_id, erro)
+        return _resposta_curta(MENSAGEM_STORAGE_FALHOU, 502)
+    pacote = armazenamento_leads.montar_zip(zip(armazenamento_leads.nomes_unicos(planilhas), conteudos))
+    current_app.logger.info("Planilhas do lead %s (%s arquivo(s)) baixadas em .zip pelo consultor %s.", lead_id,
+                            len(planilhas), consultor)
+    return _anexo(pacote, nome, "application/zip")
+
+
+@leads_bp.route("/<uuid:lead_id>/processar", methods=["POST"])
+@admin_required
+@limite_envio
+def processar(lead_id):
+    """Processa as planilhas que o lead enviou pela landing: dentro da vaga única de entrada, baixa cada uma do
+    Storage (conferida com o registrado) e grava a avaliação no próprio lead pelo mesmo caminho do reenvio (_avaliar:
+    processo isolado e avaliacao_cenario.registrar). Lead convertido ou com os dados expirados, sem planilha válida
+    ou com o Storage sem configuração: nada é baixado. Nenhuma mensagem é enviada ao lead. Volta para a lista com o
+    painel do lead aberto (?ver=), já com os números."""
+    if not esquema_disponivel():
+        return _sem_esquema()
+    lead = db.session.get(LeadAvaliacao, lead_id)
+    if lead is None:
+        abort(404)
+    destino = url_for("leads.lista", ver=lead_id)
+    if lead.status == "convertido":
+        flash("Lead já convertido em cliente: as planilhas não são processadas de novo.", "warning")
+        return redirect(destino, 303)
+    if lead.status == "expirado":
+        flash(f"Os dados deste lead passaram dos {RETENCAO_DIAS} dias de retenção: as planilhas não são processadas "
+              "de novo.", "warning")
+        return redirect(destino, 303)
+    planilhas = _planilhas_do_lead(lead)
+    if not planilhas:
+        flash("Este lead não tem planilhas válidas no Storage para processar.", "warning")
+        return redirect(destino, 303)
+    armazenamento = armazenamento_leads.do_app(current_app.config)
+    if armazenamento is None:
+        flash(armazenamento_leads.MENSAGEM_SEM_CONFIGURACAO + ".", "warning")
+        return redirect(destino, 303)
+    # O mesmo relatório enviado duas vezes vai uma só: o processamento recusa arquivo repetido.
+    vistos, unicas = set(), []
+    for planilha in planilhas:
+        if planilha.sha256 not in vistos:
+            vistos.add(planilha.sha256)
+            unicas.append(planilha)
+    planilhas = unicas
+    with vaga_de_entrada() as livre:
+        if not livre:
+            return _ocupado("admin/leads.html", _contexto_lista(ver=lead_id))
+        # A transação de leitura termina antes da rede (até 30 s por planilha) e do processo isolado.
+        db.session.rollback()
+        try:
+            arquivos = [FileStorage(io.BytesIO(armazenamento.baixar(planilha)), content_type=planilha.tipo,
+                                    filename=f"relatorio-{planilha.indice:02d}.{planilha.formato}")
+                        for planilha in planilhas]
+            lead = _avaliar(arquivos, lead_id=lead_id)
+        except armazenamento_leads.ErroDeArmazenamento as erro:
+            db.session.rollback()
+            current_app.logger.warning("Planilhas do lead %s não baixadas para processar (%s).", lead_id, erro)
+            flash(MENSAGEM_STORAGE_FALHOU, "danger")
+            return redirect(destino, 303)
+        except (ETLInputError, avaliacao_cenario.LeadIndisponivel) as erro:
+            db.session.rollback()
+            if getattr(erro, "code", None) == CODIGO_OCUPADO:
+                return _ocupado("admin/leads.html", _contexto_lista(ver=lead_id))
+            flash(getattr(erro, "safe_message", None) or str(erro), "danger")
+            return redirect(destino, 303)
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            current_app.logger.warning("Processamento das planilhas do lead não gravado (%s).", type(erro).__name__)
+            flash("Não foi possível gravar a avaliação. Tente novamente.", "danger")
+            return redirect(destino, 303)
+    current_app.logger.info("Planilhas do lead %s (%s arquivo(s)) processadas pelo consultor %s.", lead_id,
+                            len(planilhas), current_user.id_usuario)
+    flash(f"Avaliação concluída: {lead.arquivos} relatório(s) de vendas.", "success")
+    if getattr(lead, "aviso_limiares", None):
+        flash(lead.aviso_limiares, "warning")
+    return redirect(destino, 303)

@@ -1,15 +1,13 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
+{% import "admin/_leads_macros.html" as lm %}
 
 {% block title %}Avaliação de Cenário — NEXO Admin{% endblock %}
 {% block page_title %}Avaliação de Cenário{% endblock %}
 
-{% macro badge_lead(status) -%}
-{%- set cores = {'concluido': 'b-green', 'convertido': 'b-purple', 'expirado': 'b-muted'} -%}
-{%- set textos = {'pendente': 'PENDENTE', 'em_processamento': 'EM PROCESSAMENTO', 'concluido': 'CONCLUÍDA',
-                  'processamento_manual': 'REVISÃO MANUAL', 'convertido': 'CONVERTIDO', 'expirado': 'DADOS EXPIRADOS'} -%}
-<span class="nexo-badge {{ cores.get(status, 'b-amber') }}">{{ textos.get(status, status|upper) }}</span>
-{%- endmacro %}
+{% block extra_css %}
+<link href="{{ url_for('static', filename='css/leads-painel.css') }}" rel="stylesheet">
+{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -83,7 +81,12 @@
 </section>
 
 <section class="nexo-card" aria-labelledby="leadsTitulo">
-    <div class="nexo-card-head"><div><h2 id="leadsTitulo"><i class="bi bi-people text-purple" aria-hidden="true"></i> Leads avaliados</h2></div></div>
+    <div class="nexo-card-head">
+        <div>
+            <h2 id="leadsTitulo"><i class="bi bi-people text-purple" aria-hidden="true"></i> Leads</h2>
+            <p class="sub">Os do consultor e os captados pela landing. "Ver Avaliação de Cenário" abre o diagnóstico completo do lead, com as planilhas que ele enviou.</p>
+        </div>
+    </div>
     <div class="nexo-card-body">
         {#- O protocolo que vem na mensagem do Raio-X público acha o lead mesmo fora dos mais recentes. #}
         <form method="get" action="{{ url_for('leads.lista') }}" class="d-flex flex-wrap align-items-end gap-2 mb-3" role="search" aria-label="Buscar lead pelo protocolo">
@@ -98,35 +101,35 @@
         {% if leads %}
         <div class="table-wrap">
         <div class="table-responsive-x">
-            <table class="nexo-table" id="tabelaLeads">
+            <table class="nexo-table tabela-leads" id="tabelaLeads">
                 <thead>
                     <tr>
-                        <th>Loja e contato</th>
+                        <th>Empresa</th>
+                        <th>Contato</th>
+                        <th>E-mail</th>
+                        <th>Telefone</th>
+                        <th>Data</th>
+                        <th>Conformidade</th>
                         <th>Situação</th>
-                        <th class="text-end">Saúde</th>
-                        <th>Triagem</th>
-                        <th>Marcas</th>
                         <th class="text-end">Caixa resgatável</th>
-                        <th>Plano sugerido</th>
-                        <th>Avaliado em</th>
                         <th class="text-end col-acao">Ações</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for lead in leads %}
-                    {% set painel = paineis.get(lead.id, {}) %}
-                    {% set triagem = painel.get('triagem', {}) %}
+                    {% set parado = parados.get(lead.id) %}
                     <tr>
-                        <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong><br><small class="t-mut text-break">{{ lead.nome_contato }}</small><br><small class="t-mut t-email">{{ lead.email }}</small>{% if lead.origem == 'site' %}<br><span class="nexo-badge b-purple"><span class="dot"></span>Site</span> <small class="t-mut">protocolo {{ lead.protocolo }}</small>{% endif %}</td>
-                        <td>{{ badge_lead(lead.status) }}</td>
-                        <td class="text-end fw-num">{% if lead.score_saude_cadastral is not none %}{{ ('%.1f'|format(lead.score_saude_cadastral|float))|replace('.', ',') }}{% else %}—{% endif %}</td>
-                        <td><span class="text-nowrap">{% for bloco, sigla in [('urgencia', 'U'), ('atencao', 'A'), ('eletiva', 'E')] %}<abbr title="{{ rotulos_blocos[bloco] }}">{{ sigla }}</abbr> {% if triagem.get(bloco) is not none %}{{ m.num(triagem.get(bloco)) }}{% else %}—{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</span></td>
-                        <td><small class="d-block">{{ m.num(lead.itens_venda_sem_custo or 0) }} sem custo</small><small class="d-block">{{ m.num(lead.itens_venda_abaixo_custo or 0) }} abaixo do custo</small><small class="d-block">{% if lead.itens_omissao_erp is not none %}{{ m.num(lead.itens_omissao_erp) }}{% else %}—{% endif %} com omissão no ERP</small></td>
-                        <td class="text-end fw-num">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}<br><small class="t-mut">recuperável</small>{% if painel.get('parado') %}<br>R$ {{ m.brl(painel.parado.capital) }}<br><small class="t-mut">parado há {{ painel.parado.dias }} dias ou mais{% if painel.parado.parcial %} (parcial){% endif %}</small>{% endif %}</td>
-                        <td>{% if lead.plano_recomendado_codigo %}{{ m.badge_plano(lead.plano_recomendado_codigo) }}{% else %}—{% endif %}</td>
-                        <td>{{ m.horario(lead.consentimento_em or lead.criado_em) }}</td>
+                        <td class="col-nome"><strong class="text-break">{{ lead.nome_loja }}</strong>{% if lead.origem == 'site' %}<br><span class="nexo-badge b-purple"><span class="dot"></span>Site</span> <small class="t-mut">protocolo {{ lead.protocolo }}</small>{% endif %}</td>
+                        <td><span class="text-break">{{ lead.nome_contato }}</span></td>
+                        <td class="t-email"><a href="{{ lead.email | endereco_mailto }}">{{ m.email(lead.email) }}</a></td>
+                        <td class="t-nowrap">{{ lm.whatsapp(lead.whatsapp, lead.nome_contato) }}</td>
+                        <td><span class="t-nowrap">{{ m.horario(lead.criado_em) }}</span>{% if lead.consentimento_em and (lead.consentimento_em | horario_brasilia) != (lead.criado_em | horario_brasilia) %}<small class="d-block t-mut">avaliado em {{ m.horario(lead.consentimento_em) }}</small>{% endif %}</td>
+                        <td>{{ lm.conformidade(conformidades.get(lead.id)) }}</td>
+                        <td>{{ lm.badge_lead(lead.status) }}{{ lm.situacao_do_site(sites.get(lead.id), rotulos_interesse, rotulos_status_arquivo) }}</td>
+                        <td class="text-end fw-num">{% if lead.vazamento_total_reais is not none %}R$ {{ m.brl(lead.vazamento_total_reais) }}{% else %}—{% endif %}<br><small class="t-mut">recuperável</small>{% if parado %}<br>R$ {{ m.brl(parado.capital) }}<br><small class="t-mut">parado há {{ parado.dias }} dias ou mais{% if parado.parcial %} (parcial){% endif %}</small>{% endif %}</td>
                         <td class="text-end col-acao">
-                            <a class="btn-ghost btn-sm-x" href="{{ url_for('leads.detalhe', lead_id=lead.id) }}" aria-label="Abrir a avaliação de {{ lead.nome_loja }}"><i class="bi bi-eye" aria-hidden="true"></i> Abrir</a>
+                            {#- Sem JavaScript, o link abre a página completa do lead; com ele, o painel lateral (static/js/leads-painel.js). #}
+                            <a class="btn-nexo btn-sm-x" href="{{ url_for('leads.detalhe', lead_id=lead.id) }}" data-painel-url="{{ url_for('leads.painel', lead_id=lead.id) }}"><i class="bi bi-clipboard-data" aria-hidden="true"></i> Ver Avaliação de Cenário<span class="visually-hidden"> de {{ lead.nome_loja }}</span></a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -140,9 +143,36 @@
         {% endif %}
     </div>
 </section>
+
+{#- Painel lateral do "Ver Avaliação de Cenário" (static/js/leads-painel.js): fechado até um clique ou até a lista
+    chegar com ?ver=<id> (data-painel-abrir, a volta do processamento). O corpo recebe o fragmento do servidor
+    (GET /admin/leads/<id>/painel). Na volta do processamento, as mensagens também aparecem dentro do painel. #}
+<dialog class="painel-lead" id="painelLead" aria-labelledby="painelLeadTitulo"{% if painel_abrir %} data-painel-abrir="{{ painel_abrir }}"{% endif %}>
+    <div class="painel-lead-topo">
+        <h2 class="painel-lead-titulo" id="painelLeadTitulo" tabindex="-1">Avaliação de Cenário</h2>
+        <div class="painel-lead-acoes">
+            <a class="btn-ghost btn-sm-x" href="{{ painel_pagina or url_for('leads.lista') }}" data-painel-pagina><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Abrir página completa</a>
+            <button type="button" class="painel-lead-fechar" data-painel-fechar aria-label="Fechar o painel"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    </div>
+    <p class="visually-hidden" role="status" aria-live="polite" data-painel-estado></p>
+    {% if painel_abrir %}
+    {% with mensagens = get_flashed_messages(with_categories=true) %}
+    {% if mensagens %}
+    <div class="painel-lead-avisos" data-painel-avisos>
+        {% for categoria, mensagem in mensagens %}
+        <div class="alert alert-{{ 'danger' if categoria == 'error' else categoria }} mb-2">{{ mensagem }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+    {% endif %}
+    <div class="painel-lead-corpo" data-painel-corpo aria-busy="false"></div>
+</dialog>
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/leads-painel.js') }}" defer></script>
 {% endblock %}

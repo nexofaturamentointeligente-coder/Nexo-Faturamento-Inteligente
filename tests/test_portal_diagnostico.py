@@ -9,7 +9,8 @@
      as linhas existem), do cálculo atual ou do resumo gravado.
   4. Telas: o resumo executivo do caixa resgatável, a matriz de triagem, o estoque parado e excedente,
      o simulador com os parâmetros da consulta (inválidos: aviso, sem erro) e a auditoria de preço; na
-     lista, a triagem, as marcas e o caixa resgatável de cada lead.
+     lista, o caixa resgatável de cada lead, e no painel dela ("Ver Avaliação de Cenário"), a triagem e as
+     marcas.
 
 Dados fictícios.
 """
@@ -43,6 +44,11 @@ NOV25 = _relatorio(2025, 11, ["1;Café 500g;8;20,00;150,00;120,00;26", "3;Leite 
 DEZ25 = _relatorio(2025, 12, ["1;Café 500g;4;20,00;80,00;60,00;24", "3;Leite 1L;5;5,00;25,00;20,00;68",
                               "4;Arroz 5kg;2;27,90;55,80;44,00;9"])
 LOTE = (NOV24, DEZ24, NOV25, DEZ25)
+
+
+def _brl(valor):
+    """O valor como a macro brl de _macros.html o mostra (1.234,56)."""
+    return f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _sem_saldo(ano, mes, linhas):
@@ -763,16 +769,30 @@ class TelasTests(_PortalCase):
         self.db.session.commit()
         self.login("admin-test@example.invalid")
         with patch("blueprints.leads.expurgo_oportunista"):
-            for caminho in (PAGINA, f"{PAGINA}/{lead.id}", f"{PAGINA}/{lead.id}/diagnostico.json"):
+            for caminho in (PAGINA, f"{PAGINA}/{lead.id}", f"{PAGINA}/{lead.id}/painel",
+                            f"{PAGINA}/{lead.id}/diagnostico.json"):
                 with self.subTest(caminho=caminho):
                     self.assertEqual(self.client.get(caminho).status_code, 200)
 
-    def test_lista_mostra_triagem_marcas_e_caixa(self):
+    def test_lista_mostra_o_caixa_e_o_painel_a_triagem_e_as_marcas(self):
+        # A tabela mostra o número da negociação (o recuperável e o capital parado); a triagem, as marcas, a saúde e o
+        # plano sugerido de cada lead, que estavam em colunas da tabela, estão no painel "Ver Avaliação de Cenário".
         lead = self.registrar()
         self.login("admin-test@example.invalid")
         html = self.client.get(PAGINA).get_data(as_text=True)
-        for texto in ("<th>Triagem</th>", "<th>Marcas</th>", "Caixa resgatável", 'title="Urgência"', "sem custo",
-                      "abaixo do custo", "com omissão no ERP", "recuperável", "parado há 60 dias ou mais"):
+        for texto in ("Caixa resgatável", f"R$ {_brl(lead.vazamento_total_reais)}", "recuperável",
+                      "parado há 60 dias ou mais", f'data-painel-url="{PAGINA}/{lead.id}/painel"'):
             self.assertIn(texto, html)
-        resumo = json.loads(lead.resumo_urgencia_json)
-        self.assertIn(f'<abbr title="Urgência">U</abbr> {resumo["itens"]}', html)
+        for coluna in ("<th>Triagem</th>", "<th>Marcas</th>", 'title="Urgência"'):
+            self.assertNotIn(coluna, html)
+        painel = self.client.get(f"{PAGINA}/{lead.id}/painel").get_data(as_text=True)
+        for bloco, rotulo in (("urgencia", "Urgência"), ("atencao", "Atenção"), ("eletiva", "Eletiva")):
+            resumo = json.loads(getattr(lead, f"resumo_{bloco}_json"))
+            self.assertRegex(painel, rf'<a href="#painel-bloco{bloco}">{rotulo}</a></td>\s*'
+                                     rf'<td class="text-end fw-num">{resumo["itens"]}</td>')
+        for rotulo, valor in (("Itens sem custo em nenhuma venda", lead.itens_venda_sem_custo),
+                              ("Itens com alguma venda abaixo do custo", lead.itens_venda_abaixo_custo),
+                              ("Itens com omissão no ERP", lead.itens_omissao_erp)):
+            self.assertRegex(painel, rf'(?s){rotulo}</span>.*?<div class="kpi-value">{valor}</div>')
+        self.assertIn(f"R$ {_brl(lead.vazamento_total_reais)}", painel)
+        self.assertIn(f"plan-{lead.plano_recomendado_codigo.lower()}", painel)

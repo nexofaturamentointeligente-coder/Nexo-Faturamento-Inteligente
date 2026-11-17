@@ -56,3 +56,8 @@ services:
       # Número comercial com DDI (ex.: 5562999999999) dos botões wa.me; vazio os esconde.
       - key: WHATSAPP_EMPRESA_NUMERO
         sync: false
+      # Storage do Supabase, só leitura: baixar e processar as planilhas dos leads da landing
+      # (Docs/AVALIACAO_DE_CENARIO.md). A chave secreta (sb_secret_...) ou a service_role, a
+      # mesma do microsserviço do Raio-X; vazia, os botões das planilhas ficam desabilitados.
+      - key: SUPABASE_KEY
+        sync: false

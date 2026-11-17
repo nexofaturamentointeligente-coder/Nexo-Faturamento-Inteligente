@@ -53,7 +53,7 @@ class CSPNavegadorTests(NavegadorCase):
         self.entrar(pagina, "admin-test@example.invalid")
         for caminho in ("/admin/dashboard", "/admin/empresas", "/admin/analises", "/admin/lixeira",
                         f"/admin/analise/{self.analise_id}/relatorio", "/admin/guia", "/admin/tickets",
-                        "/admin/contratos"):
+                        "/admin/contratos", "/admin/leads", f"/admin/leads/{self.lead_id}"):
             with self.subTest(caminho=caminho):
                 self._assert_pagina_limpa(pagina, caminho)
         self.ir(pagina, "/admin/dashboard")

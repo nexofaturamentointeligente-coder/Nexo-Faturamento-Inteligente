@@ -1,0 +1,69 @@
+{#- Fragmento do painel lateral da lista de leads (GET /admin/leads/<id>/painel, blueprints/leads.py:painel): sem
+    base.html. O static/js/leads-painel.js o põe no <dialog id="painelLead"> de templates/admin/leads.html (só a
+    resposta marcada com X-Nexo-Painel), lê o nome do lead e o endereço da página completa dos atributos data- da
+    raiz e chama NEXO.ajustarLayout para as tabelas e os KPIs. Tudo o que vem do lead sai escapado pelo Jinja. Os
+    ids levam o prefixo prefixo_ids ("painel-"), para não colidir com os da lista.
+    Conteúdo: o cabeçalho do lead (empresa, contato, e-mail, WhatsApp, data e o aceite dos termos), as planilhas
+    que ele enviou pela landing (com o processamento) e o diagnóstico completo de _lead_diagnostico.html, o mesmo da
+    página do lead, sem desfoque nem bloqueio. O lead da landing ainda não processado mostra isso no lugar dos
+    números. #}
+{%- import "_macros.html" as m -%}
+{%- import "admin/_leads_macros.html" as lm -%}
+{%- if not disponivel %}
+<div class="painel-lead-conteudo" data-painel-fragmento>
+    <div class="aviso-contrato is-alerta" role="status">
+        <i class="bi bi-database-exclamation" aria-hidden="true"></i>
+        <div>
+            <strong>Falta aplicar as migrações da Avaliação de Cenário.</strong>
+            <p>{{ mensagem_sem_esquema }}</p>
+        </div>
+    </div>
+</div>
+{%- else %}
+{%- set pid = prefixo_ids | default('') %}
+<div class="painel-lead-conteudo" data-painel-fragmento data-painel-titulo="{{ lead.nome_loja }}" data-painel-pagina="{{ url_for('leads.detalhe', lead_id=lead.id) }}">
+    <section class="nexo-card mb-4" aria-labelledby="{{ pid }}leadTitulo">
+        <div class="nexo-card-head">
+            <div class="painel-lead-identidade">
+                <h2 id="{{ pid }}leadTitulo" class="text-break"><i class="bi bi-shop text-purple" aria-hidden="true"></i> {{ lead.nome_loja }}</h2>
+                <p class="sub">{{ lm.badge_lead(lead.status) }}{% if lead.origem == 'site' %} <span class="nexo-badge b-purple"><span class="dot"></span>Site</span> protocolo {{ lead.protocolo }}{% endif %}</p>
+            </div>
+        </div>
+        <div class="nexo-card-body">
+            <dl class="dados-contrato">
+                <div><dt>Contato</dt><dd class="text-break">{{ lead.nome_contato }}</dd></div>
+                <div><dt>E-mail</dt><dd><a href="{{ lead.email | endereco_mailto }}">{{ m.email(lead.email) }}</a></dd></div>
+                <div><dt>WhatsApp</dt><dd>{{ lm.whatsapp(lead.whatsapp, lead.nome_contato) }}</dd></div>
+                <div><dt>Data</dt><dd>{{ m.horario(lead.criado_em) }}{% if lead.consentimento_em and (lead.consentimento_em | horario_brasilia) != (lead.criado_em | horario_brasilia) %}<small class="d-block t-mut">avaliado em {{ m.horario(lead.consentimento_em) }}</small>{% endif %}</dd></div>
+                {%- if site and site.interesse %}
+                <div><dt>Pedido no site</dt><dd>{{ lm.situacao_do_site(site, rotulos_interesse, rotulos_status_arquivo) }}</dd></div>
+                {%- endif %}
+                {%- if lead.plano_interesse %}
+                <div><dt>Plano de interesse</dt><dd>{{ rotulos_planos_interesse.get(lead.plano_interesse, lead.plano_interesse) }}</dd></div>
+                {%- endif %}
+                {%- if lead.faixa_faturamento %}
+                <div><dt>Faturamento</dt><dd>{{ rotulos_faixas_faturamento.get(lead.faixa_faturamento, lead.faixa_faturamento) }}</dd></div>
+                {%- endif %}
+                {%- if lead.dificuldade %}
+                <div class="dado-largo"><dt>Principal dificuldade</dt><dd class="text-break">{{ lead.dificuldade }}</dd></div>
+                {%- endif %}
+                <div class="dado-largo"><dt>Conformidade</dt><dd>{{ lm.conformidade(conformidade, completo=true) }}</dd></div>
+            </dl>
+        </div>
+    </section>
+
+    {% include "admin/_lead_planilhas.html" %}
+
+    {% if sem_diagnostico %}
+    <div class="aviso-contrato is-alerta" role="status">
+        <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+        <div>
+            <strong>Avaliação de Cenário ainda não processada.</strong>
+            <p>{% if planilhas and lead.status not in ('convertido', 'expirado') %}As planilhas do lead estão no Storage: use "Processar relatórios do lead" acima para gerar o diagnóstico (caixa resgatável, triagem e inteligência de estoque e de preço).{% else %}Sem planilhas para processar, não há números para mostrar.{% endif %}</p>
+        </div>
+    </div>
+    {% else %}
+    {% include "admin/_lead_diagnostico.html" %}
+    {% endif %}
+</div>
+{%- endif %}

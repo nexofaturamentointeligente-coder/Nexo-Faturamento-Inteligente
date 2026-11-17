@@ -412,6 +412,15 @@ class Config:
     # do lead e capacidade no Render).
     AVALIACAO_PUBLICA_ATIVA = _env_booleano("AVALIACAO_PUBLICA_ATIVA", False)
 
+    # === Storage do Supabase, só leitura (armazenamento_leads.py) ===
+    # As planilhas que o microsserviço do Raio-X guardou no bucket privado para os leads da
+    # landing: o consultor as baixa e processa no painel da lista de leads. Opcionais: sem a
+    # chave (ou fora do banco do Supabase, de onde sai o endereço do Storage), os botões das
+    # planilhas ficam desabilitados com a orientação. A chave é a do servidor (sb_secret_... ou
+    # a service_role legada), a mesma do microsserviço; nunca vai para log nem template.
+    SUPABASE_KEY = _env_texto("SUPABASE_KEY")
+    SUPABASE_BUCKET = _env_texto("SUPABASE_BUCKET", "leads-raio-x")
+
     # === Avaliações dos clientes (COM-002, avaliacoes.py) ===
     # Só o pedido automático do painel usa estes valores: avaliar é possível a qualquer momento, pela landing ou
     # pelo portal. O painel ainda não mostra o pedido, mas as rotas dele (/cliente/avaliacao/solicitacao/*) leem
