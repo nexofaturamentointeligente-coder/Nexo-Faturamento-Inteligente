@@ -52,7 +52,6 @@ log = logging.getLogger(__name__)
 
 # ---- Paleta NEXO ----
 ROXO = HexColor("#7c3aed")
-ROXO2 = HexColor("#a855f7")
 LAVANDA = HexColor("#ede9fb")
 TINTA = HexColor("#1f2330")
 CINZA = HexColor("#6a7088")

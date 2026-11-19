@@ -168,9 +168,7 @@ def create_app(config_name: str = None) -> Flask:
             resposta.headers["Cache-Control"] = "no-store"
         return resposta
 
-    # Registra user loader do Flask-Login
-    # (Necessário aqui porque depende do modelo Usuario)
-    from models import Usuario
+    # Registra o user loader do Flask-Login
     from sqlalchemy.exc import SQLAlchemyError
     from session_security import carregar_usuario, sessao_valida
 
@@ -413,10 +411,12 @@ def create_app(config_name: str = None) -> Flask:
     # Tratamento amigável de CSRF inválido/ausente (Flask-WTF) e rate limit (429).
     from flask_wtf.csrf import CSRFError
 
-    def _erro_api(mensagem, status):
+    def _erro_api(mensagem, status, referencia=None):
         """Chamadas fetch (/api/) recebem JSON, não um redirect ou página HTML."""
         from flask import jsonify
-        return jsonify(erro=mensagem, resposta=mensagem, fonte="local", acao=None, destino=None), status
+        extras = {"meta": {"correlacao": referencia}} if referencia else {}
+        return jsonify(erro=mensagem, resposta=mensagem, fonte="local", acao=None, destino=None,
+                       **extras), status
 
     @app.errorhandler(CSRFError)
     def _csrf_error(e):
@@ -457,10 +457,11 @@ def create_app(config_name: str = None) -> Flask:
             pass
         return None
 
-    def _pagina_erro(status, titulo, mensagem):
+    def _pagina_erro(status, titulo, mensagem, referencia=None):
         if request.path.startswith("/api/"):
-            return _erro_api(mensagem, status)
-        contexto = {"titulo": titulo, "mensagem": mensagem, "painel_url": _painel_url(), "codigo": status}
+            return _erro_api(mensagem, status, referencia)
+        contexto = {"titulo": titulo, "mensagem": mensagem, "painel_url": _painel_url(), "codigo": status,
+                    "referencia": referencia}
         try:
             return render_template("erro_simples.html", **contexto), status
         except Exception:  # noqa: BLE001
@@ -522,6 +523,19 @@ def create_app(config_name: str = None) -> Flask:
             mensagem = f"O envio passa de {teto}. Nada foi gravado: envie um arquivo menor."
         return _pagina_erro(413, "Envio grande demais", mensagem)
 
+    # Rastreabilidade do 500: o Flask chama log_exception antes do errorhandler(500),
+    # com o traceback. Cada exceção não tratada ganha aqui um código curto e aleatório
+    # (nada vem do pedido), gravado no mesmo registro do traceback e mostrado ao
+    # usuário, para o suporte achar a linha certa no log. O texto mantém o início do
+    # padrão do Flask ("Exception on <caminho> [<método>]"), que os roteiros de
+    # conferência do log procuram, e passa pela redação de tokens (log_security).
+    def _registrar_excecao(exc_info):
+        g.ref_erro = secrets.token_hex(6)
+        app.logger.error("Exception on %s [%s] (correlacao=%s)",
+                         request.path, request.method, g.ref_erro, exc_info=exc_info)
+
+    app.log_exception = _registrar_excecao
+
     @app.errorhandler(500)
     def _erro_interno(e):
         # Erro no meio de uma transação: no PostgreSQL ela fica abortada e qualquer
@@ -531,8 +545,10 @@ def create_app(config_name: str = None) -> Flask:
             db.session.rollback()
         except Exception:  # noqa: BLE001
             pass
+        # Um abort(500) explícito chega aqui sem passar por log_exception: sem código.
         return _pagina_erro(500, "Algo deu errado",
-                            "Ocorreu um erro inesperado. Tente novamente em instantes.")
+                            "Ocorreu um erro inesperado. Tente novamente em instantes.",
+                            referencia=g.get("ref_erro"))
 
     # Atrás de proxy reverso (Render, Railway, nginx...): confia nos cabeçalhos
     # X-Forwarded-For/Proto de N saltos (PROXY_FIX_HOPS). Sem isso, TODOS os

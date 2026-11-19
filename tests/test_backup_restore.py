@@ -463,24 +463,24 @@ class _PrivateDrill(unittest.TestCase):
                 self.assertEqual(analysis.indicador.faturamento_total, 25)
                 self.assertTrue(analysis.relatorio.publicado)
                 self.assertEqual(analysis.curva_abc[0].produto_nome, "Produto fictício A")
-            cache = self.work_dir / "fresh-restored-cache"
-            self.assertFalse(cache.exists())
-            with patch.object(storage, "_CACHE_DIR", cache):
-                for upload in db.session.scalars(select(UploadRelatorio)):
-                    expected = VENDAS if upload.tipo_relatorio == "VENDAS" else COMPRAS
-                    recovered_path = Path(storage.resolver(upload.caminho_arquivo))
-                    self.assertTrue(recovered_path.resolve().is_relative_to(cache.resolve()))
-                    recovered = recovered_path.read_bytes()
-                    self.assertEqual(recovered, expected)
-                    self.assertEqual(hashlib.sha256(recovered).hexdigest(), upload.hash_arquivo)
-                    self.assertEqual(len(recovered), upload.tamanho_arquivo)
-                    stored = db.session.get(ArquivoArmazenado, upload.caminho_arquivo[3:])
-                    self.assertEqual(stored.tamanho, len(expected))
-                    self.assertEqual(stored.content_type, "text/csv")
-                guia = db.session.scalar(select(GuiaTopico))
-                self.assertEqual(Path(storage.resolver(guia.imagem_url)).read_bytes(), GUIA)
-                uploads = db.session.get(Analise, self.analysis_ids[0]).uploads
-                paths = {item.tipo_relatorio: storage.resolver(item.caminho_arquivo) for item in uploads}
+            # Os bytes saem do banco restaurado (obter); o ETL lê das cópias exclusivas (materializar_para_etl).
+            for upload in db.session.scalars(select(UploadRelatorio)):
+                expected = VENDAS if upload.tipo_relatorio == "VENDAS" else COMPRAS
+                self.assertTrue(upload.caminho_arquivo.startswith(storage.PREFIXO_DB))
+                recovered = storage.obter(upload.caminho_arquivo[len(storage.PREFIXO_DB):]).conteudo
+                self.assertEqual(recovered, expected)
+                self.assertEqual(hashlib.sha256(recovered).hexdigest(), upload.hash_arquivo)
+                self.assertEqual(len(recovered), upload.tamanho_arquivo)
+                stored = db.session.get(ArquivoArmazenado, upload.caminho_arquivo[3:])
+                self.assertEqual(stored.tamanho, len(expected))
+                self.assertEqual(stored.content_type, "text/csv")
+            guia = db.session.scalar(select(GuiaTopico))
+            self.assertTrue(guia.imagem_url.startswith(storage.PREFIXO_DB))
+            self.assertEqual(storage.obter(guia.imagem_url[len(storage.PREFIXO_DB):]).conteudo, GUIA)
+            uploads = db.session.get(Analise, self.analysis_ids[0]).uploads
+            with contextlib.ExitStack() as copias:
+                paths = {item.tipo_relatorio: copias.enter_context(storage.materializar_para_etl(
+                    item.caminho_arquivo, item.tamanho_arquivo)) for item in uploads}
                 result = _etl_or_platform_refusal(
                     calcular_kpis_em_memoria, ETLValidationError, paths["VENDAS"], paths["COMPRAS"])
                 if result is None:

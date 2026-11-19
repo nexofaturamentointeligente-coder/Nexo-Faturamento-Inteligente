@@ -38,8 +38,8 @@ from werkzeug.utils import secure_filename
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from etl_inputs import ETLInputError
-from etl_processor import STATUS_PDV_DIVERGENTE
+from etl_erros import ETLInputError
+from etl_regras import STATUS_PDV_DIVERGENTE
 from etl_uploads import ler_upload_validado, limitar_upload
 
 from blueprints.auth import (

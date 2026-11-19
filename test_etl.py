@@ -1,6 +1,6 @@
 """
-NEXO - Teste isolado do motor de ETL (Semana 2)
-================================================
+NEXO - Teste isolado do motor de ETL
+====================================
 Valida o pipeline de ETL SEM Flask e SEM banco de dados: lê os arquivos reais
 do PDV, calcula os KPIs em memória e imprime tudo que o ADMIN precisa conferir.
 

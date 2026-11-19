@@ -52,7 +52,3 @@ def motivo_teste(categoria, pergunta="", resposta="") -> str | None:
     if "xss" in cat.split() or "xss" in perg.split():
         return "menção a XSS no título ou na categoria"
     return None
-
-
-def eh_teste(categoria, pergunta="", resposta="") -> bool:
-    return motivo_teste(categoria, pergunta, resposta) is not None

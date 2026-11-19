@@ -298,10 +298,10 @@ publicação, mesmo sem arquivo novo em `migrations/versions`, depende de compar
   anomalias injetadas).
 - **Legados:** referências sem `db:` dependem de arquivos em disco fora do dump e do Git; o
   fallback por nome-base pode apontar para o arquivo de outro upload.
-- **Cache local:** `tempfile/nexo_arquivos` só é preenchido por `storage.resolver()` com
-  referência `db:` (testes, verificações manuais e um helper sem chamadores); é reutilizado
-  apenas por existir e pode mascarar blob ausente. Validar restaurações pelas consultas, que
-  leem o banco, e não por `resolver()`.
+- **Cache local:** removido. `storage.resolver()` recusa referência `db:`; os bytes saem de
+  `storage.obter()` e a cópia do ETL, de `storage.materializar_para_etl()` (pasta temporária
+  exclusiva, apagada ao sair do contexto). Validar restaurações pelas consultas, que leem o
+  banco.
 - **Volume:** sem retenção dos arquivos brutos; regravar a mesma chave reescreve o BYTEA
   inteiro. Nenhum volume real foi medido (NÃO VERIFICADO).
 
@@ -815,7 +815,7 @@ e grants das tabelas existentes é PENDENTE DE VALIDAÇÃO.
 | I5 | Segredos em comandos de shell (exemplos com `export` de valores reais) | Nota de higiene em `Docs/PREPARACAO_RENDER.md`; carregar de arquivo protegido ou gerenciador de segredos | IMPLEMENTADO (documentação) |
 | I6 | `migrations/env.py` renderiza a URL com senha em memória (F1.11) | Usar `hide_password=True` onde não for necessária no modo offline (etapa futura) | DOCUMENTADO |
 | I7 | ZIP da pasta contorna o `.gitignore` | `git archive` ou lista de exclusão ao compartilhar | DOCUMENTADO |
-| I8 | Cache `tempfile/nexo_arquivos` com cópias em claro, se usado manualmente com dados reais | Remover ao encerrar verificações | DOCUMENTADO |
+| I8 | Cache `tempfile/nexo_arquivos` com cópias em claro, se usado manualmente com dados reais | Cache removido do `storage.py`; `resolver()` recusa `db:` | IMPLEMENTADO |
 | I9 | `tests/test_configuration_deploy.py` cria `instance/` na raiz e usa `postgresql://localhost/nexo_test`, que aponta para a porta padrão do serviço local preexistente (hoje nenhuma conexão ocorre) | Isolar `instance_path` e usar host inalcançável (etapa futura; teste fora do escopo) | DOCUMENTADO; correção pendente (teste fora do escopo) |
 | I10 | Executável plantado e injeção via `.bat` no verificador de backup; entrada do `PATH` sem letra de unidade | Corrigido (F2) | IMPLEMENTADO; TESTADO LOCALMENTE |
 

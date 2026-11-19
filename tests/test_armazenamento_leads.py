@@ -4,7 +4,8 @@
      servidor (a secreta nova ou a service_role legada; a publicável e a anon não servem) e o bucket.
   2. O cliente contra um servidor HTTP local (dublê do Storage; nenhum serviço externo): só GET, os cabeçalhos por tipo
      de chave, a recusa de http fora do localhost, nenhum redirecionamento seguido, o teto de bytes (pelo
-     Content-Length e pelo que chega), o prazo total e nenhum segredo, endereço ou caminho nas mensagens de erro.
+     Content-Length e pelo que chega), o prazo total e nenhum segredo, endereço ou caminho nas mensagens de erro; a
+     gravação direto no arquivo (baixar_para) com as mesmas conferências.
   3. O registro do microsserviço (arquivos_storage) conferido antes de qualquer pedido: só os caminhos deste lead, os
      formatos csv e xlsx, os tamanhos de 1 byte a 15 MB, o SHA-256 que começa pelo do caminho; o nome de baixar e os
      nomes únicos do .zip.
@@ -18,6 +19,8 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+from pathlib import Path
+import tempfile
 import threading
 import time
 import unittest
@@ -281,6 +284,34 @@ class ClienteTests(unittest.TestCase):
         with self.assertRaises(ErroDeArmazenamento) as erro:
             self.cliente().baixar(planilha)
         self.assertEqual(str(erro.exception), "o arquivo do Storage não confere com o registrado")
+
+    def test_baixar_para_grava_no_arquivo_com_as_mesmas_conferencias(self):
+        """O processamento dos leads grava a planilha direto no disco (baixar_para), sem guardá-la inteira na
+        memória, com o teto e a conferência de tamanho e SHA-256 do baixar."""
+        self.servidor.corpo = b"Codigo;Produto\n" + b"1;Cafe\n" * 30000
+        conteudo = self.servidor.corpo
+        sha = hashlib.sha256(conteudo).hexdigest()
+        planilha = Planilha(1, self.CAMINHO, "vendas.csv", "csv", len(conteudo), sha)
+        with tempfile.TemporaryDirectory(prefix="nexo-teste-baixar-") as pasta:
+            destino = Path(pasta) / "relatorio-01.csv"
+            self.cliente().baixar_para(planilha, destino)
+            self.assertEqual(destino.read_bytes(), conteudo)
+            # Arquivo que já existe não é sobrescrito, e nada é pedido ao Storage.
+            pedidos = len(self.servidor.pedidos)
+            with self.assertRaises(FileExistsError):
+                self.cliente().baixar_para(planilha, destino)
+            self.assertEqual(len(self.servidor.pedidos), pedidos)
+            casos = {"outro conteúdo": Planilha(1, self.CAMINHO, "v.csv", "csv", len(conteudo), "0" * 64),
+                     "tamanho menor no registro": Planilha(1, self.CAMINHO, "v.csv", "csv", len(conteudo) - 1, sha),
+                     "tamanho maior no registro": Planilha(1, self.CAMINHO, "v.csv", "csv", len(conteudo) + 1, sha)}
+            for numero, (caso, outra) in enumerate(casos.items()):
+                with self.subTest(caso=caso), self.assertRaises(ErroDeArmazenamento) as erro:
+                    self.cliente().baixar_para(outra, Path(pasta) / f"outra-{numero}.csv")
+                self.assertNotIn(self.CAMINHO, str(erro.exception))
+            self.servidor.modo = "tamanho mentiroso"
+            with self.assertRaises(ErroDeArmazenamento) as erro:
+                self.cliente().baixar_para(planilha, Path(pasta) / "mentiroso.csv")
+            self.assertEqual(str(erro.exception), "o arquivo do Storage não confere com o registrado")
 
 
 # =============================================================================

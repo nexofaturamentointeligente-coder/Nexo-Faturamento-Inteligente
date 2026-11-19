@@ -24,7 +24,6 @@ do Flask, SQLite descartável com as migrações reais, dados fictícios):
     25. não há exclusão em massa: uma análise por requisição, sempre com id.
 """
 
-import re
 import unittest
 from datetime import date
 from decimal import Decimal

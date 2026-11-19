@@ -274,7 +274,13 @@ class Config:
     # Robustez com o PgBouncer do Supabase (porta 6543, transaction pooling): o
     # pooler pode fechar conexões ociosas, então validamos a conexão antes de
     # usar (pre_ping) e reciclamos antes do timeout típico. Inócuo para SQLite.
-    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_recycle": 280}
+    # hide_parameters: um erro de banco não tratado leva o traceback ao log com o
+    # SQL, mas sem os valores dos parâmetros (e-mail, CNPJ, texto do chamado).
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+        "hide_parameters": True,
+    }
     # Pool do PostgreSQL coerente com o servidor (gunicorn -w 1 --threads 50):
     # sem teto explícito, 50 threads disputam 15 conexões e esperam 30 s cada
     # (esgotamento). pool_timeout curto falha rápido; tamanho e overflow são

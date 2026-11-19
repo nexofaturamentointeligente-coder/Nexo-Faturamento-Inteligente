@@ -1,6 +1,6 @@
 """Trava do total do PDV: o valor informado no envio e o resultado da conferência.
 
-A regra (comparar, tolerância, status) é pura e fica em etl_processor.validar_total_pdv;
+A regra (comparar, tolerância, status) é pura e fica em etl_regras.validar_total_pdv;
 aqui fica o que toca o banco e a leitura do que a pessoa digitou. O processo isolado do
 ETL não carrega este módulo, porque ele importa os modelos.
 
@@ -18,8 +18,8 @@ from weakref import WeakKeyDictionary
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import selectinload
 
-from etl_inputs import ETLInputError
-from etl_processor import STATUS_PDV_DIVERGENTE, conferir_total_pdv, converter_valor_monetario, em_centavos
+from etl_erros import ETLInputError
+from etl_regras import STATUS_PDV_DIVERGENTE, conferir_total_pdv, converter_valor_monetario, em_centavos
 from extensions import db
 from horario import agora_utc
 from models import Analise, Empresa, Usuario, ValidacaoPdv

@@ -3,12 +3,8 @@
    Importar com:  {% import "_macros.html" as m %}
    Não acessam contexto (current_user/request); recebem só argumentos.
 
-   ADAPTAÇÃO NEXO/MVP:
-   - Status, planos e processamentos abaixo refletem os CHECK constraints
-     reais de models.py (Plano, Empresa, Analise, UploadRelatorio).
-   - As macros de ticket (badge_chamado, badge_prioridade) foram removidas
-     por estarem fora do escopo do PI2 (chamado_suporte/mensagem_suporte
-     são documentação no DER, sem Model nem rotas no MVP).
+   Status, planos e processamentos abaixo refletem os CHECK constraints
+   reais de models.py (Plano, Empresa, Analise, UploadRelatorio).
    =================================================================== #}
 
 {# ---- Moeda BRL: 21600 -> 21.600,00 (separador de milhar + decimal) ---- #}

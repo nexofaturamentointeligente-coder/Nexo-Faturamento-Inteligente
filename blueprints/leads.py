@@ -50,11 +50,13 @@ Regras:
 """
 
 from collections import OrderedDict, namedtuple
+from contextlib import ExitStack
 from datetime import timedelta
 from decimal import Decimal
-import io
 import json
+from pathlib import Path
 import re
+import tempfile
 import threading
 import time
 from urllib.parse import quote
@@ -70,14 +72,14 @@ from werkzeug.datastructures import FileStorage
 
 import armazenamento_leads
 import avaliacao_cenario
-import avaliacao_motor
+import avaliacao_regras
 from blueprints.admin import admin_required
 import diagnostico_cenario
 from configuracoes_conta import TIPOS_DOCUMENTO, DadoInvalido, limpar_telefone, rotulo_versao
 from contas_email import normalizar_email
 from emails import email_valido
 import entitlements
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
 from horario import agora_utc
@@ -87,7 +89,7 @@ from leads_avaliacao import RETENCAO_DIAS
 import whatsapp_service
 from models import (AceiteDocumentoLead, BrainstormingDadosPdv, COLUNAS_DO_MICROSSERVICO, DocumentoLegal,
                     LeadAvaliacao, ROTULOS_FAIXAS_DE_FATURAMENTO, ROTULOS_PLANOS_DE_INTERESSE)
-import raio_x
+import raio_x_regras
 import triagem_cenario
 
 leads_bp = Blueprint("leads", __name__, url_prefix="/admin/leads")
@@ -214,7 +216,7 @@ def _contexto_lista(formulario=None, protocolo=None, ver=None) -> dict:
     sites = _dados_do_site(ids)
     conformidades = {lead.id: _conformidade(lead, None if aceites is None else aceites.get(lead.id, []),
                                             (sites or {}).get(lead.id), sites is not None) for lead in leads}
-    return {"leads": leads, "formulario": formulario or {}, "max_arquivos": raio_x.MAX_ARQUIVOS,
+    return {"leads": leads, "formulario": formulario or {}, "max_arquivos": raio_x_regras.MAX_ARQUIVOS,
             "protocolo": protocolo or "",
             "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS, "retencao_dias": RETENCAO_DIAS,
             "disponivel": True, "parados": {lead.id: _parado_da_lista(lead) for lead in leads},
@@ -423,7 +425,7 @@ def _diagnostico(lead: LeadAvaliacao, limite: int, parametros=None) -> Diagnosti
                                                  limite=limite, parametros_inteligencia=parametros)
     expira_em = min((l["criado_em"] for l in linhas), default=None)
     expira_em = expira_em + timedelta(days=RETENCAO_DIAS) if expira_em is not None else None
-    linhas_atuais = bool(linhas) and {l["versao_regras"] for l in linhas} == {avaliacao_motor.VERSAO_REGRAS_LEAD}
+    linhas_atuais = bool(linhas) and {l["versao_regras"] for l in linhas} == {avaliacao_regras.VERSAO_REGRAS_LEAD}
     itens = _itens_gravados(linhas) if payload["situacao"] == "desatualizado" else None
     diagnostico = Diagnostico(payload, len(linhas), expira_em, linhas_atuais, itens)
     if cache is not None:
@@ -673,7 +675,7 @@ def _contexto_detalhe(lead: LeadAvaliacao, parametros=None, erro_parametros=None
         "rotulos_blocos": triagem_cenario.ROTULOS_DOS_BLOCOS,
         "totais": payload["totais"], "categorias": payload["categorias"],
         "categorias_publicadas": payload["categorias_publicadas"],
-        "max_arquivos": raio_x.MAX_ARQUIVOS, "itens_por_bloco": ITENS_POR_BLOCO, "retencao_dias": RETENCAO_DIAS,
+        "max_arquivos": raio_x_regras.MAX_ARQUIVOS, "itens_por_bloco": ITENS_POR_BLOCO, "retencao_dias": RETENCAO_DIAS,
         # O que o visitante escolheu no Raio-X público (lead com origem "site").
         "rotulos_planos_interesse": ROTULOS_PLANOS_DE_INTERESSE, "rotulos_faixas_faturamento": ROTULOS_FAIXAS_DE_FATURAMENTO,
         # O aceite dos termos na landing (o bloco "Aceite dos termos"); None sem a tabela.
@@ -886,7 +888,7 @@ def _avisar_por_whatsapp(lead: LeadAvaliacao, formulario) -> None:
 def lista():
     if not esquema_disponivel():
         return render_template("admin/leads.html", disponivel=False, retencao_dias=RETENCAO_DIAS,
-                               max_arquivos=raio_x.MAX_ARQUIVOS, leads=[], formulario={},
+                               max_arquivos=raio_x_regras.MAX_ARQUIVOS, leads=[], formulario={},
                                mensagem_sem_esquema=MENSAGEM_SEM_ESQUEMA)
     expurgo_oportunista()
     protocolo = (request.args.get("protocolo") or "").strip()
@@ -1126,10 +1128,11 @@ def arquivos_zip(lead_id):
 @limite_envio
 def processar(lead_id):
     """Processa as planilhas que o lead enviou pela landing: dentro da vaga única de entrada, baixa cada uma do
-    Storage (conferida com o registrado) e grava a avaliação no próprio lead pelo mesmo caminho do reenvio (_avaliar:
-    processo isolado e avaliacao_cenario.registrar). Lead convertido ou com os dados expirados, sem planilha válida
-    ou com o Storage sem configuração: nada é baixado. Nenhuma mensagem é enviada ao lead. Volta para a lista com o
-    painel do lead aberto (?ver=), já com os números."""
+    Storage direto numa pasta temporária (conferida com o registrado no caminho, sem guardá-la na memória do processo
+    web) e grava a avaliação no próprio lead pelo mesmo caminho do reenvio (_avaliar: processo isolado e
+    avaliacao_cenario.registrar). Lead convertido ou com os dados expirados, sem planilha válida ou com o Storage sem
+    configuração: nada é baixado. Nenhuma mensagem é enviada ao lead. Volta para a lista com o painel do lead aberto
+    (?ver=), já com os números."""
     if not esquema_disponivel():
         return _sem_esquema()
     lead = db.session.get(LeadAvaliacao, lead_id)
@@ -1164,10 +1167,16 @@ def processar(lead_id):
         # A transação de leitura termina antes da rede (até 30 s por planilha) e do processo isolado.
         db.session.rollback()
         try:
-            arquivos = [FileStorage(io.BytesIO(armazenamento.baixar(planilha)), content_type=planilha.tipo,
-                                    filename=f"relatorio-{planilha.indice:02d}.{planilha.formato}")
-                        for planilha in planilhas]
-            lead = _avaliar(arquivos, lead_id=lead_id)
+            # Os arquivos abertos fecham antes de a pasta ser apagada (no Windows, arquivo aberto não sai).
+            with tempfile.TemporaryDirectory(prefix="nexo-raio-x-") as pasta, ExitStack() as abertos:
+                arquivos = []
+                for planilha in planilhas:
+                    nome = f"relatorio-{planilha.indice:02d}.{planilha.formato}"
+                    caminho = Path(pasta) / nome
+                    armazenamento.baixar_para(planilha, caminho)
+                    arquivos.append(FileStorage(abertos.enter_context(caminho.open("rb")),
+                                                content_type=planilha.tipo, filename=nome))
+                lead = _avaliar(arquivos, lead_id=lead_id)
         except armazenamento_leads.ErroDeArmazenamento as erro:
             db.session.rollback()
             current_app.logger.warning("Planilhas do lead %s não baixadas para processar (%s).", lead_id, erro)
@@ -1183,6 +1192,13 @@ def processar(lead_id):
             db.session.rollback()
             current_app.logger.warning("Processamento das planilhas do lead não gravado (%s).", type(erro).__name__)
             flash("Não foi possível gravar a avaliação. Tente novamente.", "danger")
+            return redirect(destino, 303)
+        except OSError as erro:
+            # O disco do servidor (a pasta temporária das planilhas baixadas).
+            db.session.rollback()
+            current_app.logger.warning("Planilhas do lead %s não preparadas para processar (%s).", lead_id,
+                                       type(erro).__name__)
+            flash("Não foi possível preparar as planilhas do lead para processar. Tente novamente.", "danger")
             return redirect(destino, 303)
     current_app.logger.info("Planilhas do lead %s (%s arquivo(s)) processadas pelo consultor %s.", lead_id,
                             len(planilhas), current_user.id_usuario)

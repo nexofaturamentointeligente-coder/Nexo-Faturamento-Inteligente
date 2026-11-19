@@ -40,7 +40,7 @@ import re
 
 from horario import BRASILIA, instante_utc
 import plano_acao
-import raio_x
+import raio_x_regras
 import raio_x_apresentacao
 
 VERSAO = "evolucao-2026-11.1"
@@ -131,7 +131,7 @@ def _data(texto) -> date | None:
 
 def _brl(valor) -> str:
     """R$ sem o símbolo, como a tela: 1.234,56."""
-    return raio_x._brl(float(valor))
+    return raio_x_regras._brl(float(valor))
 
 
 def _pct(fracao) -> str:

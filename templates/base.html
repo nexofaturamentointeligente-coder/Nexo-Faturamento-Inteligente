@@ -59,12 +59,6 @@
 {# ===================================================================
    Layout interno (sidebar + topbar) para usuário autenticado.
    Visitante (tela de login) cai no layout centralizado .auth-wrap.
-
-   NEXO/MVP — nav do admin (Dashboard, Empresas, Análises) e do cliente
-   (Visão Geral, Histórico) está completa. Itens de Tickets ficaram
-   fora do escopo do PI2 (tabelas chamado_suporte/mensagem_suporte são
-   documentação no DER, sem Model nem rotas no MVP — ver
-   .claude/prompt_context.md regra 4).
    =================================================================== #}
 {% if current_user.is_authenticated %}
 {# Primeiro item da ordem de Tab: pula sidebar, topbar e sino direto para o conteúdo.

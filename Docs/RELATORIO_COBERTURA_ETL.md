@@ -1,6 +1,6 @@
 # Relatório de Cobertura & Resiliência do Motor de ETL — NEXO
 
-> **Objetivo deste documento.** Registrar formalmente, como evidência de teste para o TCC, a estratégia de resiliência do motor de ETL do NEXO (`etl_processor.py`): a taxonomia de falhas que ele antecipa, a matriz de cenários validados (*chaos engineering*) e o contrato de robustez que o torna um software de nível de produção. É o artefato que sustenta a afirmação: *o motor nunca derruba o sistema e nunca fabrica um KPI falso.*
+> **Objetivo deste documento.** Registrar formalmente, como evidência de teste, a estratégia de resiliência do motor de ETL do NEXO (`etl_processor.py`): a taxonomia de falhas que ele antecipa, a matriz de cenários validados (*chaos engineering*) e o contrato de robustez que o torna um software de nível de produção. É o artefato que sustenta a afirmação: *o motor nunca derruba o sistema e nunca fabrica um KPI falso.*
 
 ---
 
@@ -104,7 +104,7 @@ Maturidade de engenharia inclui saber **onde parar**. Os itens abaixo foram cons
 
 ---
 
-## 7. Conclusão para a Banca
+## 7. Conclusão
 
 O motor de ETL do NEXO foi submetido a uma taxonomia de falhas em 6 camadas e a 11+ cenários de teste (reais e adversariais). Ele processa relatórios em estruturas radicalmente diferentes — NF-level, item-level, sem fornecedor, apenas com valor unitário, cabeçalhos deslocados, encodings e separadores variados, múltiplas abas. E, crucialmente, **recusa com transparência** o que não pode honrar.
 

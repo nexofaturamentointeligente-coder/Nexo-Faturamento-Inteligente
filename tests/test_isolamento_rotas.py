@@ -184,8 +184,9 @@ class EntreEmpresasTests(_IsolamentoCase):
 ROTAS_FORA_DA_VARREDURA = {"/auth/logout"}
 POST_FORA_DA_VARREDURA = {"/cliente/configuracoes/solicitar-exclusao", "/api/suporte-bot"}
 # Módulo do caminho do lead que não é rota nem monta tela: o processo isolado, que despacha a operação da
-# Avaliação de Cenário. (O serviço de envio, raio_x_servico, monta o Raio-X do cliente e fica no teste.)
-MODULOS_DO_LEAD_EXTRAS = {"etl_worker.py"}
+# Avaliação de Cenário, e a ferramenta de medição, que roda essa operação pelo próprio worker, fora da aplicação.
+# (O serviço de envio, raio_x_servico, monta o Raio-X do cliente e fica no teste.)
+MODULOS_DO_LEAD_EXTRAS = {"etl_worker.py", "tools/measure_etl_resources.py"}
 # Exceção só para as citações listadas: o repositório do microsserviço do Raio-X (microservico_raiox/, serviço à
 # parte que grava o lead da landing; decisão do dono em 15/11/2026) cita a tabela dos leads e nada mais.
 CITACOES_PERMITIDAS_POR_MODULO = {"microservico_raiox/repositorio.py": {"lead_avaliacao"}}
@@ -194,7 +195,8 @@ PASTAS_FORA_DA_ESTRUTURA = {"tests", "migrations", "venv", ".venv", "env", "__py
                             "instance", "site-packages"}
 # Módulos que podem ler as tabelas de lead: os da Avaliação de Cenário e os modelos. Rota de cliente nova
 # que importe um deles (ou cite as tabelas) faz o teste estrutural falhar.
-MODULOS_DO_LEAD = {"avaliacao_cenario.py", "avaliacao_motor.py", "blueprints/leads.py", "diagnostico_cenario.py",
+MODULOS_DO_LEAD = {"avaliacao_cenario.py", "avaliacao_motor.py", "avaliacao_regras.py", "blueprints/leads.py",
+                   "diagnostico_cenario.py",
                    "etl_runtime.py", "inteligencia_estoque.py", "leads_avaliacao.py", "models.py", "triagem_cenario.py",
                    "blueprints/avaliacao_publica.py"}
 # As rotas do Raio-X público (método e caminho), todas sem parâmetro: o resultado só sai pela sessão.

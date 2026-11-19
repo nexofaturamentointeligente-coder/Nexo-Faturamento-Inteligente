@@ -7,7 +7,6 @@ Os arquivos temporários ficam em .audit_tmp/ e são removidos ao terminar.
 import ast
 import contextlib
 import io
-from pathlib import Path
 import re
 from unittest.mock import patch
 
@@ -139,7 +138,7 @@ class DeployTests(DeployTestCase):
         })
         self.assertEqual(response.status_code, 404)
 
-    def test_cliente_uploads_persist_in_database_and_survive_cache_removal(self):
+    def test_cliente_uploads_persist_in_database_without_disk_copy(self):
         import storage
         from models import Analise, UploadRelatorio
         from sqlalchemy import select
@@ -160,11 +159,10 @@ class DeployTests(DeployTestCase):
             self.assertTrue(upload.caminho_arquivo.startswith("db:"))
             self.assertIsNone(upload.id_usuario_admin)
             expected = (VENDAS if upload.tipo_relatorio == "VENDAS" else COMPRAS).encode()
-            path = Path(storage.resolver(upload.caminho_arquivo))
-            self.assertTrue(path.is_relative_to(self.work_dir))
-            self.assertEqual(path.read_bytes(), expected)
-            path.unlink()
-            self.assertEqual(Path(storage.resolver(upload.caminho_arquivo)).read_bytes(), expected)
+            # Os bytes vêm só do banco; uma referência 'db:' não tem caminho no disco (nem cópia local reusada).
+            self.assertEqual(storage.obter(upload.caminho_arquivo[len(storage.PREFIXO_DB):]).conteudo, expected)
+            with self.assertRaises(ValueError):
+                storage.resolver(upload.caminho_arquivo)
         self.assertEqual(list((self.work_dir / "uploads").iterdir()), [])
 
     def test_storage_rollback_does_not_publish_blob(self):

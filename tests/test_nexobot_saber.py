@@ -13,6 +13,7 @@ As perguntas são respondidas pelo motor completo (`responder`) com o app real
 (SQLite temporário), sem tópicos do Guia, para medir a base interna sozinha.
 """
 
+import dataclasses
 import re
 import unittest
 from pathlib import Path
@@ -66,6 +67,20 @@ class IntegridadeDaBaseTests(unittest.TestCase):
                                     ".xls só pode aparecer como formato NÃO aceito")
                 for termo in TERMOS_FINANCEIROS_PROIBIDOS:
                     self.assertNotIn(termo, corpo.lower())
+
+    def test_sem_rotulo_academico_em_nenhum_registro(self):
+        """O bot fala de um produto comercial: nada de acadêmico, TCC ou MVP em campo algum."""
+        proibido = re.compile(r"acad[eê]mic[oa]s?|projeto integrador|faculdade|\btcc\b|\bmvp\b",
+                              re.IGNORECASE)
+        for r in saber.REGISTROS:
+            for campo in dataclasses.fields(r):
+                valor = getattr(r, campo.name)
+                for texto in (valor if isinstance(valor, tuple) else (valor,)):
+                    if isinstance(texto, str):
+                        with self.subTest(id=r.id, campo=campo.name):
+                            self.assertNotRegex(texto, proibido)
+        for texto in (*saber.GLOSSARIO, *(rotulo for rotulo, _ in saber.SUGESTOES_INICIAIS)):
+            self.assertNotRegex(texto, proibido)
 
     def test_cobertura_por_assunto(self):
         categorias = {r.categoria for r in saber.REGISTROS}

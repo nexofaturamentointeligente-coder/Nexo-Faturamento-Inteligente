@@ -182,8 +182,6 @@ def create_app(configuracao: Configuracao = None, repositorio=None, armazenament
     app.wsgi_app = _caminho_sem_controle(app.wsgi_app)
     for problema in configuracao.problemas:
         log.error("Configuração incompleta: %s", problema)
-    for aviso in configuracao.avisos:
-        log.warning("Configuração: %s", aviso)
     # Banco e Storage nascem mesmo com outra falta (a origem fica vazia até a LGPD), para a conferência da
     # subida. Um erro aqui não derruba o serviço: o /ping continua no ar e o envio responde 503.
     if repositorio is None and configuracao.database_url:

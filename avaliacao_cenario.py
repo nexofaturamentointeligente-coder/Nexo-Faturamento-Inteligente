@@ -14,7 +14,7 @@ Fluxo (consultor, rotas admin_required em blueprints/leads.py):
      de o expurgo rodar), com os limiares gravados no lead (ou os passados). Limiares gravados por
      outra versão da triagem dão lugar aos padrão atuais, com aviso (limiares_para_retriagem).
 
-As colunas gravadas saem de avaliacao_motor.COLUNAS (fonte única): coluna nova do worker que não
+As colunas gravadas saem de avaliacao_regras.COLUNAS (fonte única): coluna nova do worker que não
 for gravada aqui nem conferida em etl_runtime.validar_avaliacao quebra o teste de contrato.
 
 Ordem de trava: o lead e depois as linhas, a mesma do expurgo (leads_avaliacao.py). Sem commit:
@@ -30,25 +30,25 @@ import json
 
 from sqlalchemy import delete, insert, select, update
 
-import avaliacao_motor
-from etl_inputs import ETLInputError
+import avaliacao_regras
+from etl_erros import ETLInputError
 import etl_runtime
 from extensions import db
 from horario import agora_utc
 import inteligencia_estoque
 from leads_avaliacao import RETENCAO_DIAS
 from models import BrainstormingDadosPdv, LeadAvaliacao
-import raio_x
+import raio_x_regras
 import raio_x_servico
 import triagem_cenario
 
 _CENTAVO = Decimal("0.01")
 _MILESIMO = Decimal("0.001")
-_DINHEIRO = avaliacao_motor.COLUNAS_DINHEIRO
-_QUANTIDADES = avaliacao_motor.COLUNAS_QUANTIDADE
+_DINHEIRO = avaliacao_regras.COLUNAS_DINHEIRO
+_QUANTIDADES = avaliacao_regras.COLUNAS_QUANTIDADE
 # Identidade da linha, gravada à parte; "categoria" (índice) vira o texto em categoria_produto.
 _IDENTIDADE = ("ano_exercicio", "chave_produto", "codigo_produto", "descricao_produto")
-_SOMAS_GRAVADAS = tuple(nome for nome in avaliacao_motor.COLUNAS if nome not in _IDENTIDADE and nome != "categoria")
+_SOMAS_GRAVADAS = tuple(nome for nome in avaliacao_regras.COLUNAS if nome not in _IDENTIDADE and nome != "categoria")
 _TETO_VAZAMENTO_TOTAL = Decimal(10) ** 10  # NUMERIC(12,2) de lead_avaliacao."vazamento_total_r$"
 
 
@@ -86,7 +86,7 @@ def quantizar(linhas: dict) -> list:
                 linha[nome] = _decimal(linha[nome], _CENTAVO)
         if linha.get("estoque_final") is not None:
             linha["estoque_final"] = _decimal(linha["estoque_final"], _MILESIMO)
-        for nome in avaliacao_motor.COLUNAS_DATA:
+        for nome in avaliacao_regras.COLUNAS_DATA:
             if linha.get(nome) is not None:
                 linha[nome] = date.fromisoformat(linha[nome])
         indice = linha.pop("categoria", None)
@@ -111,7 +111,7 @@ def _conferir_tetos(registros: list, vazamento_total: Decimal) -> None:
     """Derivados que o processo isolado não vê (custo médio NUMERIC(14,4), vazamento estimado e
     vazamento total NUMERIC(12,2)) e as somas já arredondadas (o arredondamento pode levar um valor
     logo abaixo do teto até ele). Recusa com mensagem em vez de derrubar o SAVEPOINT."""
-    tetos = avaliacao_motor.TETOS
+    tetos = avaliacao_regras.TETOS
     for registro in registros:
         custo_medio = registro["custo_medio_registrado"]
         if ((custo_medio is not None and custo_medio >= tetos["custo_medio_registrado"])
@@ -214,7 +214,7 @@ def registrar(resultado: dict, *, contato: dict | None = None, lead_id=None, reg
         registros = _registros(linhas, triagem, resultado["versao"], cobertura)
         vazamento_total = sum((r["vazamento_estimado_reais"] for r in registros), Decimal("0.00"))
         raio = resultado["raio_x"]
-        recomendacao = raio_x.recomendar(raio, meses_prata)
+        recomendacao = raio_x_regras.recomendar(raio, meses_prata)
         periodo = raio["periodo"]
         periodo_inicio = date.fromisoformat(periodo["inicio"]) if periodo["inicio"] else None
         periodo_fim = date.fromisoformat(periodo["fim"]) if periodo["fim"] else None
@@ -342,7 +342,7 @@ def retriar(lead_id, limiares=None, *, agora=None) -> LeadAvaliacao:
         if not dentro_da_retencao(min(r.criado_em for r in registros), agora):
             raise LeadIndisponivel("Os dados de PDV do lead passaram dos 30 dias de retenção: envie os "
                                    "relatórios de novo.")
-        if {r.versao_regras for r in registros} != {avaliacao_motor.VERSAO_REGRAS_LEAD}:
+        if {r.versao_regras for r in registros} != {avaliacao_regras.VERSAO_REGRAS_LEAD}:
             raise LeadIndisponivel("Os dados do lead foram gravados por outra versão das regras: envie os "
                                    "relatórios de novo.")
         aviso_limiares = None

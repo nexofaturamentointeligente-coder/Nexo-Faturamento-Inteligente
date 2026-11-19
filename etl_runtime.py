@@ -8,11 +8,14 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from etl_limits import ETLLimits, get_limits
 
@@ -58,20 +61,86 @@ def _stop_owned_process(process):
     process.wait(timeout=5)
 
 
+# As pastas temporárias do processamento, pelo nome exato que o tempfile dá (o prefixo e 8 caracteres sorteados):
+# a entrada do upload (etl_uploads), a do job (abaixo), a cópia do banco (storage.materializar_para_etl) e a do
+# Raio-X e da Avaliação de Cenário (raio_x_servico, blueprints/leads). Uma morte dura do processo web (SIGKILL, OOM,
+# TerminateProcess no Windows) não roda o __exit__ do with nem o finalizador do TemporaryDirectory, e a pasta fica
+# no disco com os relatórios.
+_PASTA_TEMPORARIA = re.compile(r"(?:nexo-etl-upload-|nexo-etl-job-|nexo-etl-materialized-|nexo-raio-x-)[a-z0-9_]{8}")
+# Um job vivo dura no máximo uns 120 s (o prazo do processo isolado); o download das planilhas de um lead, até 30 s
+# por planilha antes dele.
+IDADE_MINIMA_ORFAO_S = 900
+
+
+def varrer_temporarios_orfaos(idade_minima_s=IDADE_MINIMA_ORFAO_S, pasta=None) -> int:
+    """Apaga as pastas temporárias do processamento que um processo morto deixou para trás: só diretórios de
+    verdade (sem seguir link simbólico nem junção), direto na pasta temporária do sistema (`pasta`, nos testes),
+    com um dos nomes de _PASTA_TEMPORARIA, mais velhos que `idade_minima_s` e, no POSIX, do mesmo usuário.
+    Nunca levanta (a varredura não derruba o job): devolve quantas apagou, e o log só tem a contagem."""
+    apagadas = 0
+    try:
+        limite = time.time() - idade_minima_s
+        usuario = os.getuid() if hasattr(os, "getuid") else None
+        with os.scandir(tempfile.gettempdir() if pasta is None else pasta) as entradas:
+            for entrada in entradas:
+                if not _PASTA_TEMPORARIA.fullmatch(entrada.name):
+                    continue
+                try:
+                    info = entrada.stat(follow_symlinks=False)
+                    if (not stat.S_ISDIR(info.st_mode)
+                            or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                            or info.st_mtime >= limite or (usuario is not None and info.st_uid != usuario)):
+                        continue
+                    shutil.rmtree(entrada.path)
+                    apagadas += 1
+                except OSError:
+                    continue
+    except Exception as erro:
+        logger.warning("ETL: a varredura das pastas temporárias órfãs não terminou (%s).", type(erro).__name__)
+    if apagadas:
+        logger.info("ETL: %d pasta(s) temporária(s) órfã(s) apagada(s).", apagadas)
+    return apagadas
+
+
+_OPERACOES = frozenset({"validate", "calculate", "raio_x", "avaliacao_cenario"})
+
+
+def _registrar_job(operation, arquivos, inicio, pico_kib, codigo_saida, desfecho):
+    """Uma linha de log por processamento, só com números e rótulos fixos (nunca nome de arquivo, caminho, empresa,
+    lead ou conteúdo): a operação, quantos arquivos, a duração, o pico de memória do processo isolado (ru_maxrss em
+    KiB, que vem no envelope; None sem o módulo resource, no Windows), o código de saída dele e o desfecho."""
+    try:
+        logger.info("ETL: operacao=%s arquivos=%d duracao_s=%.2f pico_rss_kib=%s codigo_saida=%s desfecho=%s",
+                    operation if operation in _OPERACOES else "outra", arquivos, time.monotonic() - inicio,
+                    pico_kib, codigo_saida, desfecho)
+    except Exception:
+        pass
+
+
+def _pico_do_envelope(envelope):
+    runtime = envelope.get("runtime")
+    pico = runtime.get("peak_rss_kib_linux") if isinstance(runtime, dict) else None
+    return pico if type(pico) is int and pico >= 0 else None
+
+
 def _run_job(operation, paths, *, extension=None, limits=None):
-    from etl_inputs import ETLInputError
+    from etl_erros import ETLInputError
     policy = get_limits() if limits is None else limits
     if not isinstance(policy, ETLLimits):
         raise ValueError("Política ETL inválida.")
     if not _ADMISSION.acquire(blocking=False):
         raise ETLInputError("busy", "Há outro arquivo em validação ou processamento. Tente novamente em instantes.")
     process = None
+    # Para a linha de log do processamento (_registrar_job).
+    caminhos, inicio, pico, desfecho = [], None, None, "falha"
     try:
+        varrer_temporarios_orfaos()
         with tempfile.TemporaryDirectory(prefix="nexo-etl-job-") as work:
             root = Path(work)
             request = root / "request.json"
             output = root / "result.json"
-            data = json.dumps({"operation": operation, "paths": [os.fspath(path) for path in paths],
+            caminhos = [os.fspath(path) for path in paths]
+            data = json.dumps({"operation": operation, "paths": caminhos,
                                "extension": extension, "limits": asdict(policy)}, ensure_ascii=True)
             if len(data.encode()) > 16_384:
                 raise ETLInputError("request", "Referência de arquivo inválida para processamento.")
@@ -81,6 +150,7 @@ def _run_job(operation, paths, *, extension=None, limits=None):
             # que abre o interpretador num neto, e o neto, que termina depois do lançador no estouro do prazo,
             # travaria a remoção da pasta (o "timeout" viraria um erro genérico). O filho só usa caminhos
             # absolutos.
+            inicio = time.monotonic()
             process = subprocess.Popen(
                 [sys.executable, "-I", "-B", str(_WORKER_PATH), str(request), str(output)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -90,8 +160,10 @@ def _run_job(operation, paths, *, extension=None, limits=None):
             try:
                 process.wait(timeout=policy.timeout_seconds)
             except subprocess.TimeoutExpired:
+                desfecho = "prazo"
                 _stop_owned_process(process)
                 raise ETLInputError("timeout", "Tempo de processamento excedido. Reduza ou divida o relatório.") from None
+            desfecho = "sem_resultado"
             if not output.is_file() or output.stat().st_size > policy.max_output_bytes:
                 raise ETLInputError("worker", "Processamento interrompido pelo limite de recursos ou por arquivo inválido.")
             with output.open("rb") as stream:
@@ -104,25 +176,33 @@ def _run_job(operation, paths, *, extension=None, limits=None):
                 raise ETLInputError("worker", "Não foi possível concluir o processamento com segurança.") from None
             if not isinstance(envelope, dict) or type(envelope.get("ok")) is not bool:
                 raise ETLInputError("worker", "Resposta inválida do processamento isolado.")
+            pico = _pico_do_envelope(envelope)
             if not envelope["ok"]:
                 code = envelope.get("code", "worker")
                 message = envelope.get("message")
+                desfecho = "memoria" if code == "memory" else "recusa"
                 if (not isinstance(code, str) or len(code) > 64 or not isinstance(message, str)
                         or not 1 <= len(message) <= 1024):
                     raise ETLInputError("worker", "Não foi possível processar o arquivo com segurança.")
                 raise ETLInputError(code, message)
+            desfecho = "falha"
             if process.returncode != 0 or not isinstance(envelope.get("result"), dict):
                 raise ETLInputError("worker", "Não foi possível concluir o processamento com segurança.")
+            desfecho = "ok"
             return envelope["result"]
     except ETLInputError:
         raise
     except (OSError, ValueError, subprocess.SubprocessError):
+        # Também depois do "ok": a remoção da pasta do job, na saída do with, pode falhar.
+        desfecho = "falha"
         raise ETLInputError("worker", "Processamento temporariamente indisponível. Tente novamente.") from None
     finally:
         try:
             if process is not None and process.poll() is None:
                 _stop_owned_process(process)
         finally:
+            if process is not None:
+                _registrar_job(operation, len(caminhos), inicio, pico, process.returncode, desfecho)
             _ADMISSION.release()
 
 
@@ -141,16 +221,16 @@ def run_raio_x(paths, limits=None):
     """Raio-X de entrada no processo isolado. Lê vários meses de uma vez: o prazo é o dobro
     do configurado, dentro do teto do ETLLimits (120 s)."""
     from dataclasses import replace
-    from etl_inputs import ETLInputError
-    import indicadores_executivos
-    from raio_x import CHAVES_RESULTADO
+    from etl_erros import ETLInputError
+    import indicadores_regras
+    from raio_x_regras import CHAVES_RESULTADO
     policy = get_limits() if limits is None else limits
     policy = replace(policy, timeout_seconds=min(120, policy.timeout_seconds * 2))
     result = _run_job("raio_x", paths, limits=policy)
     # Os indicadores executivos vão para o banco com nome de produto: conferidos inteiros (só texto do
     # relatório no nome e no código; o resto são números e rótulos fixos).
     if (not isinstance(result, dict) or set(result) != CHAVES_RESULTADO
-            or not indicadores_executivos.valido(result["indicadores_executivos"])):
+            or not indicadores_regras.valido(result["indicadores_executivos"])):
         raise ETLInputError("worker", "Resultado inválido do processamento isolado.")
     return result
 
@@ -220,11 +300,11 @@ def _data_iso(valor) -> bool:
 def _meta_valida(meta, versao) -> bool:
     """A meta do envio (avaliacao_motor._meta): chaves fixas, só contagens, nenhum texto livre. Ela
     fica no lead depois do expurgo das linhas, então nada fora disto pode chegar ao banco."""
-    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_AJUSTES, CHAVES_META, CHAVES_QUALIDADE,
+    from avaliacao_regras import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_AJUSTES, CHAVES_META, CHAVES_QUALIDADE,
                                  CHAVES_RELATORIOS_POR_ANO, CHAVES_SITUACAO_CONTAGENS, CHAVES_SITUACAO_VALORES,
                                  TETO_DINHEIRO_DA_META)
     # "arquivos" conta os relatórios do envio: um arquivo com a data de cada venda vira um por mês.
-    from raio_x import MAX_FATIAS, VERSAO_REGRAS
+    from raio_x_regras import MAX_FATIAS, VERSAO_REGRAS
     if not isinstance(meta, dict) or set(meta) != CHAVES_META:
         return False
     if meta["versao_regras"] != versao or meta["versao_raio_x"] != VERSAO_REGRAS:
@@ -315,7 +395,7 @@ def validar_avaliacao(result):
     """O resultado da avaliação no formato exato que o processo pai grava; senão, recusa. Confere
     a estrutura inteira: um processo isolado com defeito (ou comprometido) não grava texto livre
     nem derruba a gravação com erro 500 (uma exceção na própria conferência também vira recusa)."""
-    from etl_inputs import ETLInputError
+    from etl_erros import ETLInputError
     try:
         return _validar_avaliacao(result)
     except ETLInputError:
@@ -325,13 +405,13 @@ def validar_avaliacao(result):
 
 
 def _validar_avaliacao(result):
-    from etl_inputs import ETLInputError
-    from avaliacao_motor import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_RESULTADO as CHAVES_AVALIACAO, COLUNAS,
+    from etl_erros import ETLInputError
+    from avaliacao_regras import (ANO_MAXIMO_DO_BANCO, ANO_MINIMO, CHAVES_RESULTADO as CHAVES_AVALIACAO, COLUNAS,
                                  COLUNAS_CONTAGEM, COLUNAS_DATA, COLUNAS_DINHEIRO, COLUNAS_MARCA,
                                  COLUNAS_QUANTIDADE, LIMITE_DESCRICAO, TETOS, VERSAO_REGRAS_LEAD)
-    from etl_processor import LIMITE_CATEGORIA
-    import indicadores_executivos
-    from raio_x import CHAVES_RESULTADO
+    from etl_regras import LIMITE_CATEGORIA
+    import indicadores_regras
+    from raio_x_regras import CHAVES_RESULTADO
 
     def invalido():
         return ETLInputError("worker", "Resultado inválido do processamento isolado.")
@@ -343,7 +423,7 @@ def _validar_avaliacao(result):
     if not isinstance(result["raio_x"], dict) or set(result["raio_x"]) != CHAVES_RESULTADO:
         raise invalido()
     # Os indicadores do envio vão para o lead (indicadores_executivos_json), com nome de produto, até o expurgo.
-    if not indicadores_executivos.valido(result["raio_x"]["indicadores_executivos"]):
+    if not indicadores_regras.valido(result["raio_x"]["indicadores_executivos"]):
         raise invalido()
     if not _raio_x_valido(result["raio_x"]) or not _meta_valida(result["meta"], result["versao"]):
         raise invalido()
@@ -451,8 +531,8 @@ def _linha_coerente(linha: list, posicao: dict, meta: dict) -> bool:
 
 
 def run_calculation(path_vendas, path_compras, limits=None):
-    from etl_processor import ResultadoETL
-    from etl_inputs import ETLInputError
+    from etl_regras import ResultadoETL
+    from etl_erros import ETLInputError
     result = _run_job("calculate", [path_vendas, path_compras], limits=limits)
     if (set(result) != set(ResultadoETL._fields) or result.get("sucesso") is not True
             or not isinstance(result.get("kpis"), dict) or not isinstance(result.get("telemetria"), dict)

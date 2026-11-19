@@ -24,14 +24,13 @@ import stat
 from contextlib import contextmanager
 import mimetypes
 import tempfile
-import threading
 from pathlib import Path
 
 from flask import current_app, url_for
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 
 from extensions import db
 from models import ArquivoArmazenado, UploadRelatorio
@@ -41,15 +40,11 @@ PREFIXO_DB = "db:"
 _REMOCAO_LEGADA = "arquivos_legados"
 logger = logging.getLogger(__name__)
 
-# Cópias locais temporárias dos arquivos do banco: o motor de ETL (pandas/csv)
-# lê de um caminho no disco. As chaves carregam o hash do conteúdo, então a
-# mesma chave sempre corresponde aos mesmos bytes e a cópia pode ser reusada.
-_CACHE_DIR = Path(tempfile.gettempdir()) / "nexo_arquivos"
-
 # Forma das chaves geradas por salvar(): um nome plano (ou 'guia/<nome>'), sem
 # separadores de caminho nem bytes de controle. Os nomes migrados do disco
 # (migrar_arquivos_para_db.py) são basenames quaisquer, por isso só a FORMA é
-# restringida: nada que venha do banco ou da URL vira caminho fora do cache.
+# restringida. Uma chave nunca vira caminho no disco: o ETL lê de uma cópia
+# exclusiva com nome fixo (materializar_para_etl).
 _NOME_CHAVE = re.compile(r"^(?:guia/)?(?P<nome>[^/\\\x00-\x1f\x7f]{1,200})$")
 
 
@@ -62,16 +57,6 @@ def chave_valida(chave) -> bool:
 
 def _chave(referencia: str) -> str:
     return referencia[len(PREFIXO_DB):]
-
-
-def _no_cache(chave: str) -> Path:
-    if not chave_valida(chave):
-        raise ValueError("chave de armazenamento inválida")
-    raiz = os.path.realpath(_CACHE_DIR)
-    destino = _CACHE_DIR / chave
-    if not os.path.realpath(destino).startswith(raiz + os.sep):
-        raise ValueError("chave de armazenamento fora do cache")
-    return destino
 
 
 def salvar(conteudo: bytes, nome_final: str) -> str:
@@ -97,16 +82,16 @@ def obter(chave: str):
 
 
 def resolver(caminho_arquivo: str) -> str:
-    """Resolve a referência salva para um caminho absoluto legível no disco.
+    """Resolve uma referência LEGADA para um caminho absoluto no disco: relativiza
+    ao UPLOAD_FOLDER quando o valor persistido não existe como caminho direto.
 
-    - 'db:<chave>': materializa o conteúdo do banco numa cópia temporária local.
-      Se a chave não existir, devolve um caminho inexistente — o ETL então acusa
-      "Arquivo não encontrado" (falha segura, sem exceção aqui).
-    - Legado: relativiza ao UPLOAD_FOLDER quando o valor persistido não existe
-      como caminho direto.
+    'db:<chave>' não tem caminho no disco e levanta ValueError: os bytes saem de
+    obter(chave).conteudo, e a cópia para o ETL, de materializar_para_etl (pasta
+    temporária exclusiva, apagada ao sair do contexto).
     """
     if caminho_arquivo.startswith(PREFIXO_DB):
-        return _materializar(_chave(caminho_arquivo))
+        raise ValueError("Referência 'db:' não tem caminho no disco: use storage.obter ou "
+                         "storage.materializar_para_etl.")
     return _caminho_legado(caminho_arquivo)
 
 
@@ -144,10 +129,10 @@ def _caminho_legado(caminho_arquivo: str) -> str:
 
 @contextmanager
 def materializar_para_etl(referencia: str, max_bytes: int):
-    """Cópia exclusiva e limitada para ETL; nunca remove fonte ou cache comum.
+    """Cópia exclusiva e limitada para ETL; nunca remove a fonte.
 
     O tamanho real do BYTEA é verificado no servidor e novamente no SELECT que
-    carrega os bytes. O campo tamanho e o cache compartilhado não são autoridade.
+    carrega os bytes. O campo tamanho não é autoridade.
     Referências legadas mantêm a resolução anterior, mas são copiadas com limite
     para arquivo próprio, regular e privado, removido ao sair do contexto.
     """
@@ -220,29 +205,11 @@ def materializar_para_etl(referencia: str, max_bytes: int):
             os.close(source_fd)
 
 
-def _materializar(chave: str) -> str:
-    if not chave_valida(chave):
-        return str(_CACHE_DIR / "chave-invalida")  # inexistente: "Arquivo não encontrado"
-    destino = _no_cache(chave)
-    if destino.exists():
-        return str(destino)
-    registro = obter(chave)
-    if registro is None:
-        return str(destino)
-    destino.parent.mkdir(parents=True, exist_ok=True)
-    # Escrita atômica (arquivo temporário + rename): duas requisições
-    # simultâneas nunca leem uma cópia pela metade.
-    tmp = destino.with_name(f"{destino.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_bytes(registro.conteudo)
-    os.replace(tmp, destino)
-    return str(destino)
-
-
 def remover(caminho_arquivo: str) -> None:
     """Remove o arquivo referenciado, sempre subordinado ao COMMIT do chamador.
 
     - 'db:<chave>': apaga a linha na transação do chamador (efetivada no commit
-      dele) e descarta a cópia local temporária.
+      dele).
     - Legado (SEC-004): o arquivo físico NÃO é apagado aqui. A remoção é
       agendada e só acontece depois de o commit ser confirmado (pos_commit);
       rollback descarta o agendamento. A exclusão é idempotente, confinada ao
@@ -258,10 +225,6 @@ def remover(caminho_arquivo: str) -> None:
         registro = obter(chave)
         if registro is not None:
             db.session.delete(registro)
-        try:
-            _no_cache(chave).unlink(missing_ok=True)
-        except (OSError, ValueError):
-            pass
         return
     pos_commit.agendar(db.session, _REMOCAO_LEGADA, _caminho_legado(caminho_arquivo))
 

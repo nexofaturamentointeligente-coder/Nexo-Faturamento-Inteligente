@@ -88,7 +88,7 @@ pg_service.conf
 .pg_service.conf
 *.zip
 # Demais formatos do pg_dump fora de backups/: plain, tar, diretório (toc.dat)
-# e custom com outra extensão. Sem *.sql global: schema_nexo_mvp_v4.sql é versionado.
+# e custom com outra extensão. Sem *.sql global: o DDL histórico em Docs/ é versionado.
 dumps/
 dump/
 dump.sql

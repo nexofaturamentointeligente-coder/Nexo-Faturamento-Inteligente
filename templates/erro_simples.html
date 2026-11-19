@@ -27,6 +27,7 @@
                 </div>
             </div>
             <p class="conta-encerrada-texto">{{ mensagem or 'Tente novamente em instantes.' }}</p>
+            {% if referencia %}<p class="conta-encerrada-texto">Código para o suporte: <code>{{ referencia }}</code></p>{% endif %}
             <div class="d-grid gap-2">
                 {% if painel_url %}
                 <a href="{{ painel_url }}" class="btn-nexo auth-submit"><i class="bi bi-speedometer2" aria-hidden="true"></i> Voltar ao painel</a>

@@ -15,7 +15,6 @@ Mesma infraestrutura de tests/test_overflow_navegador.py (servidor local, CDN
 local íntegra, dados fictícios); habilitado por NEXO_TEST_BROWSER=1.
 """
 
-import os
 import unittest
 from datetime import date
 

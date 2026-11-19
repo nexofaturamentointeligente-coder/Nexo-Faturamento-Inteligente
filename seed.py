@@ -11,14 +11,10 @@ somente para SQLite local), conferindo DATABASE_URL e FLASK_ENV:
     python seed.py
 
 Idempotente: pode rodar múltiplas vezes sem duplicar (verifica existência).
-
-A Pessoa 4 vai ESTENDER este script na Semana 3/4 para popular
-empresa(s), usuário(s) cliente e 2 análises demo (1 em rascunho e 1 publicada).
 """
 
 import sys
 
-from datetime import date
 from sqlalchemy import select
 
 from app import create_app

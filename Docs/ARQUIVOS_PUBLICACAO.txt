@@ -50,7 +50,6 @@ realtime.py
 render.yaml
 requirements-dev.txt
 requirements.txt
-schema_nexo_mvp_v4.sql
 seed.py
 seed_guia.py
 static/.gitkeep

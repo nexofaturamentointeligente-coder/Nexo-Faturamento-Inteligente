@@ -14,7 +14,7 @@ Decisão do dono em 16/11/2026 (redesign da landing): o aceite do lead fica liga
 | Arquivo | Papel |
 | :--- | :--- |
 | `app.py` | Rotas, CORS, ordem das checagens e a gravação (Storage e banco) |
-| `configuracao.py` | Variáveis de ambiente, a lista de problemas de configuração e os avisos da subida |
+| `configuracao.py` | Variáveis de ambiente e a lista de problemas de configuração |
 | `validacao.py` | Campos do formulário (nome, empresa, e-mail, WhatsApp, interesse, termos e os ids dos documentos lidos) e o IP do visitante para o aceite |
 | `sanitizacao.py` | Triagem de cada relatório pelo conteúdo |
 | `armazenamento.py` | Cliente do Storage do Supabase (biblioteca padrão, HTTPS, sem redirecionamento) |
@@ -204,7 +204,6 @@ O que ainda pode deixar órfão sem registro é o processo morto no meio do envi
 | `SUPABASE_URL` | não | `https://<projeto>.supabase.co`. Sem ela, sai do `DATABASE_URL`: da conexão direta (`db.<projeto>.supabase.co`) ou do usuário `<papel>.<projeto>` do pooler, de qualquer papel. |
 | `CORS_ORIGENS` | sim, em produção | Origens da landing, separadas por vírgula (`https://host`, sem caminho). **Fica vazia até a LGPD estar resolvida** (pendências): sem ela, todo POST e todo preflight recebem 403 (a origem é conferida antes de tudo), e o `/ping` continua no ar. Uma entrada inválida vai para o log pela posição na lista, sem o valor. |
 | `PERMITIR_LOCALHOST` | não | `1` aceita `http://localhost` e `http://127.0.0.1` (só para testes). |
-| `TERMOS_VERSAO` | não (ignorada) | Não é mais usada: a versão aceita vem dos documentos publicados no banco, lida na gravação do lead. Se estiver no ambiente, a subida deixa um aviso no log (sem o valor); pode tirá-la. |
 | `SUPABASE_BUCKET` | não | Padrão `leads-raio-x`. |
 | `LIMITE_POR_HORA`, `LIMITE_POR_DIA`, `TETO_DIARIO` | não | Padrão 5, 10 e 100. Números inteiros, só com dígitos ASCII. |
 | `PRAZO_DA_TRIAGEM` | não | Segundos de triagem por envio, de 1 a 300. Padrão 30. A espera pela vez acompanha: duas vezes o prazo, mais 10 s. |
@@ -280,7 +279,7 @@ O backup do banco (`pg_dump`) não leva os objetos do Storage, só os caminhos g
 Um worker só: o limite por IP fica em memória.
 
 **Conferências no log, antes de abrir a origem.** Nenhuma delas grava dado pessoal.
-- Na subida do worker, numa thread à parte (gancho `post_worker_init` do `gunicorn.conf.py`, depois do fork), o serviço lê as tabelas pelas colunas das migrações (a de leads, a do aceite e as versões vigentes de `documento_legal`), trava `documento_legal` como a gravação trava e lê o bucket. O log mostra "Conferência da subida: banco ok, com as tabelas das migrações f2b6d8a4c1e9 e c8e2a4f6b0d1." e "Conferência da subida: bucket ok, privado." Senão, mostra o tipo do erro: por exemplo, `OperationalError` para a URL direta no Render, `UndefinedColumn` ou `UndefinedTable` sem as migrações, `InsufficientPrivilege` para um papel que não pode travar `documento_legal` e 401 ou 403 para uma chave recusada. Sem versão publicada de um dos documentos, o log avisa: "Conferência da subida: documento sem versão publicada (...); os envios respondem 503 até a publicação." Com `TERMOS_VERSAO` no ambiente, avisa que ela é ignorada.
+- Na subida do worker, numa thread à parte (gancho `post_worker_init` do `gunicorn.conf.py`, depois do fork), o serviço lê as tabelas pelas colunas das migrações (a de leads, a do aceite e as versões vigentes de `documento_legal`), trava `documento_legal` como a gravação trava e lê o bucket. O log mostra "Conferência da subida: banco ok, com as tabelas das migrações f2b6d8a4c1e9 e c8e2a4f6b0d1." e "Conferência da subida: bucket ok, privado." Senão, mostra o tipo do erro: por exemplo, `OperationalError` para a URL direta no Render, `UndefinedColumn` ou `UndefinedTable` sem as migrações, `InsufficientPrivilege` para um papel que não pode travar `documento_legal` e 401 ou 403 para uma chave recusada. Sem versão publicada de um dos documentos, o log avisa: "Conferência da subida: documento sem versão publicada (...); os envios respondem 503 até a publicação."
 - Na primeira vez que aparece cada contagem de entradas do `X-Forwarded-For` (de 0 a 6, e "7 ou mais"), o log mostra só a contagem: "X-Forwarded-For com N entrada(s); PROXIES_CONFIAVEIS=2." Com o serviço no ar, abra `https://<serviço>/ping` no navegador, de fora, e procure a linha do mesmo instante (cada linha tem a hora). Se ela disser 2, o padrão está certo. Se disser outro número, use esse número em `PROXIES_CONFIAVEIS`. Se nenhuma linha nova aparecer, a sua contagem já tinha aparecido antes. A contagem 0 é a do health check interno do Render.
 
 **Limites conhecidos (threads do gunicorn).**

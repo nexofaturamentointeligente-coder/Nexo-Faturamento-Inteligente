@@ -403,11 +403,6 @@ def obter_situacao_contratual(empresa: Empresa | None, *, instante: datetime | N
     )
 
 
-def obter_estado_efetivo_empresa(empresa, *, instante=None, sessao=None) -> str:
-    return obter_situacao_contratual(empresa, instante=instante, sessao=sessao,
-                                     carregar_coberturas=False).estado
-
-
 def condicao_sql_vinculo_contratual(instante: datetime | None = None, sessao=None):
     """Cláusula SQL equivalente a acesso_portal para empresas não canceladas.
 

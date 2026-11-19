@@ -58,7 +58,7 @@ from contas_email import normalizar_email
 import diagnostico_cenario
 from emails import email_valido
 import entitlements
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 from etl_limits import get_limits
 import etl_runtime
 from etl_uploads import vaga_de_entrada

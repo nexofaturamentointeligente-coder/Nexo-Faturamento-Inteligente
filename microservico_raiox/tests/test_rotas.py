@@ -12,7 +12,7 @@ from werkzeug.test import EnvironBuilder
 
 from app import (BRASILIA, FILA_DA_TRIAGEM, SERVICO, TERMOS_ATUALIZADOS, TERMOS_INDISPONIVEIS, FilaDaTriagem,
                  conferir_dependencias, create_app)
-from configuracao import AVISO_TERMOS_VERSAO, MEGABYTE, Configuracao
+from configuracao import MEGABYTE, Configuracao
 from limite import LimitePorIp
 from repositorio import TermosIndisponiveis, Vigente
 from tests.apoio import (CSV, IDS_DA_LANDING, ORIGEM, TIPO_XLSX, VIGENTES, ArmazenamentoFalso, RepositorioFalso,
@@ -818,17 +818,13 @@ class TermosTests(_RotasCase):
         for endereco in ("177.45.67.89", "104.22.17.40", "10.21.157.68"):
             self.assertNotIn(endereco, texto)
 
-    def test_termos_versao_do_ambiente_e_ignorada_com_aviso(self):
+    def test_termos_versao_do_ambiente_e_ignorada(self):
         ambiente = {"DATABASE_URL": "postgresql://usuario@banco.exemplo/nexo", "SUPABASE_KEY": "sb_secret_teste",
                     "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co", "CORS_ORIGENS": ORIGEM,
                     "PROXIES_CONFIAVEIS": "0", "TERMOS_VERSAO": "isto não é uma versão válida"}
         do_ambiente = Configuracao.de_ambiente(ambiente)
         self.assertTrue(do_ambiente.pronta, do_ambiente.problemas)
-        with self.assertLogs("nexo_raiox", "WARNING") as registro:
-            self.montar(do_ambiente)
-        texto = "\n".join(registro.output)
-        self.assertIn(AVISO_TERMOS_VERSAO, texto)
-        self.assertNotIn("isto não é", texto)
+        self.montar(do_ambiente)
         resposta = self.enviar(arquivos=(), interesse="3")
         self.assertEqual(resposta.status_code, 201, resposta.get_json())
         self.assertEqual(self.repositorio.gravados[0]["termos_versao"], "TU-v1.0 PP-v1.0")

@@ -270,7 +270,8 @@ Toda nova tabela filha exige atualizar a enumeração manual e/ou o cascade ORM 
 - Referências **legadas** (sem prefixo `db:`) apontam para disco (`UPLOAD_FOLDER` ou `static/`).
   O disco do Render é efêmero; esses arquivos **não entram** num dump do banco.
   `migrar_arquivos_para_db.py` copia legados para o banco (dry-run por padrão, `--apply` grava).
-- Cache em `tempfile.gettempdir()/nexo_arquivos` é regenerável e não é fonte de recuperação.
+- Não há cache local dos arquivos do banco: `storage.resolver()` recusa referência `db:`, e a cópia
+  do ETL (`storage.materializar_para_etl()`) é exclusiva e apagada ao sair do contexto.
 - `/midia/<chave>` exige login e só serve o prefixo `guia/` (`app.py:261-277`).
 
 **Cobertura do backup [VALIDADO LOCALMENTE]:** o ensaio isolado comprovou que um `pg_dump` custom

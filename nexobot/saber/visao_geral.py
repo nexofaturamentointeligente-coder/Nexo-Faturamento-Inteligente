@@ -27,9 +27,9 @@ REGISTROS = (
             "estratégica sobre dados que a sua loja já possui."
         ),
         detalhes=(
-            "O projeto nasceu como MVP acadêmico voltado a lojas de tintas e pequenos comércios de "
-            "construção, reforma e pintura, e evoluiu para uma aplicação com várias empresas clientes "
-            "(cada uma vê somente os próprios dados). O trabalho é mediado por consultores: nenhuma "
+            "O NEXO nasceu voltado a lojas de tintas e pequenos comércios de construção, reforma e "
+            "pintura, e evoluiu para uma aplicação com várias empresas clientes (cada uma vê somente "
+            "os próprios dados). O trabalho é mediado por consultores: nenhuma "
             "análise é publicada automaticamente."
         ),
         perguntas=(

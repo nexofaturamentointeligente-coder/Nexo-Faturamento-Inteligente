@@ -55,7 +55,7 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import math
 
-import avaliacao_motor
+import avaliacao_regras
 import inteligencia_estoque
 import triagem_cenario
 
@@ -306,11 +306,11 @@ def _ajustes_da_meta(meta: dict, anos) -> list:
         raise ValueError("Ajustes da meta fora do formato.")
     saida = []
     for valores in ajustes.values():
-        if not isinstance(valores, dict) or set(valores) != set(avaliacao_motor.CHAVES_AJUSTES):
+        if not isinstance(valores, dict) or set(valores) != set(avaliacao_regras.CHAVES_AJUSTES):
             raise ValueError("Ajustes da meta fora do formato.")
         convertidos = {}
         for chave, valor in valores.items():
-            if type(valor) not in (int, float) or not math.isfinite(valor) or not 0 <= valor < avaliacao_motor.TETO_DINHEIRO_DA_META:
+            if type(valor) not in (int, float) or not math.isfinite(valor) or not 0 <= valor < avaliacao_regras.TETO_DINHEIRO_DA_META:
                 raise ValueError("Ajuste da meta fora do formato.")
             convertidos[chave] = Decimal(str(valor))
         saida.append(convertidos)
@@ -516,7 +516,7 @@ def ler_objeto(texto):
 # Resumos gravados no lead (ficam depois do expurgo): validados aqui, num lugar só, para o payload, as
 # visualizações e as telas. Número fora do formato (texto onde vai número, negativo, não finito ou acima
 # do teto do dinheiro) faz o resumo inteiro valer nada, sem erro 500.
-_TETO_DO_RESUMO = avaliacao_motor.TETO_DINHEIRO_DA_META
+_TETO_DO_RESUMO = avaliacao_regras.TETO_DINHEIRO_DA_META
 _VALORES_DO_RESUMO_DA_INTELIGENCIA = (
     "capital_em_estoque", "capital_excedente_liberavel", "urgencia_receita_a_preco_medio",
     "urgencia_capital_ao_custo", "urgencia_itens_com_estoque", "diferenca_de_preco_adicional",
@@ -596,7 +596,7 @@ def _situacao_dos_dados(lead: dict, registros: list, expira_em, agora):
     das regras) ou None, quando a triagem pode ser refeita com as linhas."""
     if not registros or lead["status"] == "expirado" or expira_em <= agora:
         return "expirado"
-    if {r.get("versao_regras") for r in registros} != {avaliacao_motor.VERSAO_REGRAS_LEAD}:
+    if {r.get("versao_regras") for r in registros} != {avaliacao_regras.VERSAO_REGRAS_LEAD}:
         return "desatualizado"
     return None
 

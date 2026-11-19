@@ -16,7 +16,6 @@ O golden de regressão (test_raio_x_regression) garante que relatório sem esses
 igual ao de antes. Os arquivos são fictícios; tudo roda no próprio processo.
 """
 
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,7 +24,6 @@ from etl_inputs import read_raw
 from etl_limits import ETLLimits, using_limits
 import etl_processor
 from etl_processor import _e_rodape, _parse_valor
-import raio_x
 import raio_x_servico
 import security_gatekeeper as baia
 from tests.raio_x_support import executar_como_o_worker

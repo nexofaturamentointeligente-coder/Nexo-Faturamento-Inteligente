@@ -104,7 +104,7 @@ class TravaPdvCase(ContratosCase):
         super().setUp()
         # O preflight em processo isolado e o worker do ETL exigem Linux: o cálculo é o real, em processo.
         for simulacao in (patch.object(etl_uploads, "run_validation"),
-                          patch("etl_processor.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local)):
+                          patch("etl_regras.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local)):
             simulacao.start()
             self.addCleanup(simulacao.stop)
         self.cli = self._entrar(CLIENTE)
@@ -306,7 +306,7 @@ class FluxoDaTravaTests(TravaPdvCase):
 
     def test_falha_do_etl_nao_grava_conferencia_nova(self):
         self._enviar_e_processar("1.500,00")
-        with patch("etl_processor.calcular_kpis_em_memoria",
+        with patch("etl_regras.calcular_kpis_em_memoria",
                    side_effect=etl_processor.ETLValidationError("Falha sintética.")):
             self._enviar_admin(total="1.515,00")
             self._processar()

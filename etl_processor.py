@@ -19,7 +19,7 @@ Estratégia (4 camadas):
      contém marcadores de rodapé/cabeçalho repetido (totais, "Movimenta",
      marca d'água "LabSofti" etc.).
 
-Regras inegociáveis (MVP/PI2):
+Regras do produto (não mudar sem decisão do dono):
   - DataFrames vivem APENAS em memória; só os KPIs finais são persistidos.
   - O indicador de descasamento é "Indicador de Pressão de Estoque"
     (saldo estimado entre compras e vendas). NUNCA expor lucro, margem,
@@ -37,32 +37,36 @@ Regras inegociáveis (MVP/PI2):
 Assinatura imutável:
   processar_arquivos_analise(caminho_vendas, caminho_compras,
                              id_analise, db_session) -> ResultadoETL
+
+O orquestrador, o resultado, a trava do PDV e a leitura de um valor em dinheiro ficam em
+etl_regras.py, só com a biblioteca padrão: o processo web os usa sem carregar pandas e numpy,
+que só o processo isolado do ETL (etl_worker) importa. Os nomes continuam valendo por aqui.
 """
 
 import os
 import re
-import csv
-import io
 import logging
 import math
-import numbers
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime
 from collections import Counter, namedtuple
-from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import delete, insert, select
 
+from etl_erros import ETLValidationError
 from etl_inputs import ETLInputError, read_raw
 from etl_limits import get_limits
+# Uma só fonte: o que o processo web também usa vem de etl_regras (ver o fim da docstring).
+from etl_regras import (  # noqa: F401
+    LIMITE_CATEGORIA, STATUS_PDV_CONCLUIDO, STATUS_PDV_DIVERGENTE, TOLERANCIA_PDV, ResultadoETL,
+    _RE_MILHAR_PONTO, _RE_MILHAR_VIRGULA, _RE_MOEDA, _SINAIS_DE_MENOS, _interpretar_monetario,
+    _limpar_monetario, _persistir_curva_abc, _persistir_indicadores, _reais, _separar_sinal,
+    calcular_kpis_em_memoria, conferir_total_pdv, converter_valor_monetario, em_centavos,
+    faturamento_bruto, processar_arquivos_analise, validar_total_pdv,
+)
 
 logger = logging.getLogger(__name__)
-
-ResultadoETL = namedtuple(
-    "ResultadoETL", ["sucesso", "mensagem", "kpis", "telemetria", "alertas"]
-)
 
 # Limiares do Princípio de Pareto (Curva ABC) sobre o faturamento ACUMULADO:
 #   Classe A (Estratégicos): até 80%
@@ -70,18 +74,6 @@ ResultadoETL = namedtuple(
 #   Classe C (Operacionais): acima de 95%
 ABC_LIMITE_A = 80.0
 ABC_LIMITE_B = 95.0
-
-# Trava do total do PDV: diferença maior que a tolerância bloqueia a publicação.
-TOLERANCIA_PDV = Decimal("1.00")
-STATUS_PDV_CONCLUIDO = "CONCLUIDO"
-STATUS_PDV_DIVERGENTE = "DIVERGENTE_PDV"
-
-
-class ETLValidationError(ETLInputError):
-    """Mantém o tipo público anterior e a identificação segura de limites."""
-
-    def __init__(self, mensagem, code="data"):
-        super().__init__(code, mensagem)
 
 
 class ETLLeiauteAmbiguo(ETLValidationError):
@@ -109,11 +101,6 @@ class ETLRelatorioDeCompras(ETLLeiauteAmbiguo):
         # Reconhecido pelo título do topo ("Relatório de Compras", "Posição das compras"), e não só pelas colunas: o
         # lote com venda o deixa fora das contas mesmo sem a âncora, porque não há venda nele (raio_x._ler_envio_uma_vez).
         self.pelo_titulo = pelo_titulo
-
-
-# Encodings e separadores tentados em sequência para arquivos texto/CSV
-ENCODINGS = ("utf-8-sig", "cp1252", "utf-8", "latin1")
-SEPARADORES = (";", ",", "\t", "|")
 
 
 # =====================================================================
@@ -318,104 +305,16 @@ def _converter_serie(serie: pd.Series) -> pd.Series:
     return pd.Series([_parse_valor(v) for v in serie], index=serie.index, dtype="float64")
 
 
-# Milhar só com grupos de 3 dígitos depois de um início sem zero: "0.125" nunca é milhar.
-_RE_MILHAR_PONTO = re.compile(r"[1-9][0-9]{0,2}(?:\.[0-9]{3})+")
-_RE_MILHAR_VIRGULA = re.compile(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+")
-# A mesma linguagem de sempre ("[0-9]+[.,]?[0-9]*|[.,][0-9]+"), escrita sem retrocesso quadrático:
-# uma célula com 16 mil dígitos levava 3 s.
-_RE_DECIMAL = re.compile(r"[0-9]+(?:[.,][0-9]*)?|[.,][0-9]+")
-_RE_CASAS_DECIMAIS = re.compile(r"[0-9]+")
-_RE_CIENTIFICO = re.compile(r"[0-9]+(?:[.,][0-9]+)?[eE][+-]?[0-9]+")
+# A leitura de um valor em dinheiro (_limpar_monetario, _separar_sinal, _interpretar_monetario e
+# converter_valor_monetario, com os padrões de milhar, decimal e moeda) fica em etl_regras: a trava
+# do PDV lê o total digitado com a mesma regra, no processo web.
 _RE_PONTO_DECIMAL = re.compile(r"[0-9,]*\.[0-9]+")
 _RE_VIRGULA_DECIMAL = re.compile(r"[0-9.]*,[0-9]+")
-_RE_MOEDA = re.compile(r"r\$|us\$|brl|usd|\$", re.IGNORECASE)
-_SINAIS_DE_MENOS = str.maketrans({"−": "-", "–": "-", "﹣": "-", "－": "-"})
 # O travessão ("—"), o traço de algarismo ("‒") e a barra horizontal ("―") sozinhos são a célula vazia
 # (o zero do relatório formatado), como o "-": sem o alerta de valor inválido. Antes do número, não são sinal: o
 # número fica como sempre foi lido.
 _TRACOS_SOZINHOS = ("—", "‒", "―")
 _VALORES_EM_BRANCO = {"", "-", "--", "nan", "none", "null", "na", "n/a", "nd", "n/d", *_TRACOS_SOZINHOS}
-
-
-def _limpar_monetario(valor) -> str:
-    """Tira espaços, caracteres invisíveis, aspas de texto do Excel e símbolo de moeda."""
-    texto = str(valor).translate(_SINAIS_DE_MENOS)
-    texto = "".join(c for c in texto if unicodedata.category(c)[0] not in "CZ")
-    return _RE_MOEDA.sub("", texto.strip("'\""))
-
-
-def _separar_sinal(corpo: str) -> tuple:
-    """(negativo, corpo sem sinal): aceita "(10)", "-10" e "10-", formatos de PDV."""
-    negativo = False
-    if corpo.startswith("(") and corpo.endswith(")"):
-        negativo, corpo = True, corpo[1:-1]
-    if corpo.startswith("-"):
-        negativo, corpo = True, corpo[1:]
-    elif corpo.endswith("-"):
-        negativo, corpo = True, corpo[:-1]
-    return negativo, corpo.removeprefix("+")
-
-
-def _normalizar_separadores(corpo: str, ponto_decimal: bool, virgula_milhar: bool = False):
-    """Texto aceito por float(), ou None se os separadores não formam um número.
-    `virgula_milhar`: a coluna é en-US pelo texto das células (_coluna_usa_virgula_de_milhar), então
-    "12,500" é doze mil e quinhentos; sem isso, como sempre, é doze e meio."""
-    if _RE_CIENTIFICO.fullmatch(corpo):
-        return corpo.replace(",", ".")
-    virgula, ponto = corpo.rfind(","), corpo.rfind(".")
-    if virgula >= 0 and ponto >= 0:
-        # O separador mais à direita é o decimal; o outro só pode agrupar milhares.
-        decimal_br = virgula > ponto
-        inteiro, _, casas = corpo.rpartition("," if decimal_br else ".")
-        agrupado = _RE_MILHAR_PONTO if decimal_br else _RE_MILHAR_VIRGULA
-        if not (agrupado.fullmatch(inteiro) and _RE_CASAS_DECIMAIS.fullmatch(casas)):
-            return None
-        return inteiro.replace("." if decimal_br else ",", "") + "." + casas
-    if corpo.count(",") > 1:
-        return corpo.replace(",", "") if _RE_MILHAR_VIRGULA.fullmatch(corpo) else None
-    if corpo.count(".") > 1:
-        return corpo.replace(".", "") if _RE_MILHAR_PONTO.fullmatch(corpo) else None
-    if _RE_MILHAR_PONTO.fullmatch(corpo) and not ponto_decimal:
-        return corpo.replace(".", "")
-    # Numa coluna en-US pelo texto das células ("1,234.56"), "12,500" é milhar: doze mil e quinhentos.
-    if virgula_milhar and _RE_MILHAR_VIRGULA.fullmatch(corpo):
-        return corpo.replace(",", "")
-    return corpo.replace(",", ".") if _RE_DECIMAL.fullmatch(corpo) else None
-
-
-def _interpretar_monetario(valor, ponto_decimal: bool = False, virgula_milhar: bool = False):
-    """Float finito, ou None quando o valor é nulo ou inválido."""
-    if valor is None or isinstance(valor, bool):
-        return None
-    if isinstance(valor, (numbers.Real, Decimal)):
-        numero = float(valor)
-        return numero if math.isfinite(numero) else None
-    negativo, corpo = _separar_sinal(_limpar_monetario(valor))
-    texto = _normalizar_separadores(corpo, ponto_decimal, virgula_milhar)
-    if texto is None:
-        return None
-    numero = float(texto)
-    if not math.isfinite(numero):
-        return None
-    return -numero if (negativo and numero) else numero
-
-
-def converter_valor_monetario(valor, ponto_decimal: bool = False, virgula_milhar: bool = False) -> float:
-    """
-    Converte um valor em dinheiro para float, sem nunca interromper o processamento:
-    nulo ou inválido vira 0.0.
-
-      "R$ 12.500,50" -> 12500.5     "12.500" -> 12500.0     "1.234.567" -> 1234567.0
-      "1,234.56"     -> 1234.56     "12,5"   -> 12.5        "0.125"     -> 0.125
-      "(10,00)"      -> -10.0       "10,00-" -> -10.0       "abc"       -> 0.0
-
-    `ponto_decimal=True` lê "12.500" como 12.5, para colunas que mostram usar o ponto
-    como decimal (ver _coluna_usa_ponto_decimal); `virgula_milhar=True` lê "12,500" como
-    12500.0, para colunas en-US pelo texto (ver _coluna_usa_virgula_de_milhar). Um valor
-    sozinho não tem como revelar nenhum dos dois.
-    """
-    numero = _interpretar_monetario(valor, ponto_decimal, virgula_milhar)
-    return 0.0 if numero is None else numero
 
 
 def _coluna_usa_ponto_decimal(corpos: list) -> bool:
@@ -498,20 +397,6 @@ def _fechar_qualidade(qualidade: Counter) -> dict:
 # =====================================================================
 # 3) Leitura defensiva (.xlsx / .csv) sem assumir cabeçalho
 # =====================================================================
-def _trim_vazios(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Remove linhas e colunas COMPLETAMENTE vazias da matriz crua. Resolve dois
-    tipos de "sujeira" comuns em exportações de PDV sem mascarar dado real:
-      - linhas em branco decorativas no topo (empurram o cabeçalho para baixo);
-      - colunas vazias à esquerda/entre dados (deslocamento de colunas).
-    `how="all"` só descarta o que é integralmente nulo — nenhum dado é perdido.
-    """
-    if df is None or df.empty:
-        return df
-    limpo = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
-    return limpo.reset_index(drop=True) if not limpo.empty else df
-
-
 def _ler_bruto(caminho_arquivo: str) -> pd.DataFrame:
     """Leitura limitada; conversões e seleção de aba preservam o contrato anterior."""
     try:
@@ -555,7 +440,7 @@ ALIAS_VENDAS = {
     "quantidade":  ["qtde vend", "qtde vendida", "quantidade vendida", "qtd vendida",
                     "qtde total", "qtd vend", "qtde", "quantidade", "qtd"],
     # 'lucro' é DETECTADO defensivamente (reservar a coluna) e DESCARTADO
-    # no cálculo. NEXO/PI2 NÃO usa lucro/CMV como KPI — terminologia oficial.
+    # no cálculo. O NEXO não usa lucro/CMV como KPI da análise mensal — terminologia oficial.
     "lucro":       ["lucro"],
 }
 
@@ -1145,7 +1030,6 @@ _CATEGORIAS_GENERICAS = frozenset({
     "a classificar", "indefinido", "indefinida", "padrao", "geral", "nenhum", "nenhuma", "null", "none", "nan",
     "n a", "na", "nd", "0", "00", "000", "999", "9999",
 })
-LIMITE_CATEGORIA = 80
 # Palavra de cadastro no título da coluna lida como código ou como produto: o dicionário de vendas pegou
 # a coluna errada ("Cód. NCM" antes de "Código", "Grupo do Produto" antes da descrição).
 _RE_TITULO_DE_CADASTRO = re.compile(
@@ -3102,23 +2986,9 @@ def _alerta_de_compras(consolidacao: dict) -> str:
     return "Compras líquidas: " + "; ".join(partes) + "."
 
 
-def _reais(valor: float) -> str:
-    inteiro, _, centavos = f"{abs(valor):,.2f}".partition(".")
-    return ("-" if valor < 0 else "") + inteiro.replace(",", ".") + "," + centavos
-
-
 # =====================================================================
 # 7) Cálculo dos KPIs em memória (sem tocar no banco)
 # =====================================================================
-def calcular_kpis_em_memoria(caminho_vendas: str, caminho_compras: str) -> ResultadoETL:
-    """Calcula sem banco em processo próprio; limites não dependem de threads."""
-    from etl_runtime import run_calculation
-    try:
-        return run_calculation(caminho_vendas, caminho_compras, get_limits())
-    except ETLInputError as erro:
-        raise ETLValidationError(erro.safe_message, erro.code) from None
-
-
 def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> ResultadoETL:
     nome_v = os.path.basename(caminho_vendas)
 
@@ -3298,132 +3168,3 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
         telemetria=telemetria,
         alertas=alertas,
     )
-
-
-# =====================================================================
-# 7a) Trava do total do PDV (regra pura; o banco fica em validacao_pdv.py)
-# =====================================================================
-def em_centavos(valor) -> Decimal:
-    """Valor arredondado ao centavo. Comparar em float erraria na fronteira de R$ 1,00:
-    131072.70 - 131071.70 dá 1.0000000000145519, e uma diferença de 1,00 viraria divergência."""
-    with localcontext() as contexto:
-        contexto.prec = 400  # cabe qualquer float finito: o quantize não pode estourar a precisão
-        return Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def validar_total_pdv(faturamento_bruto_calculado, valor_pdv_informado) -> dict:
-    """
-    Compara o total informado no PDV com o faturamento bruto calculado pelo ETL.
-
-    `status` é o resultado da CONFERÊNCIA, e não o da análise: CONCLUIDO aqui só diz que
-    os totais batem. A análise segue em EM_ANALISE até a publicação humana.
-    """
-    calculado = em_centavos(faturamento_bruto_calculado)
-    informado = em_centavos(valor_pdv_informado)
-    diferenca = abs(calculado - informado)
-    return {
-        "status": STATUS_PDV_DIVERGENTE if diferenca > TOLERANCIA_PDV else STATUS_PDV_CONCLUIDO,
-        "valor_pdv_informado": informado,
-        "faturamento_bruto_calculado": calculado,
-        "diferenca": diferenca,
-    }
-
-
-def faturamento_bruto(resultado: ResultadoETL) -> float:
-    """Soma das vendas válidas: sem as canceladas e antes de deduzir devoluções e trocas."""
-    return resultado.kpis["faturamento_total"] + resultado.telemetria.get("valor_devolucoes", 0.0)
-
-
-def conferir_total_pdv(resultado: ResultadoETL, valor_pdv_informado) -> ResultadoETL:
-    """
-    Acrescenta a conferência à telemetria do retorno, para auditoria. Roda no processo
-    pai, depois do cálculo: valor digitado não entra no processo isolado do ETL, e a
-    assinatura de processar_arquivos_analise continua a mesma.
-    """
-    conferencia = validar_total_pdv(faturamento_bruto(resultado), valor_pdv_informado)
-    return resultado._replace(telemetria={**resultado.telemetria, "conferencia_pdv": conferencia})
-
-
-# =====================================================================
-# 8) Persistência (somente KPIs finais) + orquestrador oficial
-# =====================================================================
-def _persistir_indicadores(db_session, id_analise: int, kpis: dict) -> None:
-    from models import IndicadorAnalise
-    indicador = db_session.execute(
-        select(IndicadorAnalise).where(IndicadorAnalise.id_analise == id_analise)
-    ).scalar_one_or_none()
-
-    if indicador is None:
-        indicador = IndicadorAnalise(id_analise=id_analise, versao_processamento=1)
-        db_session.add(indicador)
-    else:
-        indicador.versao_processamento = (indicador.versao_processamento or 0) + 1
-
-    indicador.faturamento_total = kpis["faturamento_total"]
-    indicador.total_comprado = kpis["total_comprado"]
-    indicador.saldo_estimado_compras_vendas = kpis["saldo_estimado_compras_vendas"]
-    indicador.produto_mais_vendido_nome = kpis["produto_mais_vendido_nome"]
-    indicador.produto_mais_vendido_quantidade = kpis["produto_mais_vendido_quantidade"]
-    indicador.produto_maior_faturamento_nome = kpis["produto_maior_faturamento_nome"]
-    indicador.produto_maior_faturamento_valor = kpis["produto_maior_faturamento_valor"]
-    indicador.produto_maior_saldo_parado_nome = kpis["produto_maior_saldo_parado_nome"]
-    indicador.saldo_estimado_parado = kpis["saldo_estimado_parado"]
-    indicador.periodo_base_inicio = kpis.get("periodo_base_inicio")
-    indicador.periodo_base_fim = kpis.get("periodo_base_fim")
-    indicador.data_geracao = datetime.now(timezone.utc)
-
-
-def _persistir_curva_abc(db_session, id_analise: int, kpis: dict) -> None:
-    """
-    Regrava (idempotente) a Curva ABC completa em produto_curva_abc: apaga as linhas
-    anteriores desta análise e insere o ranking novo. Reflete o reprocessamento — cada
-    execução do ETL substitui a Curva ABC anterior. Em lote, porque agora são todos os
-    produtos do período, e não só os primeiros.
-    """
-    from models import ProdutoCurvaABC
-    # Limpa o ranking anterior desta análise (reprocessamento limpo).
-    db_session.execute(delete(ProdutoCurvaABC).where(ProdutoCurvaABC.id_analise == id_analise))
-
-    linhas = [
-        {
-            "id_analise": id_analise,
-            "posicao_ranking": p["posicao"],
-            "produto_nome": p["nome"],
-            "faturamento": p["faturamento"],
-            "quantidade": p.get("quantidade"),
-            "percentual_individual": p["perc_individual"],
-            "percentual_acumulado": p["perc_acumulado"],
-            "classe_abc": p["classe"],
-        }
-        for p in kpis.get("curva_abc", {}).get("produtos", [])
-    ]
-    if linhas:
-        db_session.execute(insert(ProdutoCurvaABC), linhas)
-
-
-def processar_arquivos_analise(caminho_vendas: str, caminho_compras: str,
-                               id_analise: int, db_session) -> ResultadoETL:
-    """
-    Orquestrador oficial (assinatura imutável). Calcula em memória e persiste
-    APENAS os KPIs finais. NÃO comita (caller controla transação) e NÃO
-    persiste linhas processadas. Em falha, retorna sucesso=False sem gravar.
-    """
-    try:
-        resultado = calcular_kpis_em_memoria(caminho_vendas, caminho_compras)
-        # Somente o processo pai recebe a Session. O SAVEPOINT mantém KPIs/ABC
-        # anteriores intactos em falha, sem soltar o lock externo da análise.
-        with db_session.begin_nested():
-            _persistir_indicadores(db_session, id_analise, resultado.kpis)
-            _persistir_curva_abc(db_session, id_analise, resultado.kpis)
-            db_session.flush()
-        return resultado._replace(
-            mensagem="Processamento concluído. KPIs consolidados + Curva ABC persistidos."
-        )
-    except ETLInputError as erro:
-        logger.warning("ETL recusado (%s).", erro.code)
-        return ResultadoETL(sucesso=False, mensagem=erro.safe_message,
-                            kpis={}, telemetria={}, alertas=[])
-    except Exception as erro:  # não registrar SQL, caminhos, conteúdo ou credenciais
-        logger.warning("Processamento ETL indisponível (%s).", type(erro).__name__)
-        return ResultadoETL(sucesso=False, mensagem="Não foi possível concluir o processamento com segurança. Tente novamente ou revise os arquivos.",
-                            kpis={}, telemetria={}, alertas=[])

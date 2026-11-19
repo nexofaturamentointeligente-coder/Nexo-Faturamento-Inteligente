@@ -8,7 +8,6 @@ NEXO_TEST_BROWSER=1, como na CI. Nenhuma conexão de produção.
 
 from html.parser import HTMLParser
 import os
-from pathlib import Path
 import re
 import threading
 import unittest

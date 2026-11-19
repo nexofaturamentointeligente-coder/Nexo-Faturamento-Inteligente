@@ -27,7 +27,7 @@ Regras da leitura:
     formato, caminho que não seja exatamente o de um relatório DESTE lead (AAAA/MM/<id>/NN-<16 hex>.<csv|xlsx>),
     formato fora de csv e xlsx, SHA-256 que não começa pelos 16 hexadecimais do caminho ou tamanho fora de 1 byte a
     15 MB tiram o item da lista, e ele nunca vira pedido ao Storage. O conteúdo baixado tem de bater com o tamanho e
-    o SHA-256 registrados (baixar).
+    o SHA-256 registrados (baixar, e baixar_para, que grava direto num arquivo).
   - Nenhuma mensagem de erro leva a chave, o endereço ou o caminho do objeto: só o status ou o tipo da falha.
 """
 
@@ -58,7 +58,7 @@ MAX_BYTES = 15 * MEGABYTE
 # Relatórios por envio no microsserviço (MAX_ARQUIVOS): mais que isso no JSON não veio dele.
 MAX_PLANILHAS = 12
 # O microsserviço recusa o envio que passa de 15 MB somados: um registro que soma mais não veio dele, e o excedente
-# fica de fora (o .zip e o processamento montam tudo na memória do processo web).
+# fica de fora (o .zip monta tudo na memória do processo web; o processamento grava as planilhas em disco).
 TOTAL_MAXIMO = MAX_BYTES
 PRAZO_SEGUNDOS = 30
 # O CHECK da coluna arquivos_storage do lead (models.ARQUIVOS_STORAGE_MAXIMO): texto maior não é lido.
@@ -297,6 +297,11 @@ class ArmazenamentoLeads:
         """O conteúdo do objeto, até `maximo` bytes (e nunca além do teto); ErroDeArmazenamento em qualquer falha:
         status de erro, redirecionamento, rede, resposta cortada ou malformada, prazo total vencido e objeto maior que
         o teto (pelo Content-Length ou pelo que chegou)."""
+        return b"".join(self._blocos(caminho, maximo))
+
+    def _blocos(self, caminho: str, maximo: int = None):
+        """Os blocos do objeto (até 64 KiB cada), na ordem em que chegam, com as mesmas conferências e recusas do
+        ler."""
         maximo = self._max_bytes if maximo is None else min(maximo, self._max_bytes)
         prazo = time.monotonic() + self._timeout
         pedido = urllib.request.Request(self._url(caminho), method="GET")
@@ -311,7 +316,7 @@ class ArmazenamentoLeads:
                         raise ErroDeArmazenamento("o Storage respondeu fora do formato")
                     if int(declarado) > maximo:
                         raise ErroDeArmazenamento("o arquivo passa do tamanho permitido")
-                partes, lidos = [], 0
+                lidos = 0
                 while True:
                     if time.monotonic() > prazo:
                         raise ErroDeArmazenamento("o Storage não terminou de responder no prazo")
@@ -322,8 +327,7 @@ class ArmazenamentoLeads:
                     lidos += len(bloco)
                     if lidos > maximo:
                         raise ErroDeArmazenamento("o arquivo passa do tamanho permitido")
-                    partes.append(bloco)
-                return b"".join(partes)
+                    yield bloco
         except ErroDeArmazenamento:
             raise
         except urllib.error.HTTPError as erro:
@@ -340,6 +344,23 @@ class ArmazenamentoLeads:
         if len(conteudo) != planilha.tamanho or hashlib.sha256(conteudo).hexdigest() != planilha.sha256:
             raise ErroDeArmazenamento("o arquivo do Storage não confere com o registrado")
         return conteudo
+
+    def baixar_para(self, planilha: Planilha, destino) -> None:
+        """Grava a planilha no arquivo novo `destino`, bloco a bloco (nada dela fica na memória do processo web), com
+        as conferências do baixar: o mesmo teto e o tamanho e o SHA-256 registrados pelo microsserviço. Se não
+        confere, ErroDeArmazenamento, e o arquivo gravado fica para quem chamou descartar (a pasta temporária dele)."""
+        digest, tamanho = hashlib.sha256(), 0
+        blocos = self._blocos(planilha.caminho, maximo=planilha.tamanho)
+        try:
+            with open(destino, "xb") as arquivo:
+                for bloco in blocos:
+                    tamanho += len(bloco)
+                    digest.update(bloco)
+                    arquivo.write(bloco)
+        finally:
+            blocos.close()
+        if tamanho != planilha.tamanho or digest.hexdigest() != planilha.sha256:
+            raise ErroDeArmazenamento("o arquivo do Storage não confere com o registrado")
 
 
 def do_app(config) -> ArmazenamentoLeads:

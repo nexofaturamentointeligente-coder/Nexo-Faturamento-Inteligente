@@ -48,7 +48,6 @@ import threading
 import time
 import unittest
 import uuid
-from unittest.mock import patch
 
 from tests.test_contratos_postgresql import ROOT, TOOLS, _PrivateCluster, _safe_environment, _tool
 

@@ -9,11 +9,11 @@
 | | |
 |---|---|
 | **Stack** | Python · Flask · SQLAlchemy 2.x · PostgreSQL (Supabase) / SQLite · Pandas · NumPy · Socket.IO · Bootstrap 5 · Plotly.js · Claude (Anthropic) |
-| **Status** | Produção (TCC) — multi-tenant, com segurança hardened, tempo real e IA |
+| **Status** | Em produção — multiempresa (multi-tenant), com segurança reforçada, tempo real e IA |
 
 O **NEXO** diagnostica descasamentos operacionais e financeiros no varejo a partir dos dados brutos exportados pelo PDV do cliente. Em vez de competir com sistemas de ERP ou contabilidade, a plataforma entrega uma camada de **inteligência sobre dados que o lojista já possui**, mas raramente consegue interpretar de forma estratégica.
 
-O projeto nasceu como MVP acadêmico (Projeto Integrador) e evoluiu, ao longo do desenvolvimento, para uma aplicação com arquitetura de nível de produção: migração para Postgres/Supabase, motor de ETL hardened contra *chaos engineering*, segurança (CSRF, rate limiting, anti open-redirect, revalidação de sessão), tempo real via WebSocket, devolutiva gerada por IA com *fail-safe* determinístico, exportação executiva em PDF e um assistente de suporte (NexoBot).
+A plataforma opera sobre PostgreSQL/Supabase e reúne um motor de ETL resistente a arquivos malformados (validado com testes de *chaos engineering*), segurança em todas as camadas (CSRF, rate limiting, anti open-redirect, revalidação de sessão), tempo real via WebSocket, devolutiva gerada por IA com *fail-safe* determinístico, exportação executiva em PDF e um assistente de suporte (NexoBot).
 
 ---
 
@@ -69,7 +69,7 @@ Flask App Factory (app.py)
    ou SQLite (dev local rápido)
 ```
 
-Para o detalhamento completo da arquitetura (incluindo diagrama Mermaid do fluxo de dados e o DER com as 13 entidades), ver **[`docs/RELATORIO_TECNICO.md`](docs/RELATORIO_TECNICO.md)**.
+Para o detalhamento da arquitetura (incluindo diagrama Mermaid do fluxo de dados e o DER), ver **[`Docs/RELATORIO_TECNICO.md`](Docs/RELATORIO_TECNICO.md)**.
 
 ---
 
@@ -83,6 +83,13 @@ Para o detalhamento completo da arquitetura (incluindo diagrama Mermaid do fluxo
 - Exportação da análise publicada em **PDF executivo** (ReportLab).
 - Fluxo de publicação com rascunho → homologação → publicação, visível ao cliente apenas após publicado.
 
+**Diagnóstico, planos e captação**
+- Planos por nível de inteligência (BRONZE, PRATA, OURO e CUSTOM), com controle de acesso por funcionalidade e o Raio-X do PDV como diagnóstico de entrada — ver [`Docs/PLANOS_E_RAIO_X.md`](Docs/PLANOS_E_RAIO_X.md).
+- 21 indicadores executivos calculados pelo motor — ver [`Docs/INDICADORES_EXECUTIVOS.md`](Docs/INDICADORES_EXECUTIVOS.md).
+- Trava de validação do total do PDV: impede publicar uma devolutiva cujo faturamento não bate com o total que o PDV mostra — ver [`Docs/TRAVA_TOTAL_PDV.md`](Docs/TRAVA_TOTAL_PDV.md).
+- Avaliação de Cenário dos leads no portal do consultor — ver [`Docs/AVALIACAO_DE_CENARIO.md`](Docs/AVALIACAO_DE_CENARIO.md).
+- Landing comercial com pré-cadastro e captação de leads — ver [`Docs/PRE_CADASTRO_LANDING.md`](Docs/PRE_CADASTRO_LANDING.md). O Raio-X da landing roda em um microsserviço próprio, com dependências separadas ([`microservico_raiox/README.md`](microservico_raiox/README.md)).
+
 **Operação e ciclo de vida**
 - **Sistema de Lixeira (Soft Delete + Hard Delete):** exclusão de empresa é reversível (`deletado_em`) até a exclusão permanente explícita, que então **cascade-deleta** análises, uploads, indicadores, relatórios e Curva ABC via ORM (`cascade="all, delete-orphan"`).
 - Primeiro acesso com senha temporária + ativação de conta por token assinado (`itsdangerous`, expira em 15 min).
@@ -90,17 +97,17 @@ Para o detalhamento completo da arquitetura (incluindo diagrama Mermaid do fluxo
 
 **Tempo real e suporte**
 - Notificações via WebSocket (Socket.IO) em sala exclusiva por usuário — sininho da navbar, sem broadcast aberto.
-- **NexoBot Advanced 2.0:** manual interativo do NEXO e assistente de navegação, em português do Brasil e sem depender de IA externa — base de conhecimento versionada (`nexobot/saber/`, 174 registros verificados no código, com resumo, explicação, passo a passo e aprofundamento), perguntas amplas ("o que é o NEXO?", "como funciona?"), aprofundamento por contexto ("explique melhor", "me dê um exemplo", "e depois?"), comparações, roteiros guiados, busca BM25F no Guia (CMS `guia_topico`, que tem prioridade), higiene de conteúdo de teste, respostas em blocos estruturados e navegação apenas por catálogo fechado de páginas do cliente. Redação opcional via Hugging Face, sempre validada. Detalhes em [`Docs/NEXOBOT_ADVANCED.md`](Docs/NEXOBOT_ADVANCED.md).
+- **NexoBot Advanced 2.0:** manual interativo do NEXO e assistente de navegação, em português do Brasil e sem depender de IA externa — base de conhecimento versionada (`nexobot/saber/`, com registros verificados no código, resumo, explicação, passo a passo e aprofundamento), perguntas amplas ("o que é o NEXO?", "como funciona?"), aprofundamento por contexto ("explique melhor", "me dê um exemplo", "e depois?"), comparações, roteiros guiados, busca BM25F no Guia (CMS `guia_topico`, que tem prioridade), higiene de conteúdo de teste, respostas em blocos estruturados e navegação apenas por catálogo fechado de páginas do cliente. Redação opcional via Hugging Face, sempre validada. Detalhes em [`Docs/NEXOBOT_ADVANCED.md`](Docs/NEXOBOT_ADVANCED.md).
 - Central de chamados de suporte (Admin ↔ Cliente).
 
-**Segurança (hardened)**
+**Segurança**
 - CSRF global (Flask-WTF) em todas as rotas mutáveis.
 - Rate limiting (Flask-Limiter) em login e recuperação de senha.
 - Proteção anti open-redirect em todos os redirecionamentos que aceitam parâmetro externo (`next`, `referrer`, `link_destino`).
 - Sessão amarrada ao `BOOT_ID` do processo (restart do servidor invalida sessões antigas) + revalidação de `is_active` a cada request (usuário desativado é deslogado imediatamente).
 - Origens de WebSocket restritas (`SOCKETIO_CORS_ORIGINS`) — mitiga Cross-Site WebSocket Hijacking.
 - Debug do Werkzeug bloqueado fora de `development` (recusa explícita a subir com `DEBUG=True` em produção).
-- Erros de banco nunca vazam para o usuário (mensagens genéricas + log interno via `current_app.logger`).
+- Erros inesperados nunca vazam para o usuário: a página de erro mostra uma mensagem genérica com um código para o suporte, e o log interno guarda o traceback com o mesmo código, sem os valores dos parâmetros SQL (`hide_parameters`).
 - Lock otimista (`with_for_update`) no reprocessamento de uma análise, evitando corrida entre dois disparos simultâneos do ETL.
 - Notificações/e-mails sempre disparados **depois** do `commit()` (dispatch-after-commit) — nunca há notificação fantasma de uma transação que sofreu rollback.
 
@@ -113,21 +120,21 @@ O motor (`etl_processor.py`) foi submetido a uma bateria de *chaos engineering* 
 > **Para qualquer arquivo recebido, o motor garante um de dois desfechos — nunca um terceiro:** sucesso honesto (extrai e consolida os KPIs reais) ou recusa acionável (diagnóstico claro do que faltou). **Jamais** uma queda do servidor ou uma análise calculada sobre dados inventados.
 
 Destaques técnicos:
-- Leitura adaptativa: múltiplos *encodings* (`utf-8-sig`, `cp1252`, `latin-1`), múltiplos separadores (`;`, `,`, `\t`, `|`) e `.xlsx` multi-aba (escolhe a aba com mais dados). Uploads aceitos: `.csv` e `.xlsx`; `.xls` não faz parte das dependências desta versão.
+- Leitura adaptativa: múltiplos *encodings* (`utf-8-sig`, `cp1252`, `latin-1`), múltiplos separadores (`;`, `,`, `\t`, `|`) e `.xlsx` multi-aba (escolhe a aba com mais dados). O upload da análise aceita `.csv` e `.xlsx`; o Raio-X aceita também `.xls` (Excel 97-2003) e Planilha XML 2003, lidos por leitores próprios (`etl_biff.py` e `etl_planilha_xml.py`), sem dependência nova.
 - Mapeamento de colunas por *aliases* (independe de nome exato/posição), com resolução determinística do conflito `id_produto` × nome do produto.
 - **Derivação honesta** de totais ausentes (ex.: `quantidade × preço unitário`) — uma operação aritmética sobre dados reais, nunca fabricação de coluna.
 - Curva ABC vetorizada com NumPy (`np.select`), sem `iterrows()` no caminho de cálculo.
 - Rede de segurança final em `processar_arquivos_analise`: qualquer exceção inesperada é capturada e convertida em falha segura, isolada da requisição web.
 
-Cobertura validada (6 camadas de falha, 8 layouts reais, 11+ cenários adversariais) e as decisões deliberadas de escopo (o que **não** foi implementado e por quê) estão documentadas em **[`docs/RELATORIO_COBERTURA_ETL.md`](docs/RELATORIO_COBERTURA_ETL.md)**.
+Cobertura validada (6 camadas de falha, 8 layouts reais, 11+ cenários adversariais) e as decisões deliberadas de escopo (o que **não** foi implementado e por quê) estão documentadas em **[`Docs/RELATORIO_COBERTURA_ETL.md`](Docs/RELATORIO_COBERTURA_ETL.md)**.
 
 ---
 
 ## 🗂️ Estrutura do Projeto
 
 ```text
-nexo_mvp/
-├── docs/                    # Relatório técnico + relatório de cobertura/resiliência do ETL (Mermaid)
+./
+├── Docs/                    # Documentação técnica e de operação (arquitetura, ETL, segurança, deploy)
 ├── migrations/              # Versionamento de schema (Flask-Migrate/Alembic)
 ├── blueprints/               # Rotas Flask por contexto
 │   ├── auth.py               #   login, ativação de conta, recuperação de senha
@@ -136,16 +143,18 @@ nexo_mvp/
 │   ├── api.py                 #   endpoints auxiliares (gráficos)
 │   └── notificacoes.py         #   sininho (marcar lidas / abrir)
 ├── templates/                # Views Bootstrap 5, isoladas por perfil (admin/cliente)
+├── microservico_raiox/        # Microsserviço do Raio-X da landing (dependências próprias)
+├── tools/                     # Instalador verificado de dependências e utilitários de operação
 ├── app.py                    # Application Factory + entrypoint (socketio.run)
 ├── config.py                 # Configuração por ambiente (Config / Dev / Production)
 ├── extensions.py             # Instâncias compartilhadas (db, login, mail, socketio, csrf, limiter)
-├── models.py                 # 13 modelos SQLAlchemy 2.x (Mapped/mapped_column)
+├── models.py                 # Modelos SQLAlchemy 2.x (Mapped/mapped_column)
 ├── etl_processor.py          # Motor de ETL (leitura adaptativa → sanitização → KPIs → Curva ABC)
 ├── insights.py                # Semáforos executivos 5W2H
 ├── ai_devolutiva.py            # Devolutiva por IA (Claude) + fallback determinístico
 ├── suporte_bot.py              # Fachada do NexoBot (interface estável)
 ├── nexobot/                    # NexoBot Advanced 2.0: normalização, intenções, contexto, Guia, decisão
-│   └── saber/                  #   base de conhecimento versionada sobre o NEXO (14 assuntos)
+│   └── saber/                  #   base de conhecimento versionada sobre o NEXO
 ├── pdf_export.py               # Exportação executiva em PDF (ReportLab)
 ├── realtime.py                 # Salas Socket.IO por usuário
 ├── notifications.py / emails.py # Disparo de notificações/e-mails (dispatch-after-commit)
@@ -217,7 +226,7 @@ Este guia cobre a configuração do zero em **qualquer computador** (Windows/Lin
 
 ```bash
 git clone <url-do-repositorio>
-cd nexo_mvp
+cd <pasta-do-repositorio>
 ```
 
 ### 3. Criar e ativar o ambiente virtual
@@ -260,13 +269,13 @@ Todo o resto é **opcional com fail-safe**: sem `ANTHROPIC_API_KEY` a devolutiva
 
 **Opção A — SQLite local (mais rápido para testar)**
 
-Deixe `DATABASE_URL` comentado/ausente no `.env` (ou aponte para `sqlite:///instance/nexo_mvp.db`) e rode:
+Deixe `DATABASE_URL` comentado/ausente no `.env` (o padrão é um arquivo SQLite na pasta `instance/`) e rode:
 
 ```bash
 python init_db.py
 ```
 
-Isso cria o schema do zero localmente (não use em produção — é destrutivo).
+Isso cria o schema do zero localmente, pelas migrações (não use em produção — é destrutivo).
 
 **Opção B — PostgreSQL/Supabase (recomendado para produção/homologação)**
 
@@ -328,7 +337,7 @@ Acesse `http://127.0.0.1:5000` e autentique-se com o `ADMIN_EMAIL`/`ADMIN_SENHA`
 
 > Variáveis adicionais de runtime: `HOST` (default `127.0.0.1`) e `PORT` (default `5000`) sobrescrevem o bind do servidor; `FLASK_ENV` controla `development`/`production` (em `production`, `DEBUG` é forçado a `False` e o app se recusa a subir com debugger ativo).
 
-> Redes que só liberam HTTP/HTTPS (ex.: Wi-Fi de faculdade/empresa) bloqueiam as portas do Supabase (5432/6543) e do SMTP (587): rodando localmente nelas, o banco não conecta. A versão hospedada não tem esse problema — quem acessa só precisa de HTTPS.
+> Redes que só liberam HTTP/HTTPS (ex.: Wi-Fi corporativo ou de locais públicos) bloqueiam as portas do Supabase (5432/6543) e do SMTP (587): rodando localmente nelas, o banco não conecta. A versão hospedada não tem esse problema — quem acessa só precisa de HTTPS.
 
 ### 10. Preparação para Render + Supabase + Brevo
 
@@ -398,7 +407,7 @@ Template completo em [`.env.example`](.env.example).
 | **Tempo real** | Socket.IO com `cors_allowed_origins` restrito + sala por usuário | Mitiga Cross-Site WebSocket Hijacking e garante que notificações nunca sejam recebidas por outro usuário (sem broadcast aberto). |
 | **Disparo de notificação/e-mail** | Sempre **depois** do `commit()` (dispatch-after-commit) | Evita notificações fantasmas referentes a uma transação que sofreu rollback. |
 | **Curva ABC** | Vetorizada com NumPy (`np.select`) | Performance em catálogos grandes, sem `iterrows()` no caminho crítico de cálculo. |
-| **Resiliência do ETL** | Contrato de robustez (sucesso honesto **ou** recusa acionável, nunca fabricação de dado) | Evita o pior cenário de produção: uma análise "bem-sucedida" calculada sobre dados inventados. Ver [`docs/RELATORIO_COBERTURA_ETL.md`](docs/RELATORIO_COBERTURA_ETL.md). |
+| **Resiliência do ETL** | Contrato de robustez (sucesso honesto **ou** recusa acionável, nunca fabricação de dado) | Evita o pior cenário de produção: uma análise "bem-sucedida" calculada sobre dados inventados. Ver [`Docs/RELATORIO_COBERTURA_ETL.md`](Docs/RELATORIO_COBERTURA_ETL.md). |
 | **Armazenamento de upload** | Abstração única em `storage.py`, bytes no Postgres (`arquivo_armazenado`) | Hosts gratuitos têm disco efêmero; no banco o arquivo sobrevive a deploys/reinícios e entra na mesma transação do registro que o cita. Continua sendo o ponto de troca único para *object storage* (Supabase Storage/S3) sem tocar nas rotas. |
 | **IA (devolutiva e suporte)** | Sempre com *fallback* determinístico local | O sistema nunca depende de uma API externa para funcionar — IA é um realce, não um requisito. |
 | **Persistência do ETL** | Apenas KPIs e ranking consolidados via ORM | Mantém o banco enxuto, alinhado à LGPD; dados transacionais brutos não são parseados linha a linha para tabelas do sistema. |
@@ -407,11 +416,16 @@ Template completo em [`.env.example`](.env.example).
 
 ## 📚 Documentação Complementar
 
-- **[`docs/RELATORIO_TECNICO.md`](docs/RELATORIO_TECNICO.md)** — relatório técnico completo (arquitetura, tecnologias, funcionalidades) com diagrama Mermaid de arquitetura/fluxo de dados e DER das 13 entidades. Referência principal para a defesa do TCC.
-- **[`docs/RELATORIO_COBERTURA_ETL.md`](docs/RELATORIO_COBERTURA_ETL.md)** — contrato de robustez do motor de ETL, taxonomia de falhas em 6 camadas, matriz de testes (layouts reais + *chaos engineering*) e decisões deliberadas de escopo.
+- **[`Docs/RELATORIO_TECNICO.md`](Docs/RELATORIO_TECNICO.md)** — relatório técnico (arquitetura, tecnologias, funcionalidades) com diagrama Mermaid de arquitetura/fluxo de dados e DER.
+- **[`Docs/RELATORIO_COBERTURA_ETL.md`](Docs/RELATORIO_COBERTURA_ETL.md)** — contrato de robustez do motor de ETL, taxonomia de falhas em 6 camadas, matriz de testes (layouts reais + *chaos engineering*) e decisões deliberadas de escopo.
+- **[`Docs/PREPARACAO_RENDER.md`](Docs/PREPARACAO_RENDER.md)** — roteiro de preparação do deploy no Render.
+- **[`Docs/OPERACAO_BACKUP_RESTAURACAO.md`](Docs/OPERACAO_BACKUP_RESTAURACAO.md)** — operação de backup, restauração e recuperação.
+- **[`Docs/CI_SEGURANCA.md`](Docs/CI_SEGURANCA.md)** — integração contínua de segurança.
 
 ---
 
 ## 📄 Licença
 
-Projeto acadêmico — direitos reservados aos autores.
+Copyright (c) 2026 NEXO. Todos os direitos reservados.
+
+Software proprietário: a cópia, a distribuição, a modificação e o uso comercial dependem de autorização prévia e por escrito. Os termos estão no arquivo [`LICENSE`](LICENSE).

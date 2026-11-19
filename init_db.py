@@ -1,23 +1,20 @@
 """
 NEXO - Script para recriar o banco do zero
 ===========================================
-Execute UMA VEZ, no início da Semana 1:
+Recria o banco SQLite local do zero (apaga o arquivo existente):
     python init_db.py
 
 ATENÇÃO: este script APAGA o banco existente se houver.
 Em dev é o que queremos (recomeçar limpo).
-Em produção, NUNCA rode isto — use migrations (Alembic) na v2.
+Em produção, nunca rode isto: use `flask db upgrade`.
 
-Por que existe: o banco que veio do zip tinha uma tabela fantasma
-(`historico_planos`) e foi criado sem PRAGMA foreign_keys ativo.
-Esta limpeza inicial garante alinhamento total com o schema V4.
+O esquema sai das migrações reais (migrations/versions), como em produção.
 """
 
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 from pathlib import Path
-import os
 
 # Importa app + db ANTES de qualquer operação para que o event listener
 # de PRAGMA foreign_keys seja registrado.

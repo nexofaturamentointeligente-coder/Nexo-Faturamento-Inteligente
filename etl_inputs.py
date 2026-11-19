@@ -28,6 +28,7 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import TYPE_ERROR, TYPE_NUMERIC
 from pandas.io.parsers.base_parser import STR_NA_VALUES
 
+from etl_erros import ETLInputError  # a classe fica sem pandas, para o processo web; vale por aqui também
 from etl_limits import ETLLimits
 
 
@@ -36,15 +37,6 @@ SEPARATORS = (";", ",", "\t", "|")
 _CHUNK = 65536
 _CELL = re.compile(r"([A-Za-z]{1,3})([1-9][0-9]{0,6})\Z")
 _LOOKS_LIKE_THOUSANDS = re.compile(r"-?[0-9]{1,3}\.[0-9]{3}")
-
-
-class ETLInputError(Exception):
-    """Somente código e mensagem estáticos são apropriados para a interface."""
-
-    def __init__(self, code, safe_message):
-        self.code = code
-        self.safe_message = safe_message
-        super().__init__(safe_message)
 
 
 def _reject(code, message):

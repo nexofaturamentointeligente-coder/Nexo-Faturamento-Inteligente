@@ -4,7 +4,7 @@ import base64
 import json
 import unittest
 
-from configuracao import AVISO_TERMOS_VERSAO, Configuracao
+from configuracao import Configuracao
 from preparar_bucket import problemas_do_bucket
 from repositorio import ErroDeBanco, parametros_de_conexao
 
@@ -188,17 +188,17 @@ class ConfiguracaoTests(unittest.TestCase):
         self.assertTrue(any("SUPABASE_URL" in p for p in Configuracao.de_ambiente(sem_url).problemas))
 
     def test_termos_versao_nao_e_mais_usada(self):
-        # A versão aceita vem do banco: sem a variável o serviço fica pronto e, com ela (válida ou não), também,
-        # com o aviso para tirá-la do ambiente, sem o valor.
-        self.assertEqual(Configuracao.de_ambiente(COMPLETO).avisos, ())
-        for valor in ("termos-2026-11", "termos de uso", "v" * 41, "postgresql://u:senha-colada@host/x"):
+        # A versão aceita vem do banco: com a variável no ambiente (válida ou não), a configuração é a mesma de
+        # sem ela, pronta, e o valor não aparece em nada.
+        sem_a_variavel = Configuracao.de_ambiente(COMPLETO)
+        for valor in ("termos-2026-11", "termos de uso", "v" * 41, "postgresql://u:senha-colada@host/x", "  "):
             with self.subTest(valor=valor[:12]):
                 configuracao = Configuracao.de_ambiente({**COMPLETO, "TERMOS_VERSAO": valor})
                 self.assertTrue(configuracao.pronta, configuracao.problemas)
-                self.assertEqual(configuracao.avisos, (AVISO_TERMOS_VERSAO,))
-                self.assertNotIn(valor, " ".join(configuracao.avisos + configuracao.problemas))
+                self.assertEqual(configuracao, sem_a_variavel)
                 self.assertFalse(hasattr(configuracao, "termos_versao"))
-        self.assertEqual(Configuracao.de_ambiente({**COMPLETO, "TERMOS_VERSAO": "  "}).avisos, ())
+                if valor.strip():
+                    self.assertNotIn(valor, repr(configuracao) + " ".join(configuracao.problemas))
 
     def test_valores_invalidos(self):
         casos = {

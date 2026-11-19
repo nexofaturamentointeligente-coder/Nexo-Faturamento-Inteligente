@@ -379,7 +379,7 @@ class GravacaoDaCurvaTests(ContratosCase):
             linhas += [["Produto 000", "1", "100,00", "OK", "DEVOLUCAO"], ["Produto 001", "1", "100,00", "CANCELADA", "VENDA"]]
             vendas = write_csv(pasta / "vendas.csv", [[*CABECALHO, "status", "operacao"], *linhas])
             compras = write_csv(pasta / "compras.csv", PURCHASES)
-            with patch("etl_processor.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local):
+            with patch("etl_regras.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local):
                 resultado = etl_processor.processar_arquivos_analise(str(vendas), str(compras), self.analise_id, self.db.session)
         self.assertTrue(resultado.sucesso, resultado.mensagem)
         self.db.session.commit()

@@ -29,12 +29,12 @@ from blueprints.cliente import cliente_required
 from contract_policy import ESTADO_ATIVA, obter_situacao_contratual
 import entitlements
 from entitlements import requer_funcionalidade
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 from etl_uploads import vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
 from horario import BRASILIA, instante_utc
 import plano_acao
-import raio_x
+import raio_x_regras
 import raio_x_apresentacao
 import raio_x_servico
 import whatsapp_service
@@ -86,7 +86,7 @@ def _recomendacao_atual(bruto: dict, dados) -> dict:
     ou JSON editado), fica a recomendação gravada."""
     prata = dados.nivel("PRATA")
     try:
-        return raio_x.recomendar(bruto, prata.limite_historico_meses if prata is not None else None)
+        return raio_x_regras.recomendar(bruto, prata.limite_historico_meses if prata is not None else None)
     except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
         return bruto["recomendacao"]
 
@@ -196,7 +196,7 @@ def _executar_raio_x() -> tuple[int, tuple | None]:
         raise ETLInputError("assinatura_inativa", "A assinatura da empresa não está ativa: o Raio-X não foi "
                             "gravado. Fale com a equipe NEXO pelo Suporte.")
     prata = entitlements.catalogo().nivel("PRATA")
-    recomendacao = raio_x.recomendar(resultado, prata.limite_historico_meses if prata is not None else None)
+    recomendacao = raio_x_regras.recomendar(resultado, prata.limite_historico_meses if prata is not None else None)
     linha = raio_x_servico.salvar(empresa.id_empresa, current_user.id_usuario, resultado, recomendacao, nomes)
     db.session.commit()
     return len(nomes), _aviso_de_raio_x_pronto(empresa, linha)
@@ -237,7 +237,7 @@ def _disparar_aviso_de_raio_x(aviso) -> None:
 @requer_funcionalidade("raio_x_entrada")
 def diagnostico():
     """Raio-X do PDV: formulário de envio e o último resultado, no que o plano libera."""
-    return render_template("onboarding/diagnostico.html", max_arquivos=raio_x.MAX_ARQUIVOS,
+    return render_template("onboarding/diagnostico.html", max_arquivos=raio_x_regras.MAX_ARQUIVOS,
                            **_contexto_raio_x())
 
 

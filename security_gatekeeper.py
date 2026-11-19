@@ -61,7 +61,9 @@ import zipfile
 from xml.parsers import expat
 from xml.sax.saxutils import escape
 
-from etl_inputs import ETLInputError, SEPARATORS, read_raw
+# A primeira triagem roda no processo web, que não carrega pandas: a leitura do motor (etl_inputs) só entra
+# nas funções do processo isolado (triar e _liberar_copia).
+from etl_erros import ETLInputError
 
 logger = logging.getLogger(__name__)
 
@@ -744,6 +746,7 @@ def _liberar_copia(matriz, formato: str, original: Path, destino: Path, limits) 
     e sem aspas em todos os campos, e só aceita a cópia que também passa pela assinatura.
     Devolve None quando a cópia foi liberada; senão, o motivo da recusa: "copia_acima_do_teto"
     se toda tentativa esbarrou num limite de tamanho, "neutralizacao_inviavel" nos demais casos."""
+    from etl_inputs import SEPARATORS, read_raw
     so_tamanho = True
     if formato == "xlsx":
         tentativas = [(None, False, None)]
@@ -788,6 +791,7 @@ def triar(caminho, extensao: str, limits) -> dict:
     mínima de relatório e, no XLSX, inventaria o conteúdo ativo. Havendo algo a neutralizar,
     deixa ao lado do arquivo a cópia só com valores (NOME_LIBERADO), conferida por releitura.
     """
+    from etl_inputs import read_raw
     caminho = Path(caminho)
     formato = (extensao or "").lower().lstrip(".")
     if formato not in ("csv", "xlsx") or caminho.suffix.lower() != "." + formato:

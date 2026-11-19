@@ -148,7 +148,7 @@ class _ClusterDaTrava(_PrivateCluster):
         # Dois pedidos na mesma análise só coincidem entre processos do gunicorn: o limite
         # de um upload por processo sai do caminho, e as threads fazem o papel dos processos.
         with patch.object(etl_uploads, "run_validation"), \
-                patch("etl_processor.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local), \
+                patch("etl_regras.calcular_kpis_em_memoria", etl_processor._calcular_kpis_local), \
                 patch.object(etl_uploads, "_UPLOAD_ADMISSION", threading.BoundedSemaphore(8)):
             self._etapa_antes_da_migracao()
             self._etapa_migracao_com_o_processo_no_ar()
@@ -576,7 +576,7 @@ class _ClusterDaTrava(_PrivateCluster):
     # ---------------------------------------------------------- 5. corridas
     def _etapa_corridas(self):
         import blueprints.admin as rotas_admin
-        import etl_processor
+        import etl_regras
         import storage
         import validacao_pdv
 
@@ -661,7 +661,7 @@ class _ClusterDaTrava(_PrivateCluster):
         dados_processar, dados_editor = self._dados_processar(a, id_f), self._dados_editor(b, id_f)
         self._flashes(b)
         esperou, processamento, publicacao = self._corrida(
-            etl_processor, "calcular_kpis_em_memoria",
+            etl_regras, "calcular_kpis_em_memoria",
             lambda: a.post(f"/admin/analise/{id_f}/processar", data=dados_processar),
             lambda: self._post_editor(b, id_f, dados_editor))
         estado, avisos = self._estado(id_f), self._flashes(b)
@@ -674,7 +674,7 @@ class _ClusterDaTrava(_PrivateCluster):
         id_g = self._analise_enviada("1.500,00")
         dados_processar, dados_editor = self._dados_processar(a, id_g), self._dados_editor(b, id_g)
         esperou, processamento, publicacao = self._corrida(
-            etl_processor, "calcular_kpis_em_memoria",
+            etl_regras, "calcular_kpis_em_memoria",
             lambda: a.post(f"/admin/analise/{id_g}/processar", data=dados_processar),
             lambda: self._post_editor(b, id_g, dados_editor))
         estado = self._estado(id_g)
@@ -687,7 +687,7 @@ class _ClusterDaTrava(_PrivateCluster):
         id_h = self._analise_enviada("1.500,00")
         dados_processar, dados_envio = self._dados_processar(a, id_h), self._dados_envio_admin(b, id_h, total="1.515,00")
         esperou, processamento, envio = self._corrida(
-            etl_processor, "calcular_kpis_em_memoria",
+            etl_regras, "calcular_kpis_em_memoria",
             lambda: a.post(f"/admin/analise/{id_h}/processar", data=dados_processar),
             lambda: self._post_envio_admin(b, id_h, dados_envio))
         estado = self._estado(id_h)
@@ -701,7 +701,7 @@ class _ClusterDaTrava(_PrivateCluster):
         dados_processar = self._dados_processar(a, id_i)
         dados_cliente = self._dados_envio_cliente(cliente, id_i, total="1.515,00")
         esperou, processamento, envio = self._corrida(
-            etl_processor, "calcular_kpis_em_memoria",
+            etl_regras, "calcular_kpis_em_memoria",
             lambda: a.post(f"/admin/analise/{id_i}/processar", data=dados_processar),
             lambda: self._post_envio_cliente(cliente, dados_cliente))
         estado = self._estado(id_i)

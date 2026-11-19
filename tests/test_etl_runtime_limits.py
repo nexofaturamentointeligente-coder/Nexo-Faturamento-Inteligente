@@ -93,6 +93,11 @@ class ETLIsolatedRuntimeTests(unittest.TestCase):
         import etl_runtime
         from etl_inputs import ETLInputError
         self.runtime, self.error = etl_runtime, ETLInputError
+        # O _run_job real varreria as pastas órfãs da pasta temporária do sistema, fora da área do teste; a
+        # varredura de verdade é coberta por ETLTemporariosOrfaosTests, numa pasta do teste.
+        varredura = patch.object(etl_runtime, "varrer_temporarios_orfaos", return_value=0)
+        varredura.start()
+        self.addCleanup(varredura.stop)
         self.work = tempfile.TemporaryDirectory(prefix="nexo-sec005-runtime-test-")
         self.addCleanup(self.work.cleanup)
         self.directory = Path(self.work.name)
@@ -246,6 +251,75 @@ output.write_text(json.dumps({'ok': True, 'result': result}))"""
                 spawn.assert_not_called()
         finally:
             self.runtime._ADMISSION.release()
+
+    def test_uma_linha_de_log_por_processamento_so_com_numeros_e_rotulos_fixos(self):
+        """Operação, quantidade de arquivos, duração, pico de memória do processo isolado (o ru_maxrss que o worker
+        põe no envelope), código de saída e desfecho, também nas recusas; nunca o nome do arquivo nem o caminho."""
+        def envelope(**campos):
+            return f"output.write_text(json.dumps({campos!r}))"
+        casos = {
+            "ok": (envelope(ok=True, result={}, runtime={"peak_rss_kib_linux": 12345}), None,
+                   "pico_rss_kib=12345 codigo_saida=0 desfecho=ok"),
+            "memória": (envelope(ok=False, code="memory", message="Sintética.", runtime={"peak_rss_kib_linux": 400000}),
+                        None, "pico_rss_kib=400000 codigo_saida=0 desfecho=memoria"),
+            "recusa": (envelope(ok=False, code="data", message="Sintética.", runtime={"peak_rss_kib_linux": True}),
+                       None, "pico_rss_kib=None codigo_saida=0 desfecho=recusa"),
+            "sem resultado": ("os._exit(9)", None, "pico_rss_kib=None codigo_saida=9 desfecho=sem_resultado"),
+            "prazo": ("time.sleep(10)", ETLLimits(timeout_seconds=1), "pico_rss_kib=None codigo_saida="),
+        }
+        for caso, (corpo, limites, esperado) in casos.items():
+            with self.subTest(caso=caso), patch.object(self.runtime.logger, "disabled", False), \
+                    self.assertLogs("etl_runtime", "INFO") as registro:
+                try:
+                    self._run_owned(corpo, limits=limites)
+                except self.error:
+                    self.assertNotEqual(caso, "ok")
+            linhas = [linha for linha in registro.output if "operacao=" in linha]
+            self.assertEqual(len(linhas), 1)
+            self.assertRegex(linhas[0], r"ETL: operacao=validate arquivos=1 duracao_s=[0-9]+\.[0-9]{2} ")
+            self.assertIn(esperado, linhas[0])
+            if caso == "prazo":
+                self.assertTrue(linhas[0].endswith("desfecho=prazo"))
+            for privado in (str(self.directory), self.directory.name, "synthetic.csv", "owned_test_worker"):
+                self.assertNotIn(privado, linhas[0])
+        self._assert_reaped_and_temporary_resources_removed()
+
+    def test_a_linha_de_log_sai_como_falha_se_a_pasta_do_job_nao_sai_depois_do_ok(self):
+        real = tempfile.TemporaryDirectory
+
+        class PastaQueNaoSai:
+            def __init__(self, *args, **kwargs):
+                self.pasta = real(*args, **kwargs)
+
+            def __enter__(self):
+                return self.pasta.__enter__()
+
+            def __exit__(self, *info):
+                self.pasta.__exit__(*info)
+                raise OSError("remoção sintética recusada")
+
+        with patch.object(self.runtime.tempfile, "TemporaryDirectory", PastaQueNaoSai), \
+                patch.object(self.runtime.logger, "disabled", False), \
+                self.assertLogs("etl_runtime", "INFO") as registro, self.assertRaises(self.error) as falha:
+            self._run_owned("output.write_text(json.dumps({'ok': True, 'result': {}}))")
+        self.assertEqual(falha.exception.code, "worker")
+        linhas = [linha for linha in registro.output if "operacao=" in linha]
+        self.assertEqual(len(linhas), 1)
+        self.assertTrue(linhas[0].endswith("codigo_saida=0 desfecho=falha"))
+        self._assert_reaped_and_temporary_resources_removed()
+
+    def test_o_job_varre_as_pastas_orfas_depois_de_obter_a_vaga(self):
+        with patch.object(self.runtime, "varrer_temporarios_orfaos", return_value=0) as varredura:
+            self._run_owned("output.write_text(json.dumps({'ok': True, 'result': {}}))")
+            varredura.assert_called_once_with()
+            varredura.reset_mock()
+            self.assertTrue(self.runtime._ADMISSION.acquire(blocking=False))
+            try:
+                with self.assertRaises(self.error):
+                    self.runtime.run_validation(self.input, ".csv")
+            finally:
+                self.runtime._ADMISSION.release()
+            varredura.assert_not_called()
 
     def test_real_worker_validates_a_small_csv_inside_default_resource_limits(self):
         with patch.object(self.runtime.subprocess, "Popen", side_effect=self._start):
@@ -431,6 +505,106 @@ class ETLWorkerPlatformTests(unittest.TestCase):
                 patch.object(etl_runtime, "_SEM_LIMITES_AVISADO", False), \
                 self.assertNoLogs("etl_runtime", "WARNING"):
             etl_runtime._avisar_sem_limites()
+
+
+class ETLTemporariosOrfaosTests(unittest.TestCase):
+    """A varredura das pastas temporárias que uma morte dura do processo web deixa no disco
+    (etl_runtime.varrer_temporarios_orfaos), sobre uma pasta do teste no lugar da pasta temporária do sistema."""
+
+    PREFIXOS = ("nexo-etl-upload-", "nexo-etl-job-", "nexo-etl-materialized-", "nexo-raio-x-")
+
+    def setUp(self):
+        import etl_runtime
+        self.runtime = etl_runtime
+        pasta = tempfile.TemporaryDirectory(prefix="nexo-sec005-orfaos-test-")
+        self.addCleanup(pasta.cleanup)
+        self.pasta = Path(pasta.name)
+        self.velho = time.time() - 3600
+        ligado = patch.object(etl_runtime.logger, "disabled", False)  # o fileConfig do Alembic, na suíte inteira
+        ligado.start()
+        self.addCleanup(ligado.stop)
+
+    def _pasta(self, nome, *, velha=True):
+        caminho = self.pasta / nome
+        caminho.mkdir()
+        (caminho / "arquivo_01.csv").write_text("relatorio sintetico")
+        if velha:
+            os.utime(caminho, (self.velho, self.velho))
+        return caminho
+
+    def test_os_prefixos_sao_os_das_pastas_que_o_codigo_cria(self):
+        raiz = Path(self.runtime.__file__).resolve().parent
+        criadores = {"nexo-etl-upload-": "etl_uploads.py", "nexo-etl-job-": "etl_runtime.py",
+                     "nexo-etl-materialized-": "storage.py", "nexo-raio-x-": "raio_x_servico.py"}
+        for prefixo, arquivo in criadores.items():
+            with self.subTest(prefixo=prefixo):
+                self.assertIn(f'prefix="{prefixo}"', (raiz / arquivo).read_text(encoding="utf-8"))
+                # O nome que o tempfile dá de verdade (o prefixo e os 8 caracteres sorteados).
+                nome = Path(tempfile.mkdtemp(prefix=prefixo, dir=self.pasta)).name
+                self.assertIsNotNone(self.runtime._PASTA_TEMPORARIA.fullmatch(nome), nome)
+        self.assertIn('prefix="nexo-raio-x-"', (raiz / "blueprints" / "leads.py").read_text(encoding="utf-8"))
+
+    def test_apaga_so_as_pastas_velhas_com_os_nomes_exatos(self):
+        velhas = [self._pasta(prefixo + "ab12_x9z") for prefixo in self.PREFIXOS]
+        recente = self._pasta("nexo-etl-job-recente1", velha=False)
+        # Prefixos vizinhos, inclusive os das pastas dos testes, e nomes que o tempfile não daria.
+        vizinhas = [self._pasta(nome) for nome in (
+            "nexo-etl-upload-source-test-ab12x9z1", "nexo-upload-source-test-ab12x9z1", "nexo-raio-xy-ab12x9z1",
+            "nexo-etl-job-ab12x9z", "nexo-etl-job-ab12x9z12", "nexo-etl-job-AB12X9Z1", "outro-nexo-etl-job-ab12x9z1",
+            "nexo-sec005-runtime-test-ab12x9z1", "nexo-painel-ab12x9z1", "nexo_arquivos")]
+        arquivo = self.pasta / "nexo-etl-job-arquivo1"
+        arquivo.write_text("relatorio sintetico")
+        os.utime(arquivo, (self.velho, self.velho))
+        with self.assertLogs("etl_runtime", "INFO") as registro:
+            self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta), 4)
+        self.assertEqual([pasta.exists() for pasta in velhas], [False] * 4)
+        self.assertTrue(recente.exists())
+        self.assertEqual([pasta.name for pasta in vizinhas if not pasta.exists()], [])
+        self.assertTrue(arquivo.is_file())
+        self.assertEqual(registro.output, ["INFO:etl_runtime:ETL: 4 pasta(s) temporária(s) órfã(s) apagada(s)."])
+        with self.assertNoLogs("etl_runtime", "INFO"):
+            self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta), 0)
+
+    def test_link_simbolico_e_juncao_nao_sao_seguidos(self):
+        alvo = self._pasta("fora-da-varredura")
+        links = []
+        try:
+            os.symlink(alvo, self.pasta / "nexo-etl-job-simbolic", target_is_directory=True)
+            links.append(self.pasta / "nexo-etl-job-simbolic")
+        except (OSError, NotImplementedError):
+            pass  # Windows sem permissão de criar link simbólico
+        if os.name == "nt":
+            import _winapi
+            try:
+                _winapi.CreateJunction(str(alvo), str(self.pasta / "nexo-raio-x-juncao01"))
+                links.append(self.pasta / "nexo-raio-x-juncao01")
+            except OSError:
+                pass
+        if not links:
+            self.skipTest("o sistema não deixa criar link simbólico nem junção aqui")
+        # Idade negativa: toda entrada conta como velha, e só o tipo decide.
+        self.assertEqual(self.runtime.varrer_temporarios_orfaos(-3600, pasta=self.pasta), 0)
+        self.assertTrue(all(os.path.lexists(link) for link in links))
+        self.assertTrue((alvo / "arquivo_01.csv").is_file())
+
+    def test_no_posix_so_as_pastas_do_mesmo_usuario(self):
+        velha = self._pasta("nexo-etl-job-outrouid")
+        with patch.object(self.runtime.os, "getuid", return_value=velha.stat().st_uid + 1, create=True):
+            self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta), 0)
+        self.assertTrue(velha.exists())
+        # O usuário de verdade (no Windows, sem os.getuid, a conferência não existe).
+        self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta), 1)
+        self.assertFalse(velha.exists())
+
+    def test_falha_na_varredura_nunca_levanta(self):
+        with self.assertLogs("etl_runtime", "WARNING") as registro:
+            self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta / "inexistente"), 0)
+        self.assertIn("(FileNotFoundError)", registro.output[0])
+        self.assertNotIn(self.pasta.name, registro.output[0])
+        velha = self._pasta("nexo-etl-job-presa001")
+        with patch.object(self.runtime.shutil, "rmtree", side_effect=PermissionError("sintético")):
+            self.assertEqual(self.runtime.varrer_temporarios_orfaos(pasta=self.pasta), 0)
+        self.assertTrue(velha.exists())
 
 
 @unittest.skipUnless(os.name == "posix", "Gunicorn exige POSIX")

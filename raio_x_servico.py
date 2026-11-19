@@ -29,14 +29,14 @@ from sqlalchemy import inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.utils import secure_filename
 
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 from etl_limits import get_limits
 import etl_runtime
 import evolucao
 from extensions import db
 from horario import agora_utc, instante_utc
 from models import DiagnosticoEntrada, DiagnosticoFechamento
-import raio_x
+import raio_x_regras
 import security_gatekeeper
 
 logger = logging.getLogger(__name__)
@@ -48,9 +48,6 @@ EXTENSOES_ACEITAS = ("csv", "xlsx", "xls", "xml")
 CAMPOS_MARGEM = ("custo_total", "custo_medio", "margem_valor", "margem_percentual")
 CAMPOS_MARGEM_LIQUIDA = ("margem_liquida_valor", "margem_liquida_percentual")
 CAMPOS_CMV_LIQUIDO = ("cmv_liquido", "custo_bonificacoes", "custo_devolucoes")
-CAMPOS_FATIA = ("faturamento", "itens", "faturamento_sem_custo", "pct_faturamento_sem_custo", "custo_total",
-                "margem_valor", "margem_percentual", "perda_abaixo_custo", "vazamento_preco", "recuperavel",
-                "devolucoes")
 # Indicadores executivos (indicadores_executivos.py): a funcionalidade do plano que libera cada um. None: todo
 # plano com Raio-X vê (faturamento, venda, volume, estoque em unidades e o mapa de calor de vendas). Margem,
 # CMV, giro e custo seguem as funcionalidades da auditoria do Raio-X; a recompra, a curva de clientes do Ouro.
@@ -162,8 +159,8 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
     arquivos = [arquivo for arquivo in arquivos if arquivo is not None and arquivo.filename]
     if not arquivos:
         raise ETLInputError("raio_x_vazio", "Selecione ao menos um relatório de vendas (CSV, XLSX ou XLS).")
-    if len(arquivos) > raio_x.MAX_ARQUIVOS:
-        raise ETLInputError("raio_x_arquivos", f"Envie no máximo {raio_x.MAX_ARQUIVOS} relatórios por vez: "
+    if len(arquivos) > raio_x_regras.MAX_ARQUIVOS:
+        raise ETLInputError("raio_x_arquivos", f"Envie no máximo {raio_x_regras.MAX_ARQUIVOS} relatórios por vez: "
                             "até 3 anos, um por mês.")
     try:
         limits = get_limits() if limits is None else limits
@@ -181,6 +178,9 @@ def processar_envio(arquivos, limits=None, *, executar=None, origem: str = "raio
                                         "CSV, XLSX, XLS ou Planilha XML 2003 (.xml).")
                 caminho = Path(diretorio) / f"arquivo_{numero:02d}.{extensao}"
                 digest = _gravar_limitado(arquivo, caminho, limits, numero)
+                # A cópia no disco é a que segue: o envio (a parte que o Werkzeug guarda na memória, ou o
+                # arquivo aberto) é solto antes do processo isolado.
+                arquivo.close()
                 # Baia de Segurança: assinatura e extensão antes do processo isolado. Os arquivos
                 # do Raio-X não são gravados, então não há cópia neutralizada a liberar; a
                 # leitura do motor já neutraliza as células (etl_inputs.read_raw). Por isso a
@@ -246,7 +246,7 @@ def ultimo(id_empresa: int) -> tuple[DiagnosticoEntrada, dict] | None:
         logger.warning("Raio-X da empresa %s ilegível: ignorado.", id_empresa)
         return None
     # O Raio-X gravado antes da raio-x-2026-11.6 não tem os indicadores executivos e continua valendo.
-    if not isinstance(dados, dict) or not raio_x.CHAVES_OBRIGATORIAS <= set(dados):
+    if not isinstance(dados, dict) or not raio_x_regras.CHAVES_OBRIGATORIAS <= set(dados):
         return None
     return linha, dados
 
@@ -347,7 +347,7 @@ def _resultado_legivel(texto) -> dict | None:
         dados = json.loads(texto)
     except (TypeError, ValueError):
         return None
-    if not isinstance(dados, dict) or not raio_x.CHAVES_OBRIGATORIAS <= set(dados):
+    if not isinstance(dados, dict) or not raio_x_regras.CHAVES_OBRIGATORIAS <= set(dados):
         return None
     return dados
 

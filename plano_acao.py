@@ -41,7 +41,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 import math
 import re
 
-import raio_x
+import raio_x_regras
 import raio_x_apresentacao
 
 MESES_DO_PLANO = 12
@@ -340,7 +340,7 @@ def janela(tempo_auditado: dict, tempo_enviado: dict, media: dict | None) -> str
         enviado = tempo_enviado["meses_texto"]
         frase += f" de {enviado} {'enviado' if enviado.endswith(' mês') else 'enviados'}"
     if media is not None:
-        frase += f" (média de R$ {raio_x._brl(media['mensal'])}/mês)"
+        frase += f" (média de R$ {raio_x_regras._brl(media['mensal'])}/mês)"
     return frase
 
 
@@ -646,6 +646,6 @@ def preparar(resultado: dict, bruto: dict, ate: date | None = None) -> dict:
         "percentual_ganho_de_margem": PERCENTUAL_GANHO_DE_MARGEM,
         "explicacao_do_retorno": EXPLICACAO_DO_RETORNO,
         "meses_do_plano": MESES_DO_PLANO,
-        "razao_a_confirmar": raio_x.RAZAO_CUSTO_IMPLAUSIVEL,
-        "limite_da_lista": raio_x.LIMITE_ITENS_LISTA,
+        "razao_a_confirmar": raio_x_regras.RAZAO_CUSTO_IMPLAUSIVEL,
+        "limite_da_lista": raio_x_regras.LIMITE_ITENS_LISTA,
     }

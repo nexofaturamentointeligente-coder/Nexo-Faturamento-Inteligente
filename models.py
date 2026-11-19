@@ -1,15 +1,8 @@
 """
 NEXO - Faturamento Inteligente | Modelos SQLAlchemy
 ====================================================
-Apenas as 8 tabelas em uso real no MVP do PI2:
-
-    plano, segmento, empresa, usuario,
-    analise, upload_relatorio, indicador_analise, relatorio_analise.
-
-As 4 tabelas FORA DO ESCOPO PI2 (chamado_suporte, mensagem_suporte,
-avaliacao_analise, fatura_cobranca) existem no schema SQL como
-documentação do modelo lógico completo, mas NÃO têm Model aqui.
-Quando voltarem ao escopo pós-PI3, adicione as classes correspondentes.
+Modelos SQLAlchemy das tabelas do NEXO. O esquema do banco vem das
+migrações em migrations/versions.
 
 Estilo: SQLAlchemy 2.x com `Mapped` e `mapped_column` (mais moderno
 e type-safe que o estilo Column antigo).
@@ -583,8 +576,8 @@ class ProdutoCurvaABC(db.Model):
 class ChamadoSuporte(db.Model):
     """
     Ticket de suporte aberto por um usuário CLIENTE para a equipe NEXO.
-    Reativa a tabela `chamado_suporte` que já existia no DER como documentação
-    (pós-PI3), adaptada ao escopo atual:
+    Reativa a tabela `chamado_suporte` que já existia no DER como documentação,
+    adaptada ao escopo atual:
       - adicionado `categoria` (Financeiro / Dúvida Técnica / Erro de Integração);
       - `status_chamado` simplificado para 3 estados (ABERTO / EM_ATENDIMENTO /
         RESOLVIDO);

@@ -1,4 +1,4 @@
-# NEXO - Faturamento Inteligente | Semanas 1 e 2
+# NEXO - Faturamento Inteligente | Dependências de produção
 # Plotly.js é JS e carrega via CDN — não entra aqui.
 # O ETL lê .xlsx (openpyxl) e .csv. O .xls do Excel 97-2003 e a Planilha XML 2003 são lidos por
 # leitores próprios (etl_biff.py e etl_planilha_xml.py), sem dependência nova: o 'xlrd' não é usado.
@@ -9,7 +9,7 @@ Flask-Login==0.6.3
 python-dotenv==1.2.4
 Werkzeug==3.1.9
 
-# Semana 2 — motor de ETL
+# Motor de ETL
 pandas==3.0.3
 openpyxl==3.1.5
 

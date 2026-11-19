@@ -21,8 +21,7 @@ Demais:
   PRAZO_DA_TRIAGEM    segundos de triagem por envio (padrão 30, até 300); o relatório que não termina a tempo é
                       recusado.
 
-TERMOS_VERSAO não é mais usada: a versão aceita vem dos documentos publicados no banco (documento_legal), lida na
-gravação do lead. No ambiente, ela é ignorada, com um aviso no log da subida (sem o valor).
+A versão dos termos aceita vem dos documentos publicados no banco (documento_legal), lida na gravação do lead.
 
 Configuração incompleta não derruba o serviço: o /ping continua respondendo, o envio responde 503 (403 sem
 CORS_ORIGENS, porque a origem é conferida antes) e cada problema vai para o log na subida, sem o valor.
@@ -42,8 +41,6 @@ MEGABYTE = 1024 * 1024
 MAX_BYTES = 15 * MEGABYTE
 MAX_ARQUIVOS = 12
 PRAZO_MAXIMO_DA_TRIAGEM = 300
-AVISO_TERMOS_VERSAO = ("TERMOS_VERSAO não é mais usada e foi ignorada: a versão aceita vem dos documentos publicados "
-                       "em Configurações › Documentos Legais da aplicação principal. Pode tirá-la do ambiente.")
 
 _ORIGEM = re.compile(r"https://[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?")
 _ORIGEM_LOCAL = re.compile(r"http://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?")
@@ -119,8 +116,6 @@ class Configuracao:
     max_bytes: int = MAX_BYTES
     max_arquivos: int = MAX_ARQUIVOS
     problemas: tuple = ()
-    # O que vai para o log na subida sem impedir o serviço de ficar pronto.
-    avisos: tuple = ()
 
     def __repr__(self) -> str:
         # Sem as credenciais: a configuração pode aparecer num log ou num erro.
@@ -187,8 +182,6 @@ class Configuracao:
         if not origens and not permitir_localhost:
             problemas.append("CORS_ORIGENS vazia: nenhuma landing pode enviar.")
 
-        # A versão aceita vem do banco; o valor antigo da variável não é lido, nem conferido.
-        avisos = [AVISO_TERMOS_VERSAO] if str(ambiente.get("TERMOS_VERSAO") or "").strip() else []
         bucket = str(ambiente.get("SUPABASE_BUCKET") or BUCKET_PADRAO).strip()
         if not _BUCKET.fullmatch(bucket):
             problemas.append("SUPABASE_BUCKET inválido.")
@@ -200,5 +193,5 @@ class Configuracao:
             limite_por_hora=inteiro("LIMITE_POR_HORA", 5, 1), limite_por_dia=inteiro("LIMITE_POR_DIA", 10, 1),
             teto_diario=inteiro("TETO_DIARIO", 100, 1), proxies_confiaveis=inteiro("PROXIES_CONFIAVEIS", 2, 0, 5),
             prazo_da_triagem=inteiro("PRAZO_DA_TRIAGEM", 30, 1, PRAZO_MAXIMO_DA_TRIAGEM),
-            problemas=tuple(problemas), avisos=tuple(avisos),
+            problemas=tuple(problemas),
         )

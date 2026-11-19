@@ -113,7 +113,7 @@ A segurança não é pontual, e sim transversal, aplicada em `@before_request` e
 
 ### 2.4. Front-end (via CDN, sem etapa de build)
 
-**Bootstrap 5** (grid, componentes e modais), **Bootstrap Icons**, **Plotly.js** (gráficos interativos: comparativo Compras×Vendas, Pareto da Curva ABC, série histórica) e **JavaScript vanilla** para interações pontuais (busca client-side, *modais* de confirmação, chat do bot, atualização do sininho via socket). A opção por CDN mantém o projeto sem *toolchain* de front-end, coerente com o porte de um MVP/TCC.
+**Bootstrap 5** (grid, componentes e modais), **Bootstrap Icons**, **Plotly.js** (gráficos interativos: comparativo Compras×Vendas, Pareto da Curva ABC, série histórica) e **JavaScript vanilla** para interações pontuais (busca client-side, *modais* de confirmação, chat do bot, atualização do sininho via socket). A opção por CDN mantém o projeto sem *toolchain* de front-end, coerente com o porte do projeto.
 
 ---
 
@@ -186,7 +186,7 @@ Como bot e aba Guia leem da **mesma tabela** (`guia_topico`, gerenciada pelo adm
 
 ## Considerações finais
 
-O NEXO demonstra maturidade de engenharia incomum para um MVP acadêmico: separação de camadas limpa, disciplina transacional explícita, *fail-safes* em todos os pontos de integração externa (IA, SMTP, WebSocket, HF), uma postura de segurança defensiva em profundidade e — sobretudo — uma **regra de domínio inegociável** (a recusa em inventar lucro/margem/CMV) reforçada redundantemente no ETL, na IA e nos semáforos. A arquitetura modular deixa o caminho de evolução evidente: trocar o storage local por object storage (já isolado em `storage.py`) e escalar horizontalmente atrás de um WSGI de produção com WebSocket.
+O NEXO demonstra maturidade de engenharia incomum para um produto deste porte: separação de camadas limpa, disciplina transacional explícita, *fail-safes* em todos os pontos de integração externa (IA, SMTP, WebSocket, HF), uma postura de segurança defensiva em profundidade e — sobretudo — uma **regra de domínio inegociável** (a recusa em inventar lucro/margem/CMV) reforçada redundantemente no ETL, na IA e nos semáforos. A arquitetura modular deixa o caminho de evolução evidente: trocar o storage local por object storage (já isolado em `storage.py`) e escalar horizontalmente atrás de um WSGI de produção com WebSocket.
 
 ---
 

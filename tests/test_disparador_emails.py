@@ -30,7 +30,6 @@ from sqlalchemy import event
 
 import emails
 import extensions
-from blueprints import auth
 from emails import EstadoEnvio
 from extensions import db
 from tests.test_emails_transacionais import (

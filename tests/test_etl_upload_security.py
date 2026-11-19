@@ -72,6 +72,15 @@ class UploadReadBoundsTests(unittest.TestCase):
             contents, _ = etl_uploads.ler_upload_validado(arquivo, "csv", SimpleNamespace(max_file_bytes=len(CSV)))
         self.assertEqual(contents, CSV)
 
+    def test_file_changed_on_disk_during_validation_is_not_accepted(self):
+        # Os bytes devolvidos são relidos do disco depois da validação: têm de ser os mesmos da leitura em blocos.
+        def change(path, extension, limits):
+            Path(path).write_bytes(CSV.replace(b"20,00", b"99,00"))
+        with patch.object(etl_uploads, "run_validation", side_effect=change):
+            with self.assertRaises(ETLInputError) as error:
+                etl_uploads.ler_upload_validado(io.BytesIO(CSV), "csv", SimpleNamespace(max_file_bytes=len(CSV)))
+        self.assertEqual(error.exception.code, "upload_io")
+
     def test_empty_stream_is_rejected_before_validation(self):
         with patch.object(etl_uploads, "run_validation") as validate:
             with self.assertRaises(ETLInputError) as error:
@@ -320,8 +329,9 @@ class ETLStorageMaterializationTests(DeployTestCase):
         with storage.materializar_para_etl(reference, len(CSV)) as path:
             materialized = Path(path)
             self.assertEqual(materialized.read_bytes(), CSV)
-            self.assertNotEqual(materialized.parent, storage._CACHE_DIR)
+            self.assertRegex(materialized.parent.name, r"^nexo-etl-materialized-")
         self.assertFalse(materialized.exists())
+        self.assertFalse(materialized.parent.exists())
         self.assertEqual(storage.obter("source.csv").conteudo, CSV)
 
     def test_database_actual_length_rejects_metadata_lie_before_loading_blob(self):
@@ -341,15 +351,16 @@ class ETLStorageMaterializationTests(DeployTestCase):
         self.assertEqual(error.exception.code, "file_size")
         self.assertFalse(any(sql.startswith("SELECT ARQUIVO_ARMAZENADO.CONTEUDO") for sql in statements))
 
-    def test_processing_copy_does_not_trust_or_delete_shared_cache(self):
+    def test_database_reference_has_no_shared_disk_copy(self):
+        # Sem cache local: 'db:' não vira caminho no disco (só a cópia exclusiva do ETL, acima).
         reference = storage.salvar(CSV, "cached.csv")
         db.session.commit()
-        storage._CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        shared = storage._CACHE_DIR / "cached.csv"
-        shared.write_bytes(b"synthetic-existing-cache")
-        with storage.materializar_para_etl(reference, len(CSV)) as path:
-            self.assertEqual(Path(path).read_bytes(), CSV)
-        self.assertEqual(shared.read_bytes(), b"synthetic-existing-cache")
+        with self.assertRaises(ValueError):
+            storage.resolver(reference)
+        self.assertFalse(hasattr(storage, "_CACHE_DIR"))
+        storage.remover(reference)
+        db.session.commit()
+        self.assertIsNone(storage.obter("cached.csv"))
 
     def test_legacy_materialization_is_bounded_and_never_deletes_original(self):
         # SEC-004: referências legadas só são lidas dentro de UPLOAD_FOLDER.

@@ -66,7 +66,6 @@ class DeployTestCase(unittest.TestCase):
         from flask import Flask
         from flask.testing import FlaskClient
         from extensions import db
-        import storage
         from flask_migrate import upgrade
 
         self.db = db
@@ -91,7 +90,6 @@ class DeployTestCase(unittest.TestCase):
                 side_effect=lambda *a, **kw: Flask(*a, instance_path=str(self.work_dir / "instance"), **kw),
             ))
             self.app = app_module.create_app("development")
-        self.stack.enter_context(patch.object(storage, "_CACHE_DIR", self.work_dir / "cache"))
         self.ctx = self.app.app_context()
         self.ctx.push()
         self.addCleanup(self.ctx.pop)

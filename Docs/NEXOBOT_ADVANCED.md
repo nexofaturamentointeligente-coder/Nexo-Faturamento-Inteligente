@@ -35,7 +35,7 @@ mensagem ──► A. normalizacao ──► B. classificacao ──► E. servi
 | C. Conhecimento | `nexobot/conhecimento.py`, `similaridade.py`, `saber/`, `higiene.py` | BM25F sobre os tópicos **ativos** do Guia e sobre a base interna, com sinônimos, aproximação ortográfica, tipo de pergunta ("por que", "quem", "quando", "como"...), correspondência exata de formulação e calibração de confiança. Política de prioridade entre Guia e base interna (seção 3). Detector conservador de conteúdo de teste. |
 | D. Contexto | `nexobot/contexto.py` | Memória mínima da conversa mantida pelo widget e revalidada a cada requisição: página em foco, opções oferecidas, convite pendente, **assunto** (id da base interna) e **nível** já mostrado. |
 | E. Decisão | `nexobot/servico.py`, `respostas.py` | Escolhe a fonte, o registro e o nível da resposta; a consulta da busca sai sem o cumprimento do começo ("bom dia", "boa tarde", "boa noite") e sem o pedido de forma ("me explica", "em detalhes") (`limpar_pedido`); monta blocos e sugestões; define a única ação possível (`navegar` ou `sugerir_navegacao`) a partir do catálogo, com URL gerada por `url_for()`. |
-| Apoio | `navegacao.py`, `seguranca.py`, `providers.py`, `lexico.py`, `intencoes.py`, `portal.py` | Catálogo de destinos; detectores de URL, área administrativa, injeção e código; IA opcional; léxico; tipos. `portal.py` é um adaptador de compatibilidade: os antigos "fatos" agora apontam para registros da base interna. |
+| Apoio | `navegacao.py`, `seguranca.py`, `providers.py`, `lexico.py`, `intencoes.py` | Catálogo de destinos; detectores de URL, área administrativa, injeção e código; IA opcional; léxico; tipos. |
 
 `suporte_bot.py` continua sendo a fachada usada pela API (`responder`).
 

@@ -22,9 +22,9 @@ from models import (
     ChamadoSuporte, MensagemSuporte, GuiaTopico, ProdutoCurvaABC, Notificacao,
     CoberturaPaga, Contrato, EventoContratual, RegimeContratual,
 )
-from etl_processor import processar_arquivos_analise, ResultadoETL, STATUS_PDV_DIVERGENTE
+from etl_regras import processar_arquivos_analise, ResultadoETL, STATUS_PDV_DIVERGENTE
 import validacao_pdv
-from etl_inputs import ETLInputError
+from etl_erros import ETLInputError
 from etl_limits import get_limits
 from etl_uploads import ler_upload_validado, limitar_upload, limitar_processamento
 from notifications import notificar_admins, notificar_clientes_empresa
@@ -1042,12 +1042,6 @@ def _buscar_upload(id_analise: int, tipo: str):
             UploadRelatorio.tipo_relatorio == tipo,
         )
     ).scalar_one_or_none()
-
-
-def _resolver_caminho(upload: UploadRelatorio) -> str:
-    """Caminho absoluto do arquivo salvo. Delega à camada de storage (ponto
-    único para futura migração a object storage — ver storage.py)."""
-    return storage.resolver(upload.caminho_arquivo)
 
 
 # GET exibe a página de upload; POST recebe o arquivo. As submissões são

@@ -1,7 +1,6 @@
 """SEC-005: entradas sintéticas pequenas, limites e integridade reais dos leitores."""
 
 from dataclasses import replace
-import io
 from pathlib import Path
 import struct
 import tempfile

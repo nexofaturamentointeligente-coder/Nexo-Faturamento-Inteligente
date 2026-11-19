@@ -25,8 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-import indicadores_executivos
-import raio_x
+import indicadores_regras
+import raio_x_regras
 
 MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
          "novembro", "dezembro")
@@ -503,7 +503,7 @@ def preparar_fatias(fatias) -> list:
     impacto (o dono pediu as 5 de maior impacto primeiro); com até o limite, na ordem do calendário.
 
     Marcas: "perda" (o mês tem dinheiro a recuperar: venda abaixo do custo ou abaixo do preço normal) e
-    "alerta" (sem custo em ao menos raio_x.LIMIAR_SEM_CUSTO do faturamento, o limite que já pinta o card de
+    "alerta" (sem custo em ao menos raio_x_regras.LIMIAR_SEM_CUSTO do faturamento, o limite que já pinta o card de
     vermelho). "atencao" junta as duas. Todos esses campos são abertos a qualquer plano."""
     linhas = []
     for posicao, fatia in enumerate(fatias or ()):
@@ -511,7 +511,7 @@ def preparar_fatias(fatias) -> list:
             or _numero(fatia.get("recuperavel")) > 0
         sem_custo = fatia.get("pct_faturamento_sem_custo")
         alerta = isinstance(sem_custo, (int, float)) and not isinstance(sem_custo, bool) \
-            and sem_custo >= raio_x.LIMIAR_SEM_CUSTO
+            and sem_custo >= raio_x_regras.LIMIAR_SEM_CUSTO
         marcas = [marca for marca, vale in (("perda", perda), ("alerta", alerta), ("atencao", perda or alerta))
                   if vale]
         linhas.append({"fatia": fatia, "pos_calendario": posicao, "marcas": " ".join(marcas),
@@ -546,9 +546,9 @@ def _a_confirmar_pela_linha(item: dict) -> bool:
     custo, venda = item.get("custo_total"), item.get("faturamento_com_custo")
     if _fracao_valida(custo) and _fracao_valida(venda):
         venda_c = round(venda * 100)
-        return venda_c > 0 and round(custo * 100) >= raio_x.RAZAO_CUSTO_IMPLAUSIVEL * venda_c
+        return venda_c > 0 and round(custo * 100) >= raio_x_regras.RAZAO_CUSTO_IMPLAUSIVEL * venda_c
     percentual = item.get("margem_percentual")
-    return _fracao_valida(percentual) and percentual <= 1 - raio_x.RAZAO_CUSTO_IMPLAUSIVEL
+    return _fracao_valida(percentual) and percentual <= 1 - raio_x_regras.RAZAO_CUSTO_IMPLAUSIVEL
 
 
 def chaves_a_confirmar(auditoria: dict) -> frozenset:
@@ -580,7 +580,7 @@ def linhas_de_produto(itens, *, margem_visivel: bool, a_confirmar=frozenset(), p
     """As linhas de uma tabela de produtos, na ordem recebida (a de maior impacto, de raio_x.py), com o texto da
     busca (nome e código) e as marcas do filtro rápido. Cada marca só sai de campo que a tabela tem:
       - "abaixo": vendido abaixo do preço normal (vazamento > 0);
-      - "negativa" e "baixa": margem negativa, e margem abaixo de indicadores_executivos.MARGEM_MINIMA (15%, a
+      - "negativa" e "baixa": margem negativa, e margem abaixo de indicadores_regras.MARGEM_MINIMA (15%, a
         margem mínima do motor; a negativa também é baixa), só quando o plano mostra a margem e fora os itens de
         custo a confirmar;
       - "a_confirmar": custo a confirmar (pela lista do plano);
@@ -598,7 +598,7 @@ def linhas_de_produto(itens, *, margem_visivel: bool, a_confirmar=frozenset(), p
             if _negativa(item):
                 marcas.append("negativa")
             percentual = item.get("margem_percentual")
-            if _fracao_valida(percentual) and percentual < indicadores_executivos.MARGEM_MINIMA:
+            if _fracao_valida(percentual) and percentual < indicadores_regras.MARGEM_MINIMA:
                 marcas.append("baixa")
         if confirmar:
             marcas.append("a_confirmar")
@@ -736,8 +736,8 @@ def _reais(valor: float) -> str:
 # Os números das regras saem das constantes do motor (raio_x.py), nunca escritos à mão: se a regra mudar, o texto
 # acompanha. Textos conferidos contra o código por revisão independente em 14/11/2026 (raio_x._combinar e
 # _resumir, raio_x_servico.visao); tests/test_raio_x_apresentacao.py confere as três partes de cada um.
-_VEZES = raio_x.RAZAO_CUSTO_IMPLAUSIVEL
-_FOLGA = f"{_reais(raio_x.TOLERANCIA_PRECO_MINIMA)} ou {_pct(raio_x.TOLERANCIA_PRECO_RELATIVA)}"
+_VEZES = raio_x_regras.RAZAO_CUSTO_IMPLAUSIVEL
+_FOLGA = f"{_reais(raio_x_regras.TOLERANCIA_PRECO_MINIMA)} ou {_pct(raio_x_regras.TOLERANCIA_PRECO_RELATIVA)}"
 
 EXPLICACOES: dict = {
     "recuperavel": _e(
@@ -767,7 +767,7 @@ EXPLICACOES: dict = {
         "Parte do valor vendido que veio sem o custo do produto nos relatórios. Nessas vendas, o NEXO não calcula "
         "margem nem acha venda abaixo do custo.",
         "Soma o valor das vendas com custo vazio, zero ou negativo (e as de relatório sem coluna de custo) e divide "
-        f"pelo faturamento analisado. A partir de {_pct(raio_x.LIMIAR_SEM_CUSTO)}, o card fica vermelho.",
+        f"pelo faturamento analisado. A partir de {_pct(raio_x_regras.LIMIAR_SEM_CUSTO)}, o card fica vermelho.",
         "Exporte o relatório com a coluna de custo e preencha no cadastro o custo dos produtos que estão sem, "
         "começando pelos que mais vendem."),
     "itens_vendidos": _e(
@@ -900,11 +900,11 @@ def preparar(resultado: dict, total_enviados=None) -> dict:
         "margem_alta": _pct(MARGEM_ALTA),
         "margem_baixa": _pct(MARGEM_BAIXA),
         "limite": LIMITE_DAS_TABELAS,
-        "limite_da_lista": raio_x.LIMITE_ITENS_LISTA,
+        "limite_da_lista": raio_x_regras.LIMITE_ITENS_LISTA,
         # A régua que pinta de vermelho o card de vendas sem custo, a mesma da recomendação de plano.
-        "limiar_sem_custo": raio_x.LIMIAR_SEM_CUSTO,
+        "limiar_sem_custo": raio_x_regras.LIMIAR_SEM_CUSTO,
         # As réguas do motor que os textos citam: os números saem das constantes, nunca escritos à mão.
-        "alta_custo": _pct(raio_x.LIMIAR_ALTA_CUSTO),
-        "margem_minima": _pct(indicadores_executivos.MARGEM_MINIMA),
-        "razao_a_confirmar": raio_x.RAZAO_CUSTO_IMPLAUSIVEL,
+        "alta_custo": _pct(raio_x_regras.LIMIAR_ALTA_CUSTO),
+        "margem_minima": _pct(indicadores_regras.MARGEM_MINIMA),
+        "razao_a_confirmar": raio_x_regras.RAZAO_CUSTO_IMPLAUSIVEL,
     }

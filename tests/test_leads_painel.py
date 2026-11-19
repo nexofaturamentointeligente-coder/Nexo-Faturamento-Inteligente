@@ -18,7 +18,7 @@ Dados fictícios.
 """
 
 import contextlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -50,7 +50,8 @@ ORIENTACAO = "Configure SUPABASE_KEY no serviço para baixar e processar as plan
 
 
 class _StorageDuble(armazenamento_leads.ArmazenamentoLeads):
-    """O cliente real (com a conferência de tamanho e SHA-256 do baixar) lendo de um dicionário, sem rede."""
+    """O cliente real (com a conferência de tamanho e SHA-256 do baixar e do baixar_para) lendo de um dicionário, sem
+    rede: a leitura em blocos é a que os dois usam."""
 
     def __init__(self):
         super().__init__(f"https://{PROJETO}.supabase.co", CHAVE, "leads-raio-x")
@@ -58,7 +59,7 @@ class _StorageDuble(armazenamento_leads.ArmazenamentoLeads):
         self.pedidos = []
         self.falha = None
 
-    def ler(self, caminho, maximo=None):
+    def _blocos(self, caminho, maximo=None):
         self.pedidos.append(caminho)
         if self.falha is not None:
             raise self.falha
@@ -67,7 +68,9 @@ class _StorageDuble(armazenamento_leads.ArmazenamentoLeads):
         conteudo = self.objetos[caminho]
         if maximo is not None and len(conteudo) > maximo:
             raise ErroDeArmazenamento("o arquivo passa do tamanho permitido")
-        return conteudo
+        # Em dois blocos: a gravação direto no arquivo junta as partes.
+        yield conteudo[:len(conteudo) // 2]
+        yield conteudo[len(conteudo) // 2:]
 
 
 def _normalizar(html):
@@ -768,6 +771,36 @@ class ProcessarTests(_PainelCase):
         lead_id = self.lead_do_site([LOTE[0], LOTE[1], LOTE[0], LOTE[2], LOTE[3]])
         self.assertIn("Avaliação concluída: 4 relatório(s) de vendas.", self.flashes(self.processar(lead_id)))
         self.assertEqual(len(self.storage.pedidos), 4)
+
+    def test_planilhas_vao_do_storage_para_o_disco_sem_ficar_na_memoria(self):
+        """O processamento grava cada planilha direto numa pasta temporária (baixar_para), sem o baixar que devolve
+        os bytes, e a pasta sai no fim, com ou sem erro."""
+        self.com_storage()
+        lead_id = self.lead_do_site(list(LOTE))
+        pastas = []
+        gravar = self.storage.baixar_para
+
+        def baixar_para(planilha, destino):
+            pastas.append(Path(destino).parent)
+            gravar(planilha, destino)
+            self.assertEqual(Path(destino).read_bytes(), self.storage.objetos[planilha.caminho])
+        with patch.object(self.storage, "baixar", side_effect=AssertionError("planilha inteira na memória")), \
+                patch.object(self.storage, "baixar_para", side_effect=baixar_para):
+            self.assertIn("Avaliação concluída: 4 relatório(s) de vendas.", self.flashes(self.processar(lead_id)))
+        self.assertEqual((len(pastas), len(set(pastas))), (4, 1))
+        self.assertRegex(pastas[0].name, r"^nexo-raio-x-[a-z0-9_]{8}$")
+        self.assertFalse(pastas[0].exists())
+        # O conteúdo do Storage que não confere com o registrado: nada é processado, e a pasta também sai.
+        outro = self.lead_do_site(list(LOTE), nome_loja="Loja Adulterada", email="adulterada@example.invalid")
+        caminho = next(caminho for caminho in self.storage.objetos if f"/{outro}/02-" in caminho)
+        self.storage.objetos[caminho] = self.storage.objetos[caminho][:-1] + b"9"
+        pastas.clear()
+        with patch.object(self.storage, "baixar_para", side_effect=baixar_para):
+            self.assertIn("Não foi possível baixar as planilhas do lead no Storage agora.",
+                          self.flashes(self.processar(outro)))
+        self.assertEqual(len(pastas), 2)
+        self.assertFalse(pastas[0].exists())
+        self.assertEqual((self.worker_chamado, self.recarregar(outro).status), (1, "pendente"))
 
     def test_vaga_ocupada_responde_503_sem_baixar(self):
         import etl_uploads
