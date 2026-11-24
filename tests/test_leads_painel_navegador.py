@@ -27,7 +27,11 @@ _CARREGADO = """() => {
     const corpo = d.querySelector('[data-painel-corpo]');
     return corpo.getAttribute('aria-busy') === 'false' && !!corpo.querySelector('[data-painel-fragmento]');
 }"""
-_FECHADO = "() => !document.getElementById('painelLead').open"
+# O close() tira o atributo open na hora; o evento close, que esvazia o painel, tira o ?ver= do endereço e
+# devolve o foco, vem depois, numa tarefa à parte. Fechado é quando esse tratador já rodou: a classe da página
+# sai nele.
+_FECHADO = """() => !document.getElementById('painelLead').open
+    && !document.documentElement.classList.contains('painel-lead-aberto')"""
 _MEDIR_PAINEL = """() => {
     const d = document.getElementById('painelLead');
     const corpo = d.querySelector('[data-painel-corpo]');

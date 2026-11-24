@@ -124,10 +124,17 @@ class TemaNavegadorTests(NavegadorCase):
 
     def _esperar(self, pagina, expressao):
         """wait_for_function repete a expressão com eval, que a CSP do portal barra (só a primeira
-        passa, dentro da avaliação do Playwright): a repetição fica aqui."""
+        passa, dentro da avaliação do Playwright): a repetição fica aqui. Quando o teste espera uma
+        recarga (a troca de tema em outra aba), ela pode destruir o contexto no meio da avaliação:
+        essa tentativa conta como "ainda não", e a seguinte roda na página nova."""
+        from playwright.sync_api import Error as ErroDoPlaywright
         for _ in range(200):
-            if pagina.evaluate(expressao):
-                return
+            try:
+                if pagina.evaluate(expressao):
+                    return
+            except ErroDoPlaywright as erro:
+                if "Execution context was destroyed" not in str(erro):
+                    raise
             pagina.wait_for_timeout(50)
         self.fail(f"não aconteceu: {expressao}")
 
