@@ -10,8 +10,9 @@
   4. As planilhas no Storage (um dublê do cliente; nenhum serviço externo): só as do registro conferido viram pedido;
      download avulso e .zip com os cabeçalhos certos; 404, 502 e 503 curtos e sem detalhe interno; log só com ids.
   5. O processamento (POST /admin/leads/<id>/processar): grava a avaliação no próprio lead e volta com o painel
-     aberto, sem WhatsApp; vaga ocupada, processo isolado ocupado, sem planilhas, lead convertido ou expirado, sem
-     Storage, erro do Storage, do motor e do banco, CSRF e o consultor.
+     aberto, sem WhatsApp; vaga ocupada (o lote baixado fora da vaga, a espera da vez e a recusa antes do download
+     quando não há lugar na fila), o mesmo lead em dois pedidos, processo isolado ocupado, sem planilhas, lead
+     convertido ou expirado, sem Storage, erro do Storage, do motor e do banco, CSRF e o consultor.
   6. Banco sem as revisões do microsserviço (f2b6d8a4c1e9) e do aceite (c8e2a4f6b0d1): a tela segue, com "—".
 
 Dados fictícios.
@@ -25,6 +26,8 @@ import json
 from pathlib import Path
 import re
 import tempfile
+import threading
+import time
 from unittest.mock import MagicMock, patch
 import uuid
 import zipfile
@@ -819,6 +822,92 @@ class ProcessarTests(_PainelCase):
         self.assertEqual((self.storage.pedidos, self.worker_chamado), ([], 0))
         self.assertEqual(self.recarregar(lead_id).status, "pendente")
 
+    def _vaga_em_outro_pedido(self, max_espera=4, soltar_quando=None):
+        """Uma sala de espera própria, com a vaga segura por outra thread (outro envio em andamento) até o fim do
+        teste ou até soltar_quando(sala). Devolve a sala e o evento que marca a soltura."""
+        import etl_uploads
+        sala = etl_uploads._SalaDeEspera(max_espera=max_espera)
+        segurando, soltou, fim = threading.Event(), threading.Event(), threading.Event()
+
+        def outro_pedido():
+            sala.acquire(blocking=False)
+            segurando.set()
+            limite = time.monotonic() + 15
+            while not fim.is_set() and time.monotonic() < limite and not (soltar_quando and soltar_quando(sala)):
+                time.sleep(0.01)
+            sala.release()
+            soltou.set()
+
+        thread = threading.Thread(target=outro_pedido, daemon=True)
+        thread.start()
+        self.assertTrue(segurando.wait(5))
+        self.addCleanup(thread.join, 15)
+        self.addCleanup(fim.set)
+        self.stack.enter_context(patch.object(etl_uploads, "_UPLOAD_ADMISSION", sala))
+        return sala, soltou
+
+    def test_vaga_em_outro_pedido_baixa_o_lote_fora_dela_e_espera_a_vez(self):
+        """Com a vaga em outro pedido e lugar na fila: o lote é baixado sem segurar a vaga de ninguém, e o pedido
+        espera a vez (sem transação aberta) e processa quando a vaga se solta."""
+        self.com_storage()
+        lead_id = self.lead_do_site(list(LOTE))
+        token = self.csrf_token(PAGINA)
+        sala, soltou = self._vaga_em_outro_pedido(soltar_quando=lambda sala: sala.na_espera() == 1)
+        baixou_com_a_vaga_no_outro = []
+        gravar = self.storage.baixar_para
+
+        def baixar_para(planilha, destino):
+            baixou_com_a_vaga_no_outro.append(not soltou.is_set())
+            gravar(planilha, destino)
+
+        with patch.object(self.storage, "baixar_para", side_effect=baixar_para):
+            resposta = self.processar(lead_id, token)
+        self.assertIn("Avaliação concluída: 4 relatório(s) de vendas.", self.flashes(resposta))
+        self.assertEqual(baixou_com_a_vaga_no_outro, [True] * 4)
+        self.assertTrue(soltou.is_set())
+        self.assertEqual((self.worker_chamado, self.transacao_aberta), (1, False))
+        self.assertEqual((self.recarregar(lead_id).status, sala.na_espera()), ("concluido", 0))
+
+    def test_sem_a_vez_no_prazo_responde_503_sem_chamar_o_motor(self):
+        import etl_uploads
+        self.com_storage()
+        lead_id = self.lead_do_site(list(LOTE))
+        token = self.csrf_token(PAGINA)
+        sala, soltou = self._vaga_em_outro_pedido()
+        self.stack.enter_context(patch.object(etl_uploads, "ESPERA_MAXIMA_S", 0.3))
+        resposta = self.processar(lead_id, token)
+        self.assertEqual((resposta.status_code, resposta.headers.get("Retry-After")), (503, "30"))
+        self.assertIn("Tente novamente em cerca de 30 segundos", resposta.get_data(as_text=True))
+        self.assertEqual((len(self.storage.pedidos), self.worker_chamado), (4, 0))
+        self.assertEqual((self.recarregar(lead_id).status, self.contar_linhas_pdv(lead_id)), ("pendente", 0))
+        self.assertEqual((soltou.is_set(), sala.na_espera()), (False, 0))
+
+    def test_fila_cheia_recusa_antes_de_baixar(self):
+        self.com_storage()
+        lead_id = self.lead_do_site(list(LOTE))
+        token = self.csrf_token(PAGINA)
+        self._vaga_em_outro_pedido(max_espera=0)  # a vaga em outro pedido e nenhum lugar na fila
+        resposta = self.processar(lead_id, token)
+        self.assertEqual((resposta.status_code, resposta.headers.get("Retry-After")), (503, "30"))
+        self.assertEqual((self.storage.pedidos, self.worker_chamado), ([], 0))
+
+    def test_o_mesmo_lead_nao_processa_em_dois_pedidos_ao_mesmo_tempo(self):
+        from blueprints import leads
+        self.com_storage()
+        lead_id = self.lead_do_site(list(LOTE))
+        with leads._reservar_lead(lead_id) as reservado:  # o primeiro pedido, ainda em andamento
+            self.assertTrue(reservado)
+            self.assertIn(leads.MENSAGEM_LEAD_EM_PROCESSAMENTO, self.flashes(self.processar(lead_id)))
+        self.assertEqual((self.storage.pedidos, self.worker_chamado), ([], 0))
+        # A reserva sai no fim do pedido, com erro ou sem.
+        self.storage.falha = ErroDeArmazenamento("o Storage não respondeu (URLError)")
+        self.assertIn("Não foi possível baixar as planilhas do lead no Storage agora.",
+                      self.flashes(self.processar(lead_id)))
+        self.assertEqual(leads._LEADS_EM_PROCESSAMENTO, set())
+        self.storage.falha = None
+        self.assertIn("Avaliação concluída: 4 relatório(s) de vendas.", self.flashes(self.processar(lead_id)))
+        self.assertEqual(leads._LEADS_EM_PROCESSAMENTO, set())
+
     def test_processo_isolado_ocupado_tambem_responde_503(self):
         from etl_inputs import ETLInputError
         self.com_storage()
@@ -826,7 +915,7 @@ class ProcessarTests(_PainelCase):
         with patch("etl_runtime.run_avaliacao_cenario", side_effect=ETLInputError("busy", "Processador ocupado.")):
             resposta = self.processar(lead_id)
         self.assertEqual((resposta.status_code, resposta.headers.get("Retry-After")), (503, "30"))
-        self.assertIn("Aguarde alguns segundos e envie de novo", resposta.get_data(as_text=True))
+        self.assertIn("Tente novamente em cerca de 30 segundos", resposta.get_data(as_text=True))
         self.assertEqual((self.recarregar(lead_id).status, self.contar_linhas_pdv(lead_id)), ("pendente", 0))
 
     def test_sem_planilhas_lead_convertido_expirado_ou_sem_storage(self):

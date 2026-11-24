@@ -123,12 +123,23 @@ def _pico_do_envelope(envelope):
     return pico if type(pico) is int and pico >= 0 else None
 
 
+def _marcar_vaga_ocupada():
+    """Recusa por vaga ocupada não desconta a cota de envios (etl_uploads.deduzir_cota)."""
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            g.nexo_vaga_ocupada = True
+    except ImportError:  # pragma: no cover - o processo web sempre tem o Flask
+        pass
+
+
 def _run_job(operation, paths, *, extension=None, limits=None):
-    from etl_erros import ETLInputError
+    from etl_erros import CODIGO_INFRAESTRUTURA, ETLInputError, MENSAGEM_INFRAESTRUTURA
     policy = get_limits() if limits is None else limits
     if not isinstance(policy, ETLLimits):
         raise ValueError("Política ETL inválida.")
     if not _ADMISSION.acquire(blocking=False):
+        _marcar_vaga_ocupada()
         raise ETLInputError("busy", "Há outro arquivo em validação ou processamento. Tente novamente em instantes.")
     process = None
     # Para a linha de log do processamento (_registrar_job).
@@ -164,7 +175,11 @@ def _run_job(operation, paths, *, extension=None, limits=None):
                 _stop_owned_process(process)
                 raise ETLInputError("timeout", "Tempo de processamento excedido. Reduza ou divida o relatório.") from None
             desfecho = "sem_resultado"
-            if not output.is_file() or output.stat().st_size > policy.max_output_bytes:
+            if not output.is_file():
+                # Processo interrompido (morto pelo sistema, sem memória fora do controle do ETL) antes
+                # de gravar: falha do servidor. O result.json só existe inteiro (etl_worker._gravar_resultado).
+                raise ETLInputError(CODIGO_INFRAESTRUTURA, MENSAGEM_INFRAESTRUTURA)
+            if output.stat().st_size > policy.max_output_bytes:
                 raise ETLInputError("worker", "Processamento interrompido pelo limite de recursos ou por arquivo inválido.")
             with output.open("rb") as stream:
                 payload = stream.read(policy.max_output_bytes + 1)
@@ -173,6 +188,8 @@ def _run_job(operation, paths, *, extension=None, limits=None):
             try:
                 envelope = json.loads(payload)
             except (ValueError, UnicodeError, RecursionError):
+                # O result.json só existe inteiro (gravação atômica): ilegível é saída inválida do processo
+                # isolado, não interrupção. Continua a recusa do processamento.
                 raise ETLInputError("worker", "Não foi possível concluir o processamento com segurança.") from None
             if not isinstance(envelope, dict) or type(envelope.get("ok")) is not bool:
                 raise ETLInputError("worker", "Resposta inválida do processamento isolado.")
@@ -186,16 +203,21 @@ def _run_job(operation, paths, *, extension=None, limits=None):
                     raise ETLInputError("worker", "Não foi possível processar o arquivo com segurança.")
                 raise ETLInputError(code, message)
             desfecho = "falha"
-            if process.returncode != 0 or not isinstance(envelope.get("result"), dict):
+            if process.returncode != 0:
+                # Gravou o resultado, mas terminou com erro (morto depois da gravação ou falha na saída):
+                # falha do servidor, e o resultado não é usado.
+                raise ETLInputError(CODIGO_INFRAESTRUTURA, MENSAGEM_INFRAESTRUTURA)
+            if not isinstance(envelope.get("result"), dict):
                 raise ETLInputError("worker", "Não foi possível concluir o processamento com segurança.")
             desfecho = "ok"
             return envelope["result"]
     except ETLInputError:
         raise
     except (OSError, ValueError, subprocess.SubprocessError):
-        # Também depois do "ok": a remoção da pasta do job, na saída do with, pode falhar.
+        # Também depois do "ok": a remoção da pasta do job, na saída do with, pode falhar. Disco,
+        # processo que não abre: falha do servidor.
         desfecho = "falha"
-        raise ETLInputError("worker", "Processamento temporariamente indisponível. Tente novamente.") from None
+        raise ETLInputError(CODIGO_INFRAESTRUTURA, MENSAGEM_INFRAESTRUTURA) from None
     finally:
         try:
             if process is not None and process.poll() is None:

@@ -198,7 +198,12 @@ def materializar_para_etl(referencia: str, max_bytes: int):
             # Não reter o BYTEA enquanto o processo isolado calcula os KPIs.
             payload = None
             yield str(destination)
-    except OSError:
+    except OSError as erro:
+        # Disco do servidor sem espaço ao preparar a cópia: falha do servidor, não do arquivo (que
+        # continua íntegro no banco); nada é marcado como ERRO e o pedido pode ser repetido.
+        from etl_erros import CODIGO_INFRAESTRUTURA, ERRNOS_DE_DISCO, MENSAGEM_INFRAESTRUTURA
+        if getattr(erro, "errno", None) in ERRNOS_DE_DISCO:
+            raise ETLInputError(CODIGO_INFRAESTRUTURA, MENSAGEM_INFRAESTRUTURA) from None
         raise ETLInputError("storage_unavailable", "Não foi possível preparar o arquivo armazenado. Reenvie o relatório.") from None
     finally:
         if source_fd is not None:

@@ -40,7 +40,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from etl_erros import ETLInputError
 from etl_regras import STATUS_PDV_DIVERGENTE
-from etl_uploads import ler_upload_validado, limitar_upload
+from etl_uploads import deduzir_cota, ler_upload_validado, limitar_upload
 
 from blueprints.auth import (
     _destino_abre_por_get, _destino_seguro, limite_reautenticacao, trocar_email_autenticado, trocar_senha_autenticada,
@@ -640,7 +640,7 @@ def _buscar_upload(id_analise: int, tipo: str):
 @cliente_bp.route("/upload", methods=["GET", "POST"])
 @cliente_required
 # Por usuário: cada POST custa uma validação em processo isolado (CPU/memória).
-@limiter.limit("30 per hour", methods=["POST"], key_func=chave_limite_usuario)
+@limiter.limit("30 per hour", methods=["POST"], key_func=chave_limite_usuario, deduct_when=deduzir_cota)
 @limitar_upload
 def upload():
     """Preflight limitado e substituição serializada, sem executar ETL comercial."""

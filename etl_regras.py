@@ -19,7 +19,7 @@ import numbers
 import re
 import unicodedata
 
-from etl_erros import ETLInputError, ETLValidationError
+from etl_erros import CODIGO_INFRAESTRUTURA, ETLInputError, ETLValidationError
 from etl_limits import get_limits
 
 # O canal de log de sempre da análise mensal.
@@ -275,9 +275,12 @@ def processar_arquivos_analise(caminho_vendas: str, caminho_compras: str,
         )
     except ETLInputError as erro:
         logger.warning("ETL recusado (%s).", erro.code)
+        # O código vai na telemetria (a assinatura do resultado não muda): quem chama distingue a falha
+        # do servidor (eh_falha_de_infraestrutura), que não pode marcar o upload como ERRO.
         return ResultadoETL(sucesso=False, mensagem=erro.safe_message,
-                            kpis={}, telemetria={}, alertas=[])
+                            kpis={}, telemetria={"codigo_erro": erro.code}, alertas=[])
     except Exception as erro:  # não registrar SQL, caminhos, conteúdo ou credenciais
         logger.warning("Processamento ETL indisponível (%s).", type(erro).__name__)
+        # Falha fora do ETL (banco ao gravar os KPIs, resposta do processo isolado): do servidor.
         return ResultadoETL(sucesso=False, mensagem="Não foi possível concluir o processamento com segurança. Tente novamente ou revise os arquivos.",
-                            kpis={}, telemetria={}, alertas=[])
+                            kpis={}, telemetria={"codigo_erro": CODIGO_INFRAESTRUTURA}, alertas=[])

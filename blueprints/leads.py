@@ -50,7 +50,7 @@ Regras:
 """
 
 from collections import OrderedDict, namedtuple
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import timedelta
 from decimal import Decimal
 import json
@@ -80,7 +80,7 @@ from contas_email import normalizar_email
 from emails import email_valido
 import entitlements
 from etl_erros import ETLInputError
-from etl_uploads import vaga_de_entrada
+from etl_uploads import deduzir_cota, vaga_de_entrada, vaga_recusaria_agora
 from extensions import chave_limite_usuario, db, limiter
 from horario import agora_utc
 import inteligencia_estoque
@@ -94,7 +94,9 @@ import triagem_cenario
 
 leads_bp = Blueprint("leads", __name__, url_prefix="/admin/leads")
 
-limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_func=chave_limite_usuario)
+# A recusa por vaga ocupada não gasta a cota (etl_uploads.deduzir_cota).
+limite_envio = limiter.shared_limit("20 per hour", scope="avaliacao-lead", key_func=chave_limite_usuario,
+                                    deduct_when=deduzir_cota)
 # Downloads das planilhas originais do lead da landing (avulsas e .zip, somados), por consultor.
 limite_download = limiter.shared_limit("60 per hour", scope="planilhas-lead", key_func=chave_limite_usuario)
 
@@ -111,8 +113,32 @@ CABECALHO_DO_PAINEL = "X-Nexo-Painel"
 MENSAGEM_STORAGE_FALHOU = ("Não foi possível baixar as planilhas do lead no Storage agora. Tente de novo em "
                            "instantes.")
 
-MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Aguarde alguns segundos e envie de novo: "
+MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Tente novamente em cerca de 30 segundos: "
                     "nenhum arquivo foi lido.")
+MENSAGEM_LEAD_EM_PROCESSAMENTO = ("As planilhas deste lead já estão sendo processadas em outro pedido. Aguarde o "
+                                  "resultado: nada foi baixado de novo.")
+# Teto do download do lote inteiro (cada planilha já tem o seu, armazenamento_leads.PRAZO_SEGUNDOS).
+PRAZO_TOTAL_DOWNLOAD_S = 90
+
+# Leads com processamento em andamento neste processo: um segundo pedido do mesmo lead (clique duplo,
+# outra aba) é recusado antes do download, sem disputar a vaga.
+_LEADS_EM_PROCESSAMENTO = set()
+_LEADS_EM_PROCESSAMENTO_TRAVA = threading.Lock()
+
+
+@contextmanager
+def _reservar_lead(lead_id):
+    """Rende True com o lead reservado para este pedido; False quando outro já o processa."""
+    with _LEADS_EM_PROCESSAMENTO_TRAVA:
+        livre = lead_id not in _LEADS_EM_PROCESSAMENTO
+        if livre:
+            _LEADS_EM_PROCESSAMENTO.add(lead_id)
+    try:
+        yield livre
+    finally:
+        if livre:
+            with _LEADS_EM_PROCESSAMENTO_TRAVA:
+                _LEADS_EM_PROCESSAMENTO.discard(lead_id)
 MENSAGEM_SEM_ESQUEMA = ("A Avaliação de Cenário depende das migrações 5e1b9c3a7d20, 6a8f2d4c0e13, 7c4e2a9b5d31, "
                         "9b3e5d7f1a28, c5f8a1d3e7b9 e e7a1c3f5b9d2, ainda não aplicadas neste banco: nenhum "
                         "arquivo foi lido.")
@@ -1127,10 +1153,12 @@ def arquivos_zip(lead_id):
 @admin_required
 @limite_envio
 def processar(lead_id):
-    """Processa as planilhas que o lead enviou pela landing: dentro da vaga única de entrada, baixa cada uma do
-    Storage direto numa pasta temporária (conferida com o registrado no caminho, sem guardá-la na memória do processo
-    web) e grava a avaliação no próprio lead pelo mesmo caminho do reenvio (_avaliar: processo isolado e
-    avaliacao_cenario.registrar). Lead convertido ou com os dados expirados, sem planilha válida ou com o Storage sem
+    """Processa as planilhas que o lead enviou pela landing: baixa cada uma do Storage direto numa pasta temporária
+    (conferida com o registrado no caminho, sem guardá-la na memória do processo web), com prazo total, e só então
+    disputa a vaga única de entrada (sala de espera): um Storage lento não segura a vaga de todo mundo. Grava a
+    avaliação no próprio lead pelo mesmo caminho do reenvio (_avaliar: processo isolado e
+    avaliacao_cenario.registrar). Um segundo pedido do mesmo lead, enquanto o primeiro roda, é recusado antes do
+    download. Lead convertido ou com os dados expirados, sem planilha válida ou com o Storage sem
     configuração: nada é baixado. Nenhuma mensagem é enviada ao lead. Volta para a lista com o painel do lead aberto
     (?ver=), já com os números."""
     if not esquema_disponivel():
@@ -1161,8 +1189,12 @@ def processar(lead_id):
             vistos.add(planilha.sha256)
             unicas.append(planilha)
     planilhas = unicas
-    with vaga_de_entrada() as livre:
-        if not livre:
+    with _reservar_lead(lead_id) as reservado:
+        if not reservado:
+            flash(MENSAGEM_LEAD_EM_PROCESSAMENTO, "warning")
+            return redirect(destino, 303)
+        if vaga_recusaria_agora():
+            # Vaga ocupada e sem lugar na fila: a recusa é certa, então nada é baixado à toa.
             return _ocupado("admin/leads.html", _contexto_lista(ver=lead_id))
         # A transação de leitura termina antes da rede (até 30 s por planilha) e do processo isolado.
         db.session.rollback()
@@ -1170,13 +1202,20 @@ def processar(lead_id):
             # Os arquivos abertos fecham antes de a pasta ser apagada (no Windows, arquivo aberto não sai).
             with tempfile.TemporaryDirectory(prefix="nexo-raio-x-") as pasta, ExitStack() as abertos:
                 arquivos = []
+                prazo = time.monotonic() + PRAZO_TOTAL_DOWNLOAD_S
                 for planilha in planilhas:
+                    if time.monotonic() > prazo:
+                        raise armazenamento_leads.ErroDeArmazenamento("prazo total do download do lote esgotado")
                     nome = f"relatorio-{planilha.indice:02d}.{planilha.formato}"
                     caminho = Path(pasta) / nome
                     armazenamento.baixar_para(planilha, caminho)
                     arquivos.append(FileStorage(abertos.enter_context(caminho.open("rb")),
                                                 content_type=planilha.tipo, filename=nome))
-                lead = _avaliar(arquivos, lead_id=lead_id)
+                # Só agora, com o lote no disco, a disputa pela vaga (sala de espera).
+                with vaga_de_entrada() as livre:
+                    if not livre:
+                        return _ocupado("admin/leads.html", _contexto_lista(ver=lead_id))
+                    lead = _avaliar(arquivos, lead_id=lead_id)
         except armazenamento_leads.ErroDeArmazenamento as erro:
             db.session.rollback()
             current_app.logger.warning("Planilhas do lead %s não baixadas para processar (%s).", lead_id, erro)

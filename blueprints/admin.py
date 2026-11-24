@@ -24,7 +24,7 @@ from models import (
 )
 from etl_regras import processar_arquivos_analise, ResultadoETL, STATUS_PDV_DIVERGENTE
 import validacao_pdv
-from etl_erros import ETLInputError
+from etl_erros import CODIGO_INFRAESTRUTURA, ETLInputError, eh_falha_de_infraestrutura
 from etl_limits import get_limits
 from etl_uploads import ler_upload_validado, limitar_upload, limitar_processamento
 from notifications import notificar_admins, notificar_clientes_empresa
@@ -1481,13 +1481,21 @@ def processar_analise(id_analise):
                     caminho_vendas, caminho_compras, id_analise, db.session,
                 )
         except ETLInputError as erro:
-            resultado = ResultadoETL(False, erro.safe_message, {}, {}, [])
+            resultado = ResultadoETL(False, erro.safe_message, {}, {"codigo_erro": erro.code}, [])
         except ValueError:
-            resultado = ResultadoETL(False, "Configuração de processamento inválida.", {}, {}, [])
+            resultado = ResultadoETL(False, "Configuração de processamento inválida.", {},
+                                     {"codigo_erro": CODIGO_INFRAESTRUTURA}, [])
         if not db.session.is_active:
             # Uma falha SQL não tratada por SAVEPOINT exige rollback completo.
             # Nunca readquirir e marcar uploads que outro pedido pode substituir.
             raise SQLAlchemyError("Transação de processamento indisponível.")
+        if not resultado.sucesso and eh_falha_de_infraestrutura(resultado.telemetria.get("codigo_erro")):
+            # Falha do servidor (processo isolado, disco, prazo, vaga): os arquivos continuam íntegros
+            # e o último relatório válido fica como estava. Nada é gravado: nem ERRO nos uploads nem a
+            # troca de status da análise (o EM_ANALISE acima é desfeito).
+            db.session.rollback()
+            flash(f"Falha temporária no processamento: {resultado.mensagem}", "warning")
+            return redirect(url_for("admin.dashboard"))
         if resultado.sucesso:
             for upload in (upload_vendas, upload_compras):
                 upload.status_processamento = "PROCESSADO"

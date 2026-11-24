@@ -99,6 +99,10 @@ ORIENTACAO_EXTENSAO = "O conteúdo não corresponde à extensão do arquivo."
 ORIENTACAO_ESTRUTURA = ("O relatório precisa ter colunas legíveis de produto e de quantidade ou valor, "
                         "como o PDV exporta.")
 ORIENTACAO_TAMANHO = "Divida o relatório em arquivos menores, por período, e envie novamente."
+ORIENTACAO_SEM_LINHAS = ("O arquivo tem o cabeçalho do relatório, mas nenhuma linha de dados abaixo dele (só o "
+                         "cabeçalho ou a linha de total). Confira o período no sistema e exporte de novo.")
+# Uma letra (com acento), não dígito nem sublinhado: separa o texto (nome, rótulo de total) do número.
+_RE_LETRA = re.compile(r"[^\W\d_]")
 ORIENTACAO_NEUTRALIZAR = ("Salve a planilha só com os valores, sem fórmulas, macros ou objetos "
                           "incorporados, e envie novamente.")
 
@@ -572,18 +576,42 @@ def _minimo_compras(mapa) -> bool:
             and bool({"valor_nf", "produtos_total", "custo_unitario", "qtde_comprada"} & mapa.keys()))
 
 
-def exigir_estrutura_minima(matriz) -> None:
+def exigir_estrutura_minima(matriz):
     """Colunas legíveis de relatório de PDV: produto e quantidade ou valor (vendas), ou
     fornecedor/produto e valor (compras), com a mesma detecção de cabeçalho do ETL. É mais
-    branda que a do processamento: nada que o processamento aceita é recusado aqui."""
+    branda que a do processamento: nada que o processamento aceita é recusado aqui. Devolve a
+    detecção (linha do cabeçalho, mapa das colunas, linhas do cabeçalho)."""
     from etl_processor import ALIAS_COMPRAS, ALIAS_VENDAS, ETLValidationError, _detectar_cabecalho
     for aliases, minimo in ((ALIAS_VENDAS, _minimo_vendas), (ALIAS_COMPRAS, _minimo_compras)):
         try:
-            _detectar_cabecalho(matriz, aliases, minimo)
-            return
+            return _detectar_cabecalho(matriz, aliases, minimo)
         except ETLValidationError:
             continue
     raise SecurityGatekeeperError("estrutura_ausente", ORIENTACAO_ESTRUTURA)
+
+
+def exigir_linhas_de_dados(matriz, deteccao) -> None:
+    """Recusa, já na entrada, o relatório só com cabeçalho, ou com cabeçalho e linhas de total/rodapé
+    (a exportação de um período sem movimento), que antes passava e só falhava no processamento.
+
+    Branda como a estrutura mínima: só recusa quando nenhuma linha abaixo do cabeçalho poderia ser
+    dado. Basta uma linha com a célula de produto (ou de fornecedor) preenchida e que não seja rodapé,
+    ou com algum texto que não seja rodapé, ou só com números (pode ser código e quantidade), para o
+    arquivo seguir. Para na primeira linha de dado: num relatório comum, olha uma linha só."""
+    from etl_processor import _celula_vazia, _e_rodape
+    inicio, mapa, linhas_cabecalho = deteccao
+    coluna_chave = mapa.get("produto", mapa.get("fornecedor"))
+    for linha in matriz.iloc[inicio + linhas_cabecalho:].itertuples(index=False, name=None):
+        preenchidas = [valor for valor in linha if not _celula_vazia(valor)]
+        if not preenchidas:
+            continue
+        textos = [str(valor) for valor in preenchidas if _RE_LETRA.search(str(valor))]
+        if not textos:
+            return
+        chave = linha[coluna_chave] if coluna_chave is not None and coluna_chave < len(linha) else None
+        if (not _celula_vazia(chave) and not _e_rodape(chave)) or not all(_e_rodape(texto) for texto in textos):
+            return
+    raise SecurityGatekeeperError("sem_linhas_de_dados", ORIENTACAO_SEM_LINHAS)
 
 
 def _ausente(valor) -> bool:
@@ -800,7 +828,7 @@ def triar(caminho, extensao: str, limits) -> dict:
     if destino.exists() or destino.is_symlink():
         raise SecurityGatekeeperError("liberado_existente")
     matriz = read_raw(str(caminho), limits)
-    exigir_estrutura_minima(matriz)
+    exigir_linhas_de_dados(matriz, exigir_estrutura_minima(matriz))
     achados = inventariar_xlsx(caminho) if formato == "xlsx" else []
     neutralizadas = int(matriz.attrs.get("celulas_neutralizadas", 0))
     copia = bool(achados or neutralizadas)

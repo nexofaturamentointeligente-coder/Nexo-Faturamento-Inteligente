@@ -43,6 +43,7 @@ etl_regras.py, só com a biblioteca padrão: o processo web os usa sem carregar 
 que só o processo isolado do ETL (etl_worker) importa. Os nomes continuam valendo por aqui.
 """
 
+import functools
 import os
 import re
 import logging
@@ -137,6 +138,35 @@ def _normalizar_produto(valor) -> str:
     s = re.sub(r"[^A-Z0-9 ]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+# Cache das normalizações textuais puras (a mesma entrada dá sempre a mesma saída, um str): num
+# relatório por cupom a mesma descrição de produto se repete em milhares de linhas. Só textos de
+# até 128 caracteres entram no cache, e cada função guarda no máximo 8.192 entradas: a memória
+# fica limitada mesmo com planilha adversarial (um texto diferente em cada célula). Qualquer
+# outro valor (número, None, texto longo, subclasse de str) segue pelo cálculo de sempre. O
+# motor roda no processo isolado de cada job: o cache nasce vazio e morre com ele.
+_CACHE_TEXTUAL_ENTRADAS = 8192
+_CACHE_TEXTUAL_TAMANHO = 128
+
+
+def _com_cache_textual(funcao):
+    cacheada = functools.lru_cache(maxsize=_CACHE_TEXTUAL_ENTRADAS)(funcao)
+
+    @functools.wraps(funcao)
+    def normalizar(valor):
+        if type(valor) is str and len(valor) <= _CACHE_TEXTUAL_TAMANHO:
+            return cacheada(valor)
+        return funcao(valor)
+    normalizar.cache_info = cacheada.cache_info
+    normalizar.cache_clear = cacheada.cache_clear
+    normalizar.sem_cache = funcao
+    return normalizar
+
+
+_strip_acentos = _com_cache_textual(_strip_acentos)
+_norm_chave = _com_cache_textual(_norm_chave)
+_normalizar_produto = _com_cache_textual(_normalizar_produto)
 
 
 # Limite do nome EXIBÍVEL do produto: um valor vindo da planilha não deve
@@ -2088,6 +2118,9 @@ def normalizar_codigo_do_produto(valor):
     return texto.lstrip("0") or "0"
 
 
+normalizar_codigo_do_produto = _com_cache_textual(normalizar_codigo_do_produto)
+
+
 def normalizar_numero_do_documento(numero):
     """O número da venda (indicadores_executivos.numero_da_venda) como chave de ligação, sem os zeros à esquerda de
     cada grupo de algarismos ("P9-00001" e "P9-1" são o mesmo pedido), ou None."""
@@ -2732,8 +2765,12 @@ def carregar_compras(caminho: str):
     tem preferência (valor "puro" dos itens; valor_nf inclui frete/imposto).
     O total já sai líquido de NF cancelada e de devolução ao fornecedor (_consolidar_compras).
     """
-    nome = os.path.basename(caminho)
-    bruto = _ler_bruto(caminho)
+    return _compras_do_bruto(_ler_bruto(caminho), os.path.basename(caminho))
+
+
+def _compras_do_bruto(bruto: pd.DataFrame, nome: str):
+    """carregar_compras a partir da matriz já lida: o cálculo mensal lê cada arquivo uma vez só
+    e tira dela também o período do cabeçalho (_extrair_periodo_base), como o Raio-X."""
     if bruto.empty:
         raise ETLValidationError(f"O arquivo de compras '{nome}' está totalmente vazio.")
 
@@ -2846,14 +2883,6 @@ def _extrair_periodo_base(df_bruto: pd.DataFrame, janela: int = 30):
             if len(datas) == 1:
                 return datas[0], datas[0]
     return None
-
-
-def _detectar_periodo_arquivo(caminho: str):
-    """Lê o cru do arquivo e tenta extrair o período do cabeçalho. Falha → None."""
-    try:
-        return _extrair_periodo_base(_ler_bruto(caminho))
-    except ETLValidationError:
-        return None
 
 
 # =====================================================================
@@ -2989,11 +3018,25 @@ def _alerta_de_compras(consolidacao: dict) -> str:
 # =====================================================================
 # 7) Cálculo dos KPIs em memória (sem tocar no banco)
 # =====================================================================
+def _periodo_da_matriz(bruto: pd.DataFrame):
+    """O período do cabeçalho tirado da matriz já lida, sem reler o arquivo: matriz vazia não tem
+    período."""
+    return _extrair_periodo_base(bruto) if not bruto.empty else None
+
+
 def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> ResultadoETL:
     nome_v = os.path.basename(caminho_vendas)
 
-    df_v = carregar_vendas(caminho_vendas)
-    df_c, col_valor_c = carregar_compras(caminho_compras)
+    # Leitura única: cada arquivo é lido uma vez, e o período do cabeçalho sai da mesma matriz,
+    # antes de ela ser processada (como no Raio-X). Antes, o arquivo era relido inteiro só para isso.
+    bruto_v = _ler_bruto(caminho_vendas)
+    periodo_vendas = _periodo_da_matriz(bruto_v)
+    df_v = _vendas_do_bruto(bruto_v, nome_v)
+    del bruto_v
+    bruto_c = _ler_bruto(caminho_compras)
+    periodo_compras = _periodo_da_matriz(bruto_c)
+    df_c, col_valor_c = _compras_do_bruto(bruto_c, os.path.basename(caminho_compras))
+    del bruto_c
 
     # ---- VENDAS: agregação por produto normalizado ----
     grupo = (
@@ -3034,7 +3077,7 @@ def _calcular_kpis_local(caminho_vendas: str, caminho_compras: str) -> Resultado
     curva_abc = _classificar_curva_abc(grupo)
 
     # ---- Período da base (cabeçalho do relatório): vendas tem prioridade ----
-    periodo_base = _detectar_periodo_arquivo(caminho_vendas) or _detectar_periodo_arquivo(caminho_compras)
+    periodo_base = periodo_vendas or periodo_compras
     periodo_base_inicio = periodo_base[0] if periodo_base else None
     periodo_base_fim = periodo_base[1] if periodo_base else None
 

@@ -302,7 +302,8 @@ output.write_text(json.dumps({'ok': True, 'result': result}))"""
                 patch.object(self.runtime.logger, "disabled", False), \
                 self.assertLogs("etl_runtime", "INFO") as registro, self.assertRaises(self.error) as falha:
             self._run_owned("output.write_text(json.dumps({'ok': True, 'result': {}}))")
-        self.assertEqual(falha.exception.code, "worker")
+        # Falha do servidor (a pasta do job não sai), não do arquivo: código de infraestrutura.
+        self.assertEqual(falha.exception.code, "infra")
         linhas = [linha for linha in registro.output if "operacao=" in linha]
         self.assertEqual(len(linhas), 1)
         self.assertTrue(linhas[0].endswith("codigo_saida=0 desfecho=falha"))

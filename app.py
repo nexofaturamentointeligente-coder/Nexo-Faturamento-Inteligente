@@ -589,6 +589,24 @@ def create_app(config_name: str = None) -> Flask:
     for _excecao in falhas_banco.EXCECOES_TRATADAS:
         app.register_error_handler(_excecao, _banco_indisponivel)
 
+    # Disco do servidor sem espaço ao receber um envio (o corpo multipart vai para um temporário, e a
+    # Baia grava o arquivo antes de validá-lo): 503 com Retry-After e mensagem própria, nada gravado.
+    # Qualquer outro OSError é relançado e segue o caminho do 500, com o traceback no log.
+    from etl_erros import ERRNOS_DE_DISCO
+
+    def _disco_cheio(erro):
+        if getattr(erro, "errno", None) not in ERRNOS_DE_DISCO:
+            raise erro
+        falhas_banco.rollback_seguro()
+        referencia = secrets.token_hex(6)
+        app.logger.warning("Disco temporário sem espaço em %s [%s] (errno=%s, correlacao=%s).",
+                           request.path, request.method, erro.errno, referencia)
+        return falhas_banco.resposta_indisponivel(referencia, mensagem=(
+            "Não foi possível receber o arquivo agora: falta espaço temporário no servidor. Nada foi "
+            "gravado; tente novamente em instantes."))
+
+    app.register_error_handler(OSError, _disco_cheio)
+
     # Atrás de proxy reverso (Render, Railway, nginx...): confia nos cabeçalhos
     # X-Forwarded-For/Proto de N saltos (PROXY_FIX_HOPS). Sem isso, TODOS os
     # usuários aparecem com o IP do proxy (o rate limit do login viraria global)

@@ -1,5 +1,6 @@
 """Entrypoint privado SEC-005: stdin/rede/banco não fazem parte do protocolo."""
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,20 @@ def _limitar_recursos(limits, escrita):
     return resource
 
 
+def _gravar_resultado(output_path, payload: bytes) -> None:
+    """Grava o resultado num arquivo ao lado e troca o nome de uma vez (os.replace): um processo
+    interrompido no meio da gravação nunca deixa um result.json parcial com cara de resultado. O
+    processo pai só lê o nome final; o parcial some com a pasta do job."""
+    parcial = output_path.with_name(output_path.name + ".parcial")
+    parcial.write_bytes(payload)
+    os.replace(parcial, output_path)
+
+
+# Falta de espaço ou de recurso do sistema na gravação ou na leitura: falha do servidor, não do arquivo.
+_ERRNOS_DE_INFRAESTRUTURA = frozenset(filter(None, (
+    getattr(errno, nome, None) for nome in ("ENOSPC", "EDQUOT", "EIO", "EMFILE", "ENFILE", "ENOMEM", "EFBIG"))))
+
+
 def main():
     request_path, output_path = map(Path, sys.argv[1:3])
     if request_path.stat().st_size > 16_384:
@@ -52,8 +67,8 @@ def main():
     try:
         resource = _limitar_recursos(limits, escrita)
     except (OSError, ValueError):
-        output_path.write_text(json.dumps({"ok": False, "code": "platform", "message":
-            "A plataforma não oferece o isolamento de recursos exigido para processar arquivos."}))
+        _gravar_resultado(output_path, json.dumps({"ok": False, "code": "platform", "message":
+            "A plataforma não oferece o isolamento de recursos exigido para processar arquivos."}).encode())
         return 2
 
     # Rede e qualquer primitiva de execução/forja de processo (não só Popen):
@@ -107,6 +122,15 @@ def main():
     except MemoryError:
         envelope = {"ok": False, "code": "memory", "message":
                     "Arquivo excede o orçamento de memória. Reduza ou divida o relatório."}
+    except (ImportError, OSError) as error:
+        # Motor que não carrega ou disco/recurso do sistema esgotado: falha do servidor (o arquivo
+        # não é marcado como inválido). Os demais OSError seguem como antes.
+        from etl_erros import CODIGO_INFRAESTRUTURA, MENSAGEM_INFRAESTRUTURA
+        if isinstance(error, ImportError) or getattr(error, "errno", None) in _ERRNOS_DE_INFRAESTRUTURA:
+            envelope = {"ok": False, "code": CODIGO_INFRAESTRUTURA, "message": MENSAGEM_INFRAESTRUTURA}
+        else:
+            envelope = {"ok": False, "code": getattr(error, "code", "worker"), "message": getattr(
+                error, "safe_message", "Não foi possível interpretar o arquivo com segurança.")}
     except Exception as error:
         code = getattr(error, "code", "worker")
         message = getattr(error, "safe_message", "Não foi possível interpretar o arquivo com segurança.")
@@ -129,7 +153,7 @@ def main():
         payload = json.dumps(envelope, ensure_ascii=True, allow_nan=False, default=encode).encode()
         if len(payload) > limits.max_output_bytes:
             payload = b'{"ok":false,"code":"output","message":"Resultado excede o orcamento permitido."}'
-        output_path.write_bytes(payload)
+        _gravar_resultado(output_path, payload)
     except (OSError, ValueError, TypeError, MemoryError):
         return 2
     return 0

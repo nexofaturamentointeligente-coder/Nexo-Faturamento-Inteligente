@@ -30,7 +30,7 @@ from contract_policy import ESTADO_ATIVA, obter_situacao_contratual
 import entitlements
 from entitlements import requer_funcionalidade
 from etl_erros import ETLInputError
-from etl_uploads import vaga_de_entrada
+from etl_uploads import MENSAGEM_OCUPADO as _MENSAGEM_VAGA, deduzir_cota, vaga_de_entrada
 from extensions import chave_limite_usuario, db, limiter
 from horario import BRASILIA, instante_utc
 import plano_acao
@@ -42,9 +42,11 @@ import whatsapp_service
 onboarding_bp = Blueprint("onboarding", __name__)
 
 # Página e API somam o mesmo limite: cada envio ocupa o processo isolado por até 2 minutos.
-limite_raio_x = limiter.shared_limit("10 per hour", scope="raio-x", key_func=chave_limite_usuario)
+# A recusa por vaga ocupada não gasta a cota (etl_uploads.deduzir_cota).
+limite_raio_x = limiter.shared_limit("10 per hour", scope="raio-x", key_func=chave_limite_usuario,
+                                     deduct_when=deduzir_cota)
 
-MENSAGEM_OCUPADO = "Há outro envio ou processamento em andamento. Tente novamente em instantes."
+MENSAGEM_OCUPADO = _MENSAGEM_VAGA
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada: a resposta é
 # a mesma da vaga de entrada (etl_uploads._UPLOAD_ADMISSION).

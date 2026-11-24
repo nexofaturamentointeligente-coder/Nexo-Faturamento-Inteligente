@@ -1148,7 +1148,7 @@ class RotasTests(_BancoCase):
             etl_runtime._ADMISSION.release()
         for resposta in (novo, reenvio):
             self.assertEqual((resposta.status_code, resposta.headers.get("Retry-After")), (503, "30"))
-            self.assertIn("Aguarde alguns segundos e envie de novo", resposta.get_data(as_text=True))
+            self.assertIn("Tente novamente em cerca de 30 segundos", resposta.get_data(as_text=True))
         self.assertEqual(self.contar(LeadAvaliacao), 1)
         self.db.session.expire_all()
         self.assertEqual(self.db.session.get(LeadAvaliacao, lead.id).arquivos, len(LOTE))
