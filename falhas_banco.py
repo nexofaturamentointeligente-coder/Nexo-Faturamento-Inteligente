@@ -9,9 +9,13 @@ requisição é recusada com 503 e uma mensagem amigável, sem apagar o cookie d
 sessão, sem SQL na tela ou no log, e o usuário tenta de novo em instantes.
 """
 
+import logging
+
 from flask import current_app, jsonify, make_response, request
 from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolEsgotado
+
+logger = logging.getLogger(__name__)
 
 TITULO = "Sistema indisponível"
 MENSAGEM = "Sistema indisponível no momento. Tente novamente em instantes."
@@ -89,6 +93,20 @@ def descrever(erro) -> str:
     if motivo:
         partes.append(f"motivo={motivo}")
     return ", ".join(partes)
+
+
+def rollback_seguro() -> None:
+    """Desfaz a transação da requisição sem deixar uma segunda falha virar 500.
+
+    Com a conexão já perdida, o próprio rollback pode falhar; a resposta de
+    indisponibilidade (503) precisa sair mesmo assim. O log leva só o tipo e a
+    causa provável (descrever), nunca a mensagem do driver.
+    """
+    from extensions import db
+    try:
+        db.session.rollback()
+    except Exception as erro:  # noqa: BLE001 - qualquer falha aqui não pode derrubar o 503
+        logger.warning("Rollback indisponível (%s).", descrever(erro))
 
 
 def rota_json() -> bool:

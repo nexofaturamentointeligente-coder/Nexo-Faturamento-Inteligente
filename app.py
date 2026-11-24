@@ -175,7 +175,7 @@ def create_app(config_name: str = None) -> Flask:
         try:
             return carregar_usuario(user_id)
         except SQLAlchemyError as erro:
-            db.session.rollback()
+            falhas_banco.rollback_seguro()
             g.falha_banco_autenticacao = True
             app.logger.warning("Autenticação indisponível (%s).", falhas_banco.descrever(erro))
             return None
@@ -193,10 +193,11 @@ def create_app(config_name: str = None) -> Flask:
           3) Banco fora do ar durante a validação → 503 SEM apagar o cookie: nada
              privado sai, e a sessão segue válida quando o banco voltar (a
              próxima requisição revalida; a revogada durante a queda é negada).
-        Não toca em requisições de assets estáticos (sem custo por arquivo) nem no
-        despertador /ping, que nunca consulta o banco, nem com cookie de sessão.
+        Não toca em requisições de assets estáticos (sem custo por arquivo), no
+        despertador /ping nem no /socket.io/ desativado, que nunca consultam o
+        banco, nem com cookie de sessão.
         """
-        if request.endpoint in ("static", "ping"):
+        if request.endpoint in ("static", "ping", "socketio_desativado"):
             return
         autenticado = current_user.is_authenticated
         valida = False
@@ -204,7 +205,7 @@ def create_app(config_name: str = None) -> Flask:
             try:
                 valida = sessao_valida(current_user)
             except SQLAlchemyError as erro:
-                db.session.rollback()
+                falhas_banco.rollback_seguro()
                 g.falha_banco_autenticacao = True
                 app.logger.warning("Autorizacao indisponivel (%s).", falhas_banco.descrever(erro))
         if getattr(g, "falha_banco_autenticacao", False):
@@ -250,9 +251,11 @@ def create_app(config_name: str = None) -> Flask:
         Força a troca de senha no primeiro acesso: um CLIENTE logado com
         primeiro_acesso=True é interceptado e mandado para /auth/primeiro-acesso,
         bloqueando dashboard, suporte, upload etc. até definir a nova senha.
-        Libera apenas: assets estáticos, a própria rota de troca, o logout e o /ping.
+        Libera apenas: assets estáticos, a própria rota de troca, o logout, o /ping
+        e o /socket.io/ desativado.
         """
-        if request.endpoint in ("static", "auth.primeiro_acesso", "auth.logout", "ping"):
+        if request.endpoint in ("static", "auth.primeiro_acesso", "auth.logout", "ping",
+                                "socketio_desativado"):
             return
         if (
             current_user.is_authenticated
@@ -389,6 +392,19 @@ def create_app(config_name: str = None) -> Flask:
     # primeiro acesso e de termos pulam este endpoint, mesmo com cookie), sem cache e
     # sem limite de taxa: só "OK" em texto puro. O SELECT 1 que mantém o Supabase Free
     # ativo continua no /healthz/db; o healthCheckPath do Render continua o /healthz.
+    # Abas abertas antes da troca do sininho (Socket.IO → polling) continuam tentando
+    # /socket.io/ até serem recarregadas. Resposta 410 leve: sem login, sem banco, sem
+    # template e sem CSRF (o cliente antigo também faz POST no transporte de polling).
+    # Os guardas de sessão, de primeiro acesso e de termos pulam este endpoint, como o /ping.
+    @app.route("/socket.io/", defaults={"resto": ""}, methods=["GET", "POST"])
+    @app.route("/socket.io/<path:resto>", methods=["GET", "POST"])
+    @csrf.exempt
+    def socketio_desativado(resto):
+        resposta = make_response("Canal desativado: recarregue a página.", 410)
+        resposta.headers["Content-Type"] = "text/plain; charset=utf-8"
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
+
     @app.route("/ping")
     @app.route("/health")
     def ping():
@@ -564,10 +580,7 @@ def create_app(config_name: str = None) -> Flask:
     def _banco_indisponivel(erro):
         if not falhas_banco.eh_banco_indisponivel(erro):
             raise erro
-        try:
-            db.session.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        falhas_banco.rollback_seguro()
         referencia = secrets.token_hex(6)
         app.logger.warning("Banco indisponível em %s [%s] (%s, correlacao=%s).",
                            request.path, request.method, falhas_banco.descrever(erro), referencia)

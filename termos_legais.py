@@ -31,6 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from configuracoes_conta import TIPOS_DOCUMENTO, DadoInvalido, _inteiro, exigir_esquema, rotulo_versao
 from extensions import db
+import falhas_banco
 from horario import agora_utc
 from models import AceiteDocumento, DocumentoLegal, Empresa, Notificacao, Usuario
 from notifications import criar_notificacao
@@ -45,6 +46,8 @@ ENDPOINTS_LIBERADOS = frozenset({
     # como_aderir fica de fora: com sessão, ela é desenhada dentro do portal (base.html).
     # "ping" é o despertador /ping e /health: só "OK", sem banco.
     "static", "index", "healthz", "healthz_db", "ping",
+    # /socket.io/ desativado (abas antigas do sininho): 410 em texto puro, sem banco.
+    "socketio_desativado",
     # Os documentos públicos (blueprints/documentos_publicos.py): quem tem aceite pendente pode ler o
     # texto fora do modal, e a landing lê o JSON com a sessão que houver no navegador.
     "documentos_publicos.termos_de_uso", "documentos_publicos.politica_de_privacidade",
@@ -131,8 +134,16 @@ def trava_de_aceite():
     try:
         pendencias = pendentes_da_sessao()
     except SQLAlchemyError as erro:
-        # Sem esta saída, um banco com a coluna recém-removida (downgrade com o processo
-        # no ar) derrubaria todas as páginas do cliente: reconfere o esquema na próxima.
+        if falhas_banco.eh_banco_indisponivel(erro):
+            # Banco fora do ar: sem confirmar o aceite, a página não é liberada (503,
+            # fail-closed). A sessão fica intacta e a próxima requisição confere de novo.
+            falhas_banco.rollback_seguro()
+            logger.warning("Trava de aceite dos termos sem banco (%s): página recusada.",
+                           falhas_banco.descrever(erro))
+            return falhas_banco.resposta_indisponivel()
+        # Erro de esquema, não queda (decisão do dono, 24/11/2026): um banco com a coluna
+        # recém-removida (downgrade ou rollback emergencial com o processo no ar) derrubaria
+        # todas as páginas do cliente. Libera e reconfere o esquema na próxima.
         db.session.rollback()
         esquecer_esquema()
         g._nexo_termos_pendentes = []

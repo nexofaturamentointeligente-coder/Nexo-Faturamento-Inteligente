@@ -513,7 +513,7 @@ def login():
                 impressao_login = impressao_sessao(usuario)
                 acesso_liberado = usuario_pode_acessar(usuario)
         except SQLAlchemyError as erro:
-            db.session.rollback()
+            falhas_banco.rollback_seguro()
             if not falhas_banco.eh_banco_indisponivel(erro):
                 raise  # erro de programação: segue para o 500, com traceback no log
             logger.warning("Login indisponível (%s).", falhas_banco.descrever(erro))

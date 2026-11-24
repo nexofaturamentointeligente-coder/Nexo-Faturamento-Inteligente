@@ -6,6 +6,7 @@ para o suporte e Retry-After; erro de programação continua 500 com traceback.
 O login com o banco fora também responde 503, sem criar sessão.
 """
 
+import contextlib
 import io
 import logging
 import re
@@ -275,3 +276,104 @@ class LoginComBancoForaTests(DeployTestCase):
         with patch("blueprints.auth.buscar_usuario_por_email", side_effect=erro):
             with self.assertRaises(ProgrammingError):
                 self._postar_login(http)
+
+
+class RollbackSeguroTests(DeployTestCase):
+    """Com a conexão perdida, o próprio rollback pode falhar: o 503 sai mesmo assim."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixtures()
+
+    def _logger_ligado(self, nome):
+        logger = logging.getLogger(nome)
+        self.addCleanup(setattr, logger, "disabled", logger.disabled)
+        logger.disabled = False
+
+    def test_rollback_que_falha_vira_aviso_sem_a_mensagem_do_driver(self):
+        self._logger_ligado("falhas_banco")
+        with self.app.app_context():
+            with patch.object(self.db.session, "rollback", side_effect=_queda()), \
+                    self.assertLogs("falhas_banco", logging.WARNING) as logs:
+                falhas_banco.rollback_seguro()  # não levanta
+        self.assertEqual(logs.output, ["WARNING:falhas_banco:Rollback indisponível (OperationalError)."])
+
+    def test_queda_na_autenticacao_com_rollback_quebrado_ainda_responde_503(self):
+        self.login()
+
+        def banco_fora(*_argumentos):
+            raise _queda()
+
+        event.listen(self.db.engine, "before_cursor_execute", banco_fora)
+        try:
+            with patch.object(self.db.session, "rollback", side_effect=_queda()):
+                resposta = self.client.get("/cliente/tickets")
+        finally:
+            event.remove(self.db.engine, "before_cursor_execute", banco_fora)
+        self.assertEqual(resposta.status_code, 503)
+        self.assertIn(falhas_banco.MENSAGEM, resposta.get_data(as_text=True))
+        self.assertNotIn("SEGREDO", resposta.get_data(as_text=True))
+        with self.client.session_transaction() as sessao:
+            self.assertIn("_user_id", sessao)
+        self.assertEqual(self.client.get("/cliente/tickets").status_code, 200)
+
+    def test_login_com_banco_fora_e_rollback_quebrado_ainda_responde_503(self):
+        http = self.app.test_client()
+        token = re.search(r'name="csrf_token"[^>]*value="([^"]+)"',
+                          http.get("/auth/login").get_data(as_text=True)).group(1)
+        with patch("blueprints.auth.buscar_usuario_por_email", side_effect=_queda()), \
+                patch.object(self.db.session, "rollback", side_effect=_queda()):
+            resposta = http.post("/auth/login", data={"email": "cliente-test@example.invalid",
+                                                      "senha": self.password, "csrf_token": token})
+        self.assertEqual(resposta.status_code, 503)
+        self.assertIn(falhas_banco.MENSAGEM, resposta.get_data(as_text=True))
+
+
+class TermosComBancoForaTests(DeployTestCase):
+    """Trava de aceite: queda do banco fecha a página (503); erro de esquema libera (decisão do dono)."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixtures()
+        self.login()
+
+    def test_queda_do_banco_na_conferencia_do_aceite_devolve_503(self):
+        import termos_legais
+        for erro in (_queda(), _queda("57014"), PoolEsgotado("QueuePool limit reached")):
+            with self.subTest(erro=falhas_banco.descrever(erro)):
+                with patch.object(termos_legais, "pendentes_da_sessao", side_effect=erro):
+                    resposta = self.client.get("/cliente/dashboard")
+                self.assertEqual(resposta.status_code, 503)
+                self.assertEqual(resposta.headers["Retry-After"], "30")
+                corpo = resposta.get_data(as_text=True)
+                self.assertIn(falhas_banco.MENSAGEM, corpo)
+                self.assertNotIn("SEGREDO", corpo)
+                with self.client.session_transaction() as sessao:
+                    self.assertIn("_user_id", sessao)
+        # Banco de volta: a mesma sessão abre o portal.
+        self.assertEqual(self.client.get("/cliente/dashboard").status_code, 200)
+
+    def test_erro_de_esquema_continua_liberando_a_pagina(self):
+        import termos_legais
+        for erro in (ProgrammingError("SELECT", {}, _ErroPg("42703")),  # coluna ausente (downgrade)
+                     OperationalError("SELECT", {}, sqlite3.OperationalError("no such column: x"))):
+            with self.subTest(erro=type(erro).__name__):
+                with patch.object(termos_legais, "pendentes_da_sessao", side_effect=erro):
+                    resposta = self.client.get("/cliente/dashboard")
+                self.assertEqual(resposta.status_code, 200)
+
+
+class LoggersDaMigrationTests(DeployTestCase):
+    def test_migration_no_mesmo_processo_nao_desliga_os_loggers_da_aplicacao(self):
+        from flask_migrate import upgrade
+        from tests.deploy_support import ROOT
+        sentinela = logging.getLogger("nexo.teste.sentinela_da_migration")
+        auth = logging.getLogger("blueprints.auth")
+        for logger in (sentinela, auth):
+            self.addCleanup(setattr, logger, "disabled", logger.disabled)
+            logger.disabled = False
+        with self.app.app_context(), contextlib.redirect_stderr(io.StringIO()):
+            upgrade(directory=str(ROOT / "migrations"))
+        self.assertFalse(sentinela.disabled)
+        self.assertFalse(auth.disabled)
+
