@@ -26,7 +26,8 @@ from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 
 from config import config_by_name
-from extensions import db, login_manager, migrate, mail, socketio, csrf, limiter
+from extensions import db, login_manager, migrate, mail, csrf, limiter
+import falhas_banco
 from log_security import install_token_log_redaction
 
 
@@ -108,7 +109,7 @@ def create_app(config_name: str = None) -> Flask:
             raise RuntimeError("Produção exige PostgreSQL; SQLite é apenas para desenvolvimento/testes.")
 
     # SEC-005: origem pública canônica (links sensíveis) e hosts confiáveis,
-    # validadas antes das extensões (o Socket.IO lê a lista de origens aqui).
+    # validadas antes das extensões.
     from origem_publica import configurar_origem_publica
     configurar_origem_publica(app, producao=config_name == "production")
     # SEC-010: cabeçalhos de segurança, CSP com nonce e cache (seguranca_http.py).
@@ -128,15 +129,10 @@ def create_app(config_name: str = None) -> Flask:
     # user_loader/blueprints; aqui basta registrar db + app.
     migrate.init_app(app, db)
     mail.init_app(app)
-    # Socket.IO com origens restritas (anti-CSWSH) — ver config.SOCKETIO_CORS_ORIGINS.
-    socketio.init_app(app, cors_allowed_origins=app.config["SOCKETIO_CORS_ORIGINS"])
     # Proteção CSRF global (todas as rotas mutáveis exigem token válido).
     csrf.init_app(app)
     # Rate limiting (limites explícitos por rota via decorator).
     limiter.init_app(app)
-    # Registra os handlers de WebSocket (connect/disconnect → salas por usuário).
-    import realtime
-    realtime.inicializar_realtime(app)
 
     # Configura logging básico
     logging.basicConfig(
@@ -181,7 +177,7 @@ def create_app(config_name: str = None) -> Flask:
         except SQLAlchemyError as erro:
             db.session.rollback()
             g.falha_banco_autenticacao = True
-            app.logger.warning("Autenticação indisponível (%s).", type(erro).__name__)
+            app.logger.warning("Autenticação indisponível (%s).", falhas_banco.descrever(erro))
             return None
 
     @app.before_request
@@ -194,6 +190,9 @@ def create_app(config_name: str = None) -> Flask:
           2) Cookie órfão: aponta para um usuário que não existe mais no banco
              (ex.: banco resetado) → current_user vira anônimo, mas o resíduo
              _user_id é limpo da sessão.
+          3) Banco fora do ar durante a validação → 503 SEM apagar o cookie: nada
+             privado sai, e a sessão segue válida quando o banco voltar (a
+             próxima requisição revalida; a revogada durante a queda é negada).
         Não toca em requisições de assets estáticos (sem custo por arquivo) nem no
         despertador /ping, que nunca consulta o banco, nem com cookie de sessão.
         """
@@ -207,15 +206,20 @@ def create_app(config_name: str = None) -> Flask:
             except SQLAlchemyError as erro:
                 db.session.rollback()
                 g.falha_banco_autenticacao = True
-                app.logger.warning("Autorizacao indisponivel (%s).", type(erro).__name__)
+                app.logger.warning("Autorizacao indisponivel (%s).", falhas_banco.descrever(erro))
         if getattr(g, "falha_banco_autenticacao", False):
-            logout_user()
-            session.clear()
-            mensagem = "Autenticação temporariamente indisponível. Tente novamente."
-            if request.path.startswith("/api/"):
-                return {"erro": mensagem}, 503
-            return render_template("erro_simples.html", titulo="Serviço indisponível",
-                                   mensagem=mensagem), 503
+            # Banco indisponível não é sessão inválida: a requisição é recusada,
+            # mas o cookie fica intacto (sem logout_user nem session.clear). Só
+            # nesta resposta o usuário é tratado como anônimo, e a página de erro
+            # sai sem consultar o banco (falhas_banco.resposta_indisponivel).
+            login_manager._update_request_context_with_user()
+            if request.endpoint == "auth.logout" and request.method == "POST":
+                # Quem clicou em Sair precisa saber que a sessão NÃO terminou (num
+                # computador compartilhado, sair achando que saiu é o risco).
+                return falhas_banco.resposta_indisponivel(mensagem=(
+                    "Não foi possível encerrar a sessão no servidor: o sistema está indisponível. "
+                    "Você continua conectado. Tente sair novamente em instantes."))
+            return falhas_banco.resposta_indisponivel()
         if autenticado:
             # BOOT_ID, conta ativa e fingerprint da credencial são conferidos
             # juntos. Cookie legado sem fingerprint também exige novo login.
@@ -433,7 +437,9 @@ def create_app(config_name: str = None) -> Flask:
         if request.path.startswith("/api/suporte-bot"):
             return _erro_api("Você enviou muitas mensagens em pouco tempo. "
                              "Aguarde um minuto e tente novamente.", 429)
-        if request.path.startswith("/api/"):
+        if falhas_banco.rota_json():
+            # Inclui o polling do sininho: JSON curto, sem montar a página (que
+            # consultaria o banco a cada recusa de um cliente em laço).
             return _erro_api("Você fez muitas requisições em pouco tempo. "
                              "Aguarde alguns minutos e tente novamente.", 429)
         # O limite pode durar de um minuto a uma hora: o texto acompanha o que estourou.
@@ -550,6 +556,26 @@ def create_app(config_name: str = None) -> Flask:
                             "Ocorreu um erro inesperado. Tente novamente em instantes.",
                             referencia=g.get("ref_erro"))
 
+    # Banco indisponível em qualquer rota (queda, conexão derrubada, recurso ou pool
+    # esgotado): 503 com a mensagem amigável e o código para o suporte, em vez do 500
+    # genérico. O log leva o tipo e o SQLSTATE, nunca a mensagem do driver (SQL, host).
+    # Erro de programação (SQL errado, tabela inexistente, integridade) não é queda:
+    # é relançado e segue o caminho do 500, com o traceback no log.
+    def _banco_indisponivel(erro):
+        if not falhas_banco.eh_banco_indisponivel(erro):
+            raise erro
+        try:
+            db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        referencia = secrets.token_hex(6)
+        app.logger.warning("Banco indisponível em %s [%s] (%s, correlacao=%s).",
+                           request.path, request.method, falhas_banco.descrever(erro), referencia)
+        return falhas_banco.resposta_indisponivel(referencia)
+
+    for _excecao in falhas_banco.EXCECOES_TRATADAS:
+        app.register_error_handler(_excecao, _banco_indisponivel)
+
     # Atrás de proxy reverso (Render, Railway, nginx...): confia nos cabeçalhos
     # X-Forwarded-For/Proto de N saltos (PROXY_FIX_HOPS). Sem isso, TODOS os
     # usuários aparecem com o IP do proxy (o rate limit do login viraria global)
@@ -563,9 +589,8 @@ def create_app(config_name: str = None) -> Flask:
     return app
 
 
-# Entry point para `python app.py` (dev local).
-# Em produção, use um servidor compatível com WebSocket (ex.: gunicorn com
-# worker apropriado). O socketio.run sobe o servidor com suporte a WebSocket.
+# Entry point para `python app.py` (dev local). Em produção, o gunicorn sobe o
+# app por wsgi.py (ver render.yaml).
 if __name__ == "__main__":
     config_name = os.environ.get("FLASK_ENV", "development")
     app = create_app(config_name)
@@ -582,12 +607,5 @@ if __name__ == "__main__":
 
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 5000))
-    socketio.run(
-        app,
-        host=host,
-        port=port,
-        debug=is_dev and app.config.get("DEBUG", False),
-        # allow_unsafe_werkzeug só em dev (o servidor de dev do Werkzeug não é
-        # para produção). Em produção, sirva via gunicorn com worker WebSocket.
-        allow_unsafe_werkzeug=is_dev,
-    )
+    # Servidor de desenvolvimento do Werkzeug: só local. Em produção, gunicorn (wsgi.py).
+    app.run(host=host, port=port, debug=is_dev and app.config.get("DEBUG", False))

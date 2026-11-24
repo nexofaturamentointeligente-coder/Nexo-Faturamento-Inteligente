@@ -8,12 +8,12 @@
 
 | | |
 |---|---|
-| **Stack** | Python · Flask · SQLAlchemy 2.x · PostgreSQL (Supabase) / SQLite · Pandas · NumPy · Socket.IO · Bootstrap 5 · Plotly.js · Claude (Anthropic) |
-| **Status** | Em produção — multiempresa (multi-tenant), com segurança reforçada, tempo real e IA |
+| **Stack** | Python · Flask · SQLAlchemy 2.x · PostgreSQL (Supabase) / SQLite · Pandas · NumPy · Bootstrap 5 · Plotly.js · Claude (Anthropic) |
+| **Status** | Em produção — multiempresa (multi-tenant), com segurança reforçada, notificações automáticas e IA |
 
 O **NEXO** diagnostica descasamentos operacionais e financeiros no varejo a partir dos dados brutos exportados pelo PDV do cliente. Em vez de competir com sistemas de ERP ou contabilidade, a plataforma entrega uma camada de **inteligência sobre dados que o lojista já possui**, mas raramente consegue interpretar de forma estratégica.
 
-A plataforma opera sobre PostgreSQL/Supabase e reúne um motor de ETL resistente a arquivos malformados (validado com testes de *chaos engineering*), segurança em todas as camadas (CSRF, rate limiting, anti open-redirect, revalidação de sessão), tempo real via WebSocket, devolutiva gerada por IA com *fail-safe* determinístico, exportação executiva em PDF e um assistente de suporte (NexoBot).
+A plataforma opera sobre PostgreSQL/Supabase e reúne um motor de ETL resistente a arquivos malformados (validado com testes de *chaos engineering*), segurança em todas as camadas (CSRF, rate limiting, anti open-redirect, revalidação de sessão), notificações por consulta leve, devolutiva gerada por IA com *fail-safe* determinístico, exportação executiva em PDF e um assistente de suporte (NexoBot).
 
 ---
 
@@ -39,25 +39,24 @@ Esse saldo estimado revela o **descasamento financeiro/operacional** entre compr
 
 ## 🧭 Arquitetura Geral
 
-Aplicação Flask multi-tenant (Admin/Consultoria × Cliente/Empresa) organizada em *blueprints*, com persistência em PostgreSQL (Supabase) ou SQLite, tempo real via Socket.IO e dois pipelines assíncronos (IA e e-mail) que nunca bloqueiam a requisição HTTP.
+Aplicação Flask multi-tenant (Admin/Consultoria × Cliente/Empresa) organizada em *blueprints*, com persistência em PostgreSQL (Supabase) ou SQLite, notificações por consulta leve (polling) e dois pipelines assíncronos (IA e e-mail) que nunca bloqueiam a requisição HTTP.
 
 ```
 Cliente (browser)
-   │  HTTP + WebSocket (cookie de sessão)
+   │  HTTP (cookie de sessão)
    ▼
 Flask App Factory (app.py)
    ├── auth        — login, recuperação de senha, ativação de conta, 1º acesso
    ├── admin       — empresas, análises, ETL, lixeira, suporte, CMS do guia
    ├── cliente     — upload, histórico, análise publicada, suporte
    ├── api         — endpoints auxiliares (ex.: dados para os gráficos Plotly)
-   └── notificacoes— sininho (marcar lidas / abrir)
+   └── notificacoes— sininho (consulta a cada 30 s, marcar lidas, abrir)
           │
           ├── etl_processor.py   → Pandas/NumPy: leitura adaptativa + KPIs + Curva ABC
           ├── insights.py        → Semáforos 5W2H derivados dos KPIs
           ├── ai_devolutiva.py   → Claude (Anthropic) com fallback determinístico
           ├── pdf_export.py      → ReportLab: PDF executivo da análise publicada
           ├── suporte_bot.py     → fachada do NexoBot (pacote nexobot/: NLP local + Guia)
-          ├── realtime.py        → Salas Socket.IO por usuário (user_<id>)
           ├── notifications.py / emails.py → disparados SEMPRE depois do commit
           └── storage.py         → único ponto de I/O de arquivo (bytes no Postgres)
           │
@@ -95,8 +94,8 @@ Para o detalhamento da arquitetura (incluindo diagrama Mermaid do fluxo de dados
 - Primeiro acesso com senha temporária + ativação de conta por token assinado (`itsdangerous`, expira em 15 min).
 - Recuperação de senha por e-mail (mesmo mecanismo de token assinado).
 
-**Tempo real e suporte**
-- Notificações via WebSocket (Socket.IO) em sala exclusiva por usuário — sininho da navbar, sem broadcast aberto.
+**Notificações e suporte**
+- Sininho da navbar atualizado por consulta leve a cada 30 segundos, só com a aba visível: cada consulta passa pela mesma validação de sessão das páginas e traz apenas as notificações do próprio usuário. Sem conexões longas, as abas abertas não ocupam as threads do servidor.
 - **NexoBot Advanced 2.0:** manual interativo do NEXO e assistente de navegação, em português do Brasil e sem depender de IA externa — base de conhecimento versionada (`nexobot/saber/`, com registros verificados no código, resumo, explicação, passo a passo e aprofundamento), perguntas amplas ("o que é o NEXO?", "como funciona?"), aprofundamento por contexto ("explique melhor", "me dê um exemplo", "e depois?"), comparações, roteiros guiados, busca BM25F no Guia (CMS `guia_topico`, que tem prioridade), higiene de conteúdo de teste, respostas em blocos estruturados e navegação apenas por catálogo fechado de páginas do cliente. Redação opcional via Hugging Face, sempre validada. Detalhes em [`Docs/NEXOBOT_ADVANCED.md`](Docs/NEXOBOT_ADVANCED.md).
 - Central de chamados de suporte (Admin ↔ Cliente).
 
@@ -105,7 +104,7 @@ Para o detalhamento da arquitetura (incluindo diagrama Mermaid do fluxo de dados
 - Rate limiting (Flask-Limiter) em login e recuperação de senha.
 - Proteção anti open-redirect em todos os redirecionamentos que aceitam parâmetro externo (`next`, `referrer`, `link_destino`).
 - Sessão amarrada ao `BOOT_ID` do processo (restart do servidor invalida sessões antigas) + revalidação de `is_active` a cada request (usuário desativado é deslogado imediatamente).
-- Origens de WebSocket restritas (`SOCKETIO_CORS_ORIGINS`) — mitiga Cross-Site WebSocket Hijacking.
+- Banco indisponível não derruba a sessão: a requisição recebe 503 com "Sistema indisponível" (sem SQL nem traceback na tela) e o cookie fica intacto; quando o banco volta, a sessão segue valendo. A conexão tem prazo de 5 s, para uma queda não prender as threads do servidor.
 - Debug do Werkzeug bloqueado fora de `development` (recusa explícita a subir com `DEBUG=True` em produção).
 - Erros inesperados nunca vazam para o usuário: a página de erro mostra uma mensagem genérica com um código para o suporte, e o log interno guarda o traceback com o mesmo código, sem os valores dos parâmetros SQL (`hide_parameters`).
 - Lock otimista (`with_for_update`) no reprocessamento de uma análise, evitando corrida entre dois disparos simultâneos do ETL.
@@ -145,9 +144,9 @@ Cobertura validada (6 camadas de falha, 8 layouts reais, 11+ cenários adversari
 ├── templates/                # Views Bootstrap 5, isoladas por perfil (admin/cliente)
 ├── microservico_raiox/        # Microsserviço do Raio-X da landing (dependências próprias)
 ├── tools/                     # Instalador verificado de dependências e utilitários de operação
-├── app.py                    # Application Factory + entrypoint (socketio.run)
+├── app.py                    # Application Factory + entrypoint local
 ├── config.py                 # Configuração por ambiente (Config / Dev / Production)
-├── extensions.py             # Instâncias compartilhadas (db, login, mail, socketio, csrf, limiter)
+├── extensions.py             # Instâncias compartilhadas (db, login, mail, csrf, limiter)
 ├── models.py                 # Modelos SQLAlchemy 2.x (Mapped/mapped_column)
 ├── etl_processor.py          # Motor de ETL (leitura adaptativa → sanitização → KPIs → Curva ABC)
 ├── insights.py                # Semáforos executivos 5W2H
@@ -156,7 +155,7 @@ Cobertura validada (6 camadas de falha, 8 layouts reais, 11+ cenários adversari
 ├── nexobot/                    # NexoBot Advanced 2.0: normalização, intenções, contexto, Guia, decisão
 │   └── saber/                  #   base de conhecimento versionada sobre o NEXO
 ├── pdf_export.py               # Exportação executiva em PDF (ReportLab)
-├── realtime.py                 # Salas Socket.IO por usuário
+├── falhas_banco.py             # Banco indisponível: 503 amigável, sem apagar a sessão
 ├── notifications.py / emails.py # Disparo de notificações/e-mails (dispatch-after-commit)
 ├── storage.py                  # Ponto único de I/O de arquivo (uploads guardados no Postgres)
 ├── wsgi.py                     # Entrypoint de produção (gunicorn)
@@ -184,7 +183,7 @@ Cobertura validada (6 camadas de falha, 8 layouts reais, 11+ cenários adversari
 | Processamento de dados | Pandas + NumPy (ETL vetorizado) |
 | Autenticação | Flask-Login + `werkzeug.security` (hash de senha) + `itsdangerous` (tokens assinados) |
 | Segurança | Flask-WTF (CSRF) + Flask-Limiter (rate limiting) |
-| Tempo real | Flask-SocketIO (`async_mode="threading"`) + `simple-websocket` |
+| Notificações | Polling leve (`fetch` a cada 30 s) na rota `/notificacoes/novas` |
 | E-mail | API HTTPS do Brevo (produção) ou Flask-Mail/SMTP (dev) — ver [Docs/EMAILS_TRANSACIONAIS.md](Docs/EMAILS_TRANSACIONAIS.md) |
 | PDF | ReportLab (platypus) |
 | IA — devolutiva | SDK oficial `anthropic` (Claude) |
@@ -333,7 +332,7 @@ python test_etl.py .\dados\Vendas_2025.xlsx .\dados\Compras_2025.xlsx 1
 python app.py
 ```
 
-Acesse `http://127.0.0.1:5000` e autentique-se com o `ADMIN_EMAIL`/`ADMIN_SENHA` definidos no `.env`. O servidor sobe com suporte a WebSocket (`socketio.run`) — para produção, use o gunicorn via `wsgi.py` (ver seção de deploy abaixo), nunca o servidor de desenvolvimento do Werkzeug.
+Acesse `http://127.0.0.1:5000` e autentique-se com o `ADMIN_EMAIL`/`ADMIN_SENHA` definidos no `.env`. O `python app.py` sobe o servidor de desenvolvimento — para produção, use o gunicorn via `wsgi.py` (ver seção de deploy abaixo), nunca o servidor de desenvolvimento do Werkzeug.
 
 > Variáveis adicionais de runtime: `HOST` (default `127.0.0.1`) e `PORT` (default `5000`) sobrescrevem o bind do servidor; `FLASK_ENV` controla `development`/`production` (em `production`, `DEBUG` é forçado a `False` e o app se recusa a subir com debugger ativo).
 
@@ -345,7 +344,7 @@ O Blueprint mantém o plano Free existente para avaliação. Consulte limites e 
 
 | Peça | Serviço (plano free) | Papel |
 |---|---|---|
-| Aplicação | **Render** Web Service | gunicorn + Flask-SocketIO, HTTPS público (`*.onrender.com`) |
+| Aplicação | **Render** Web Service | gunicorn (1 worker com threads), HTTPS público (`*.onrender.com`) |
 | Banco | **Supabase** Postgres | dados + arquivos enviados (`arquivo_armazenado`) |
 | E-mail | **Brevo** API transacional (300/dia) | o Render Free bloqueia SMTP (portas 25/465/587); a API usa HTTPS |
 | Monitoramento opcional | Monitor HTTP externo | `/healthz` verifica o processo e `/healthz/db` verifica uma consulta ao banco; não garantem disponibilidade contínua. |
@@ -370,7 +369,6 @@ Limitações conhecidas do plano free: 512 MB de RAM e 0,1 CPU (ETL e PDF ficam 
 | `NEXO_DB_DIRECT` | Não | `1` para forçar o uso da conexão direta (DDL/migrações). |
 | `ADMIN_EMAIL` / `ADMIN_NOME` / `ADMIN_SENHA` | Sim (lidas pelo `seed.py`) | Credencial do administrador master inicial. |
 | `UPLOAD_FOLDER` / `MAX_CONTENT_LENGTH_MB` | Não | Diretório e limite de tamanho dos uploads. |
-| `SOCKETIO_CORS_ORIGINS` | Não | Origens permitidas no handshake WebSocket (CSV). |
 | `RATELIMIT_STORAGE_URI` | Não (default `memory://`) | Backend do rate limiting; use Redis em multi-instância. |
 | `MAIL_SERVER` / `MAIL_PORT` / `MAIL_USE_TLS` / `MAIL_USE_SSL` / `MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_DEFAULT_SENDER` | Não (fail-safe) | SMTP para e-mails de ativação/recuperação/publicação (fora do Render Free, que bloqueia SMTP). Sem credenciais, o envio é suprimido. `MAIL_DEFAULT_SENDER` é também o remetente do Brevo e precisa estar verificado nele; valores vazios valem como ausentes. |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | Não (fail-safe) | Geração da devolutiva por IA. Sem chave, usa o fallback determinístico. |
@@ -378,7 +376,7 @@ Limitações conhecidas do plano free: 512 MB de RAM e 0,1 CPU (ETL e PDF ficam 
 | `BREVO_API_KEY` / `BREVO_API_URL` | Não (fail-safe); **sim no Render** | Envio de e-mail pela API HTTPS do Brevo (porta 443). Com a chave definida, substitui o SMTP (necessário no Render Free, que bloqueia SMTP). Use a chave de API (`xkeysib-`), não a SMTP; a URL precisa ser `https`. |
 | `NEXO_EMAIL_TIMEOUT` / `NEXO_EMAIL_ALERTA_ADMIN` | Não (defaults `15` / `1` em produção) | Prazo, em segundos, de cada tentativa de envio (API e SMTP) e aviso no sininho dos administradores quando o provedor não aceita um e-mail. Ver [Docs/EMAILS_TRANSACIONAIS.md](Docs/EMAILS_TRANSACIONAIS.md). |
 | `PROXY_FIX_HOPS` | Não (default `0`) | Nº de proxies reversos confiáveis à frente da app (Render = `1`): IP real do cliente no rate limit e links `https://` nos e-mails. |
-| `RENDER_EXTERNAL_URL` | Automática no Render | URL pública do serviço; é adicionada às origens permitidas do WebSocket e, sem `NEXO_PUBLIC_URL`, é a origem canônica dos links sensíveis. |
+| `RENDER_EXTERNAL_URL` | Automática no Render | URL pública do serviço; sem `NEXO_PUBLIC_URL`, é a origem canônica dos links sensíveis. |
 | `NEXO_PUBLIC_URL` | Sim em produção (ou `RENDER_EXTERNAL_URL`) | Origem pública canônica (`https://dominio`) usada para montar os links de ativação, recuperação de senha, chamados e publicação — nunca o cabeçalho `Host` da requisição. Em produção precisa ser `https`. |
 | `NEXO_TRUSTED_HOSTS` | Não | Hosts adicionais aceitos nas requisições (CSV; `.dominio` aceita subdomínios). Em produção, o host da origem pública e o da plataforma são aceitos sempre; qualquer outro `Host` recebe 400. |
 | `NEXO_CSP_REPORT_ONLY` | Não (default `0`) | `1` envia a Content-Security-Policy em modo somente-relatório (observar violações sem bloquear) — útil num primeiro rollout; `0` impõe a política. |
@@ -404,7 +402,7 @@ Template completo em [`.env.example`](.env.example).
 | **Lixeira (exclusão de empresa)** | Soft Delete (`deletado_em`) + Hard Delete explícito | Unifica reversibilidade operacional com a necessidade ocasional de expurgo definitivo, sem dois sistemas paralelos. |
 | **Segurança de sessão** | Cookie amarrado a `BOOT_ID` + revalidação de `is_active` por request | Garante que reiniciar o servidor invalida sessões antigas e que desativar um usuário o desloga imediatamente, sem esperar expiração de cookie. |
 | **CSRF/Rate limit** | Flask-WTF + Flask-Limiter | Mitigam CSRF em todas as rotas mutáveis e *brute force* em login/recuperação de senha, com mudança mínima de código (decorators). |
-| **Tempo real** | Socket.IO com `cors_allowed_origins` restrito + sala por usuário | Mitiga Cross-Site WebSocket Hijacking e garante que notificações nunca sejam recebidas por outro usuário (sem broadcast aberto). |
+| **Notificações** | Polling leve com validação de sessão a cada consulta | Sem conexões longas: muitas abas abertas não esgotam as threads do servidor, e a revogação de uma sessão vale na consulta seguinte. |
 | **Disparo de notificação/e-mail** | Sempre **depois** do `commit()` (dispatch-after-commit) | Evita notificações fantasmas referentes a uma transação que sofreu rollback. |
 | **Curva ABC** | Vetorizada com NumPy (`np.select`) | Performance em catálogos grandes, sem `iterrows()` no caminho crítico de cálculo. |
 | **Resiliência do ETL** | Contrato de robustez (sucesso honesto **ou** recusa acionável, nunca fabricação de dado) | Evita o pior cenário de produção: uma análise "bem-sucedida" calculada sobre dados inventados. Ver [`Docs/RELATORIO_COBERTURA_ETL.md`](Docs/RELATORIO_COBERTURA_ETL.md). |

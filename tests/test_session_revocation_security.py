@@ -1,10 +1,11 @@
-"""NEXO-SEC-003: sessões reais e Socket.IO com banco/usuários sintéticos."""
+"""NEXO-SEC-003: sessões reais e o polling do sininho com banco/usuários sintéticos."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import secrets
 from unittest.mock import patch
 
-from flask import jsonify, request
+from flask import jsonify
 from flask_login import current_user, login_required
 from sqlalchemy import delete, event, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,11 +13,11 @@ from werkzeug.security import generate_password_hash
 
 from . import test_auth_tokens_security as token_cases
 import company_security
-from extensions import db, socketio
+from extensions import db
+import falhas_banco
 from horario import agora_utc
 from models import Notificacao, SessaoAutenticada, Usuario
 import notifications
-import realtime
 import session_security
 
 
@@ -52,13 +53,31 @@ class SessionRevocationCases:
         self._assert_success(self._post(token, client=self.app.test_client()))
         return token
 
-    def _socket(self, client):
-        connection = socketio.test_client(self.app, flask_test_client=client)
-        def close():
-            if connection.is_connected():
-                connection.disconnect()
-        self.addCleanup(close)
-        return connection
+    # Polling do sininho (GET /notificacoes/novas), que substituiu o Socket.IO:
+    # cada consulta passa pela validação completa da sessão.
+    POLL = "/notificacoes/novas"
+
+    def _poll(self, client, desde=0):
+        return client.get(f"{self.POLL}?desde={desde}", headers={"Accept": "application/json"})
+
+    def _polled_texts(self, client, desde=0):
+        """Textos que o polling entrega a uma sessão VÁLIDA (exige 200: "nada entregue"
+        precisa vir de uma consulta autorizada, não de uma negada)."""
+        response = self._poll(client, desde)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:200])
+        return [item["texto"] for item in response.get_json()["novas"]]
+
+    def _polled_texts_from_other_request(self, client):
+        """Polling em outra thread: o cliente de teste reaproveitaria o contexto de
+        aplicação aberto pelo teste (e a transação ainda sem COMMIT dele)."""
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(self._polled_texts, client).result(timeout=30)
+
+    def _assert_poll_denied(self, client):
+        response = self._poll(client)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json(), {"erro": "Sessão encerrada. Entre novamente."})
+        return response
 
     def _notify(self, user="active", text="Synthetic private notification", commit=True):
         with self.app.app_context():
@@ -69,10 +88,6 @@ class SessionRevocationCases:
             else:
                 db.session.rollback()
             return identifier
-
-    @staticmethod
-    def _received(connection):
-        return connection.get_received() if connection.is_connected() else []
 
     def test_login_and_current_session_access_protected_http(self):
         client = self._login_client()
@@ -171,22 +186,81 @@ class SessionRevocationCases:
         self.app.config["BOOT_ID"] = "synthetic-next-boot"
         self._assert_private_denied(client)
 
-    def test_database_read_failure_denies_http_and_clears_authentication(self):
-        client = self._login_client()
+    def _with_failing_selects(self, request, marker=None, sentinel="PRIVATE_DB_SENTINEL"):
+        """Executa `request()` com os SELECTs falhando (todos, ou só os que citam `marker`)."""
         def fail_select(connection, cursor, statement, parameters, context, executemany):
-            if statement.lstrip().upper().startswith("SELECT"):
-                raise SQLAlchemyError("PRIVATE_DB_SENTINEL")
+            if statement.lstrip().upper().startswith("SELECT") and (marker is None or marker in statement):
+                raise SQLAlchemyError(sentinel)
         event.listen(self.engine, "before_cursor_execute", fail_select)
         try:
-            response = client.get("/_security/protected")
+            return request()
         finally:
             event.remove(self.engine, "before_cursor_execute", fail_select)
+
+    def _assert_unavailable_page(self, response, *private):
         self.assertEqual(response.status_code, 503)
-        self.assertNotIn("PRIVATE_DB_SENTINEL", response.get_data(as_text=True))
-        self.assertNotIn("synthetic-private-data", response.get_data(as_text=True))
+        self.assertEqual(response.headers["Retry-After"], str(falhas_banco.RETRY_AFTER_S))
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        body = response.get_data(as_text=True)
+        for text in ("PRIVATE_DB_SENTINEL", "synthetic-private-data", *private):
+            self.assertNotIn(text, body)
+        return body
+
+    def test_database_read_failure_denies_http_and_keeps_the_session(self):
+        # Banco fora do ar não é sessão inválida: 503 sem dado privado, mas o
+        # cookie fica intacto e a sessão volta a valer quando o banco volta.
+        client = self._login_client()
+        response = self._with_failing_selects(lambda: client.get("/_security/protected"))
+        body = self._assert_unavailable_page(response)
+        self.assertIn(falhas_banco.MENSAGEM, body)
         with client.session_transaction() as session:
-            self.assertNotIn("_user_id", session)
+            self.assertEqual(session["_user_id"], str(self.ids["active"]))
+            self.assertIn(session_security.CHAVE_SESSAO, session)
+        response = client.get("/_security/protected")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["uid"], self.ids["active"])
+        self.assertEqual(self._session_rows(), [(False, None)])
+
+    def test_authorization_query_failure_after_user_load_keeps_session_and_hides_page(self):
+        # O usuário carrega, mas a consulta da sessão registrada falha: a resposta
+        # sai como anônima (sem nome, sininho ou dado privado) e o cookie fica.
+        client = self._login_client()
+        self._notify(text="PRIVATE_DURING_AUTHORIZATION_FAILURE")
+        response = self._with_failing_selects(lambda: client.get("/cliente/dashboard"),
+                                              marker="sessao_autenticada")
+        body = self._assert_unavailable_page(response, "PRIVATE_DURING_AUTHORIZATION_FAILURE",
+                                             "bellBadge", "nexoToasts")
+        self.assertIn(falhas_banco.MENSAGEM, body)
+        with client.session_transaction() as session:
+            self.assertEqual(session["_user_id"], str(self.ids["active"]))
+        self.assertEqual(client.get("/_security/protected").status_code, 200)
+
+    def test_logout_during_database_outage_says_the_session_continues(self):
+        # Quem clica em Sair com o banco fora precisa saber que NÃO saiu (computador
+        # compartilhado); depois que o banco volta, sair funciona normalmente.
+        client = self._login_client()
+        csrf = self._csrf(client, "/auth/logout")
+        response = self._with_failing_selects(
+            lambda: client.post("/auth/logout", data={"csrf_token": csrf}))
+        body = self._assert_unavailable_page(response)
+        self.assertIn("Você continua conectado", body)
+        self.assertNotIn("Sessão terminada", body)
+        with client.session_transaction() as session:
+            self.assertEqual(session["_user_id"], str(self.ids["active"]))
+        self.assertEqual(self._session_rows(), [(False, None)])
+        self._logout(client)
+        self.assertEqual(self._session_rows(), [(True, "logout")])
+
+    def test_database_failure_never_revives_a_revoked_session(self):
+        client = self._login_client()
+        with self.app.app_context():
+            self.assertEqual(session_security.revogar_sessoes_usuario(
+                db.session, self.ids["active"], "revogacao_global"), 1)
+            db.session.commit()
+        response = self._with_failing_selects(lambda: client.get("/_security/protected"))
+        self._assert_unavailable_page(response)
         self._assert_private_denied(client)
+        self._assert_poll_denied(client)
 
     def test_first_access_renews_only_current_session(self):
         first, second = self._login_client("pending"), self._login_client("pending")
@@ -215,150 +289,151 @@ class SessionRevocationCases:
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["uid"], self.ids["other"])
 
-    def test_valid_socket_handshake_connects_but_anonymous_does_not(self):
-        valid = self._socket(self._login_client())
-        self.assertTrue(valid.is_connected())
-        self.assertFalse(self._socket(self.app.test_client()).is_connected())
+    def test_valid_session_polls_and_anonymous_gets_401(self):
+        response = self._poll(self._login_client())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.get_json()), {"nao_lidas", "novas", "ultimo"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self._assert_poll_denied(self.app.test_client())
 
-    def test_socket_handshake_rejects_pending_first_access(self):
-        self.assertFalse(self._socket(self._login_client("pending")).is_connected())
+    def test_poll_of_pending_first_access_delivers_nothing(self):
+        client = self._login_client("pending")
+        self._notify("pending", text="PRIVATE_PENDING_FIRST_ACCESS")
+        response = self._poll(client)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/auth/primeiro-acesso"))
+        self.assertNotIn("PRIVATE_PENDING_FIRST_ACCESS", response.get_data(as_text=True))
 
-    def test_socket_handshake_rejects_previous_credential_cookie(self):
+    def test_poll_rejects_previous_credential_cookie(self):
         client = self._login_client()
         self._reset_password()
-        self.assertFalse(self._socket(client).is_connected())
+        self._assert_poll_denied(client)
 
-    def test_authenticated_event_rechecks_credential_before_private_handler(self):
-        executed = []
-        def private_probe():
-            executed.append(True)
-            socketio.emit("_security_private_probe", {"private": "PRIVATE_AUTHENTICATED_EVENT"},
-                          to=request.sid)
-            return True
-        socketio.on_event("_security_probe", realtime.guarded_socket_event(private_probe))
-        connection = self._socket(self._login_client())
-        self.assertTrue(connection.emit("_security_probe", callback=True))
-        self.assertIn("PRIVATE_AUTHENTICATED_EVENT", repr(self._received(connection)))
+    def test_every_poll_rechecks_the_persisted_credential(self):
+        client = self._login_client()
+        self._notify(text="PRIVATE_BEFORE_EXTERNAL_CHANGE")
+        self.assertIn("PRIVATE_BEFORE_EXTERNAL_CHANGE", self._polled_texts(client))
         self._change(senha_hash=generate_password_hash("Synthetic-external-password-789!"))
-        response = connection.emit("_security_probe", callback=True)
-        self.assertNotIn("PRIVATE_AUTHENTICATED_EVENT", repr(response))
-        self.assertEqual(executed, [True])
-        self.assertFalse(connection.is_connected())
+        self._notify(text="PRIVATE_AFTER_EXTERNAL_CHANGE")
+        response = self._assert_poll_denied(client)
+        self.assertNotIn("PRIVATE_AFTER_EXTERNAL_CHANGE", response.get_data(as_text=True))
 
-    def test_sweep_disconnects_revoked_open_socket_using_persisted_credential(self):
-        connection = self._socket(self._login_client())
+    def test_poll_denied_after_credential_change_made_outside_the_app(self):
+        # Sem callback local de revogação (troca por SQL direto, outro processo):
+        # a credencial persistida basta para negar a consulta seguinte.
+        cookie = self._cookie(self._login_client())
         self._change(senha_hash=generate_password_hash("Synthetic-external-password-789!"))
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
+        self._assert_poll_denied(self._replay(cookie))
 
-    def test_sweep_disconnects_deactivated_or_previous_boot_socket(self):
-        connection = self._socket(self._login_client())
+    def test_poll_denied_after_server_restart(self):
+        client = self._login_client()
         self.app.config["BOOT_ID"] = "synthetic-next-boot"
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
+        self._assert_poll_denied(client)
 
-    def test_sweep_disconnects_deactivated_user_socket(self):
-        connection = self._socket(self._login_client())
+    def test_poll_denied_for_deactivated_user(self):
+        client = self._login_client()
         self._change(ativo=False)
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
+        self._assert_poll_denied(client)
 
-    def test_database_error_rejects_socket_event_without_private_ack(self):
-        executed = []
-        def private_probe():
-            executed.append(True)
-            socketio.emit("_security_private_probe", {"private": "PRIVATE_DB_FAILURE_EVENT"},
-                          to=request.sid)
-            return True
-        socketio.on_event("_security_db_probe", realtime.guarded_socket_event(private_probe))
-        connection = self._socket(self._login_client())
-        def fail_select(connection, cursor, statement, parameters, context, executemany):
-            if statement.lstrip().upper().startswith("SELECT"):
-                raise SQLAlchemyError("PRIVATE_SOCKET_DB_SENTINEL")
-        event.listen(self.engine, "before_cursor_execute", fail_select)
-        try:
-            response = connection.emit("_security_db_probe", callback=True)
-        finally:
-            event.remove(self.engine, "before_cursor_execute", fail_select)
-        self.assertNotIn("PRIVATE_DB_FAILURE_EVENT", repr(response))
-        self.assertNotIn("PRIVATE_SOCKET_DB_SENTINEL", repr(response))
-        self.assertEqual(executed, [])
-        self.assertFalse(connection.is_connected())
+    def test_database_error_on_poll_returns_503_without_private_data_and_keeps_cookie(self):
+        client = self._login_client()
+        self._notify(text="PRIVATE_DB_FAILURE_EVENT")
+        response = self._with_failing_selects(lambda: self._poll(client), sentinel="PRIVATE_SOCKET_DB_SENTINEL")
+        body = self._assert_unavailable_page(response, "PRIVATE_DB_FAILURE_EVENT", "PRIVATE_SOCKET_DB_SENTINEL")
+        self.assertEqual(response.get_json()["erro"], falhas_banco.MENSAGEM)
+        self.assertNotIn("<html", body.lower())
+        with client.session_transaction() as session:
+            self.assertEqual(session["_user_id"], str(self.ids["active"]))
+        self.assertIn("PRIVATE_DB_FAILURE_EVENT", self._polled_texts(client))
 
-    def test_password_recovery_disconnects_preexisting_socket(self):
-        connection = self._socket(self._login_client())
-        self.assertTrue(connection.is_connected())
+    def test_password_recovery_denies_preexisting_poll(self):
+        client = self._login_client()
+        self.assertEqual(self._poll(client).status_code, 200)
         self._reset_password()
-        self.assertFalse(connection.is_connected())
+        self._assert_poll_denied(client)
 
-    def test_password_change_preserves_other_company_socket_and_private_delivery(self):
-        changed = self._socket(self._login_client())
-        other = self._socket(self._login_client("other"))
+    def test_password_change_preserves_other_company_poll_and_private_delivery(self):
+        changed, other = self._login_client(), self._login_client("other")
         self._reset_password()
-        self.assertFalse(changed.is_connected())
-        self.assertTrue(other.is_connected())
+        self._assert_poll_denied(changed)
         self._notify("other", text="OTHER_COMPANY_STILL_AUTHORIZED")
-        self.assertIn("OTHER_COMPANY_STILL_AUTHORIZED", repr(self._received(other)))
+        self.assertIn("OTHER_COMPANY_STILL_AUTHORIZED", self._polled_texts(other))
 
-    def test_revoked_open_socket_never_receives_new_private_notification(self):
-        connection = self._socket(self._login_client())
+    def test_revoked_session_never_polls_new_private_notification(self):
+        cookie = self._cookie(self._login_client())
         self._change(senha_hash=generate_password_hash("Synthetic-external-password-789!"))
-        # Externo ao fluxo de recuperação: não houve callback local de revogação.
-        # A proteção deve vir da credencial persistida, mesmo antes da varredura.
         self._notify(text="PRIVATE_AFTER_REVOCATION")
-        self.assertNotIn("PRIVATE_AFTER_REVOCATION", repr(self._received(connection)))
+        response = self._assert_poll_denied(self._replay(cookie))
+        self.assertNotIn("PRIVATE_AFTER_REVOCATION", response.get_data(as_text=True))
 
     def test_notifications_are_isolated_between_users_and_companies(self):
-        first, other = self._socket(self._login_client()), self._socket(self._login_client("other"))
+        first, other = self._login_client(), self._login_client("other")
         self._notify(text="PRIVATE_COMPANY_ONE")
-        messages = self._received(first)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["name"], "nova_notificacao")
-        self.assertEqual(messages[0]["args"][0]["texto"], "PRIVATE_COMPANY_ONE")
-        self.assertNotIn("PRIVATE_COMPANY_ONE", repr(self._received(other)))
+        data = self._poll(first).get_json()
+        self.assertEqual([item["texto"] for item in data["novas"]], ["PRIVATE_COMPANY_ONE"])
+        self.assertEqual(set(data["novas"][0]), {"id", "texto", "link", "hora", "hora_completa", "instante",
+                                                 "badge", "badge_rotulo"})
+        self.assertNotIn("PRIVATE_COMPANY_ONE", self._polled_texts(other))
+        # O navegador manda o maior id que já tem: a mesma notificação não volta.
+        self.assertEqual(self._polled_texts(first, desde=data["ultimo"]), [])
 
-    def test_new_socket_after_new_login_receives_current_generation_only(self):
-        old = self._socket(self._login_client())
+    def test_poll_returns_only_unread_newer_than_desde_and_the_unread_count(self):
+        client = self._login_client()
+        first = self._notify(text="UNREAD_FIRST")
+        self._notify(text="UNREAD_SECOND")
+        data = self._poll(client, desde=first).get_json()
+        self.assertEqual([item["texto"] for item in data["novas"]], ["UNREAD_SECOND"])
+        self.assertEqual(data["nao_lidas"], 2)
+        with self.app.app_context():
+            db.session.execute(update(Notificacao).where(Notificacao.id_notificacao > first)
+                               .values(lida=True))
+            db.session.commit()
+        data = self._poll(client, desde=first).get_json()
+        self.assertEqual((data["novas"], data["nao_lidas"]), ([], 1))
+        for strange in ("abc", "-1", "1e9", "9" * 11, "", "+1"):
+            with self.subTest(desde=strange):
+                response = client.get(f"{self.POLL}?desde={strange}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["nao_lidas"], 1)
+
+    def test_new_poll_after_new_login_receives_current_generation_only(self):
+        old = self._login_client()
         self._reset_password()
-        new = self._socket(self._login_client(password=token_cases.NEW_PASSWORD))
-        self.assertTrue(new.is_connected())
+        new = self._login_client(password=token_cases.NEW_PASSWORD)
         self._notify(text="CURRENT_GENERATION_PRIVATE")
-        self.assertNotIn("CURRENT_GENERATION_PRIVATE", repr(self._received(old)))
-        self.assertIn("CURRENT_GENERATION_PRIVATE", repr(self._received(new)))
+        self.assertNotIn("CURRENT_GENERATION_PRIVATE", self._assert_poll_denied(old).get_data(as_text=True))
+        self.assertIn("CURRENT_GENERATION_PRIVATE", self._polled_texts(new))
 
-    def test_notification_is_emitted_only_after_business_commit(self):
-        connection = self._socket(self._login_client())
+    def test_notification_is_visible_only_after_business_commit(self):
+        client = self._login_client()
         with self.app.app_context():
             notification = notifications.criar_notificacao(self.ids["active"], "COMMITTED_PRIVATE", "/")
             self.assertIsNotNone(notification.id_notificacao)
-            self.assertEqual(self._received(connection), [])
+            self.assertNotIn("COMMITTED_PRIVATE", self._polled_texts_from_other_request(client))
             db.session.commit()
-        self.assertIn("COMMITTED_PRIVATE", repr(self._received(connection)))
+        self.assertIn("COMMITTED_PRIVATE", self._polled_texts(client))
 
-    def test_notification_rollback_emits_nothing_and_persists_nothing(self):
-        connection = self._socket(self._login_client())
+    def test_notification_rollback_shows_nothing_and_persists_nothing(self):
+        client = self._login_client()
         identifier = self._notify(text="ROLLED_BACK_PRIVATE", commit=False)
-        self.assertEqual(self._received(connection), [])
+        self.assertNotIn("ROLLED_BACK_PRIVATE", self._polled_texts(client))
         with self.app.app_context():
             self.assertIsNone(db.session.get(Notificacao, identifier))
 
-    def test_savepoint_commit_does_not_emit_before_outer_commit(self):
-        connection = self._socket(self._login_client())
+    def test_savepoint_commit_is_not_visible_before_outer_commit(self):
+        client = self._login_client()
         with self.app.app_context():
             notifications.criar_notificacao(self.ids["active"], "OUTER_COMMITTED_PRIVATE", "/")
             with db.session.begin_nested():
                 notifications.criar_notificacao(self.ids["active"], "NESTED_COMMITTED_PRIVATE", "/")
-            self.assertEqual(self._received(connection), [])
+            self.assertEqual(self._polled_texts_from_other_request(client), [])
             db.session.commit()
-        messages = repr(self._received(connection))
-        self.assertIn("OUTER_COMMITTED_PRIVATE", messages)
-        self.assertIn("NESTED_COMMITTED_PRIVATE", messages)
+        texts = self._polled_texts(client)
+        self.assertIn("OUTER_COMMITTED_PRIVATE", texts)
+        self.assertIn("NESTED_COMMITTED_PRIVATE", texts)
 
     def test_savepoint_rollback_preserves_outer_notification_only(self):
-        connection = self._socket(self._login_client())
+        client = self._login_client()
         with self.app.app_context():
             outer = notifications.criar_notificacao(self.ids["active"], "OUTER_STILL_COMMITTED_PRIVATE", "/")
             outer_id = outer.id_notificacao
@@ -369,16 +444,16 @@ class SessionRevocationCases:
                     raise ValueError("synthetic savepoint rollback")
             except ValueError:
                 pass
-            self.assertEqual(self._received(connection), [])
+            self.assertEqual(self._polled_texts_from_other_request(client), [])
             db.session.commit()
             self.assertIsNotNone(db.session.get(Notificacao, outer_id))
             self.assertIsNone(db.session.get(Notificacao, inner_id))
-        messages = repr(self._received(connection))
-        self.assertIn("OUTER_STILL_COMMITTED_PRIVATE", messages)
-        self.assertNotIn("NESTED_ROLLED_BACK_PRIVATE", messages)
+        texts = self._polled_texts(client)
+        self.assertIn("OUTER_STILL_COMMITTED_PRIVATE", texts)
+        self.assertNotIn("NESTED_ROLLED_BACK_PRIVATE", texts)
 
     def test_outer_rollback_discards_already_released_savepoint_notifications(self):
-        connection = self._socket(self._login_client())
+        client = self._login_client()
         with self.app.app_context():
             outer = notifications.criar_notificacao(self.ids["active"], "OUTER_ROLLBACK_PRIVATE", "/")
             outer_id = outer.id_notificacao
@@ -388,18 +463,17 @@ class SessionRevocationCases:
             db.session.rollback()
             self.assertIsNone(db.session.get(Notificacao, outer_id))
             self.assertIsNone(db.session.get(Notificacao, inner_id))
-        self.assertEqual(self._received(connection), [])
+        self.assertEqual(self._polled_texts(client), [])
 
     def test_failed_password_commit_does_not_revoke_valid_session(self):
         client = self._login_client()
-        connection = self._socket(client)
         token = self._token()
         anonymous = self.app.test_client()
         csrf = self._csrf(anonymous)
         with patch.object(db.session, "commit", side_effect=SQLAlchemyError("PRIVATE_COMMIT_SENTINEL")):
             self._assert_rejected(self._post(token, client=anonymous, csrf=csrf))
         self.assertEqual(client.get("/_security/protected").status_code, 200)
-        self.assertTrue(connection.is_connected())
+        self.assertEqual(self._poll(client).status_code, 200)
         self.assertEqual(self._account()[0], token_cases.FIXTURE_HASH)
 
     # --- SEC-001 (segunda auditoria): sessões registradas e revogáveis ------
@@ -461,14 +535,13 @@ class SessionRevocationCases:
         self.assertEqual(client.get("/_security/protected").status_code, 200)
         self.assertEqual(self._session_rows(), [(False, None)])
 
-    def test_logout_disconnects_socket_and_replayed_cookie_cannot_reconnect(self):
+    def test_logout_denies_poll_and_replayed_cookie(self):
         client = self._login_client()
         cookie = self._cookie(client)
-        connection = self._socket(client)
-        self.assertTrue(connection.is_connected())
+        self.assertEqual(self._poll(client).status_code, 200)
         self._logout(client)
-        self.assertFalse(connection.is_connected())
-        self.assertFalse(self._socket(self._replay(cookie)).is_connected())
+        self._assert_poll_denied(client)
+        self._assert_poll_denied(self._replay(cookie))
 
     def test_logout_of_one_session_preserves_the_other_session_of_the_same_user(self):
         first, second = self._login_client(), self._login_client()
@@ -479,27 +552,24 @@ class SessionRevocationCases:
 
     def test_notification_after_logout_reaches_only_the_surviving_session(self):
         first, second = self._login_client(), self._login_client()
-        gone, kept = self._socket(first), self._socket(second)
+        gone = self._cookie(first)
         self._logout(first)
         self._notify(text="PRIVATE_AFTER_LOGOUT")
-        self.assertNotIn("PRIVATE_AFTER_LOGOUT", repr(self._received(gone)))
-        self.assertIn("PRIVATE_AFTER_LOGOUT", repr(self._received(kept)))
+        self.assertNotIn("PRIVATE_AFTER_LOGOUT", self._assert_poll_denied(self._replay(gone)).get_data(as_text=True))
+        self.assertIn("PRIVATE_AFTER_LOGOUT", self._polled_texts(second))
 
-    def test_session_revoked_in_database_gets_no_notification_before_the_sweep(self):
-        # Revogação feita em outro processo: o socket local ainda está aberto.
+    def test_session_revoked_in_database_is_denied_on_the_next_poll(self):
+        # Revogação feita em outro processo: não há varredura nem conexão a
+        # derrubar; a consulta seguinte já é negada.
         client = self._login_client()
-        connection = self._socket(client)
         with self.app.app_context():
             self.assertEqual(session_security.revogar_sessoes_usuario(
                 db.session, self.ids["active"], "revogacao_global"), 1)
             db.session.commit()
-        self.assertTrue(connection.is_connected())
         self._notify(text="PRIVATE_AFTER_REMOTE_REVOCATION")
-        self.assertNotIn("PRIVATE_AFTER_REMOTE_REVOCATION", repr(self._received(connection)))
+        response = self._assert_poll_denied(client)
+        self.assertNotIn("PRIVATE_AFTER_REMOTE_REVOCATION", response.get_data(as_text=True))
         self._assert_private_denied(client)
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
 
     def test_password_change_revokes_every_session_row_of_the_user_only(self):
         first, second, other = self._login_client(), self._login_client(), self._login_client("other")
@@ -519,8 +589,8 @@ class SessionRevocationCases:
             ).values(criada_em=agora_utc() - timedelta(hours=9),
                      expira_em=agora_utc() - timedelta(hours=1)))
             db.session.commit()
+        self._assert_poll_denied(self._replay(self._cookie(client)))
         self._assert_private_denied(client)
-        self.assertFalse(self._socket(client).is_connected())
 
     def test_unknown_or_malformed_session_identifier_is_denied(self):
         for value in (None, "", "x" * 43, secrets.token_urlsafe(32), "é" * 43, 123, "A" * 44):
@@ -583,7 +653,6 @@ class SessionRevocationCases:
     def test_company_trash_revokes_sessions_and_restore_does_not_revive_them(self):
         client = self._login_client()
         cookie = self._cookie(client)
-        connection = self._socket(client)
         with self.app.app_context():
             empresa = db.session.get(Usuario, self.ids["active"]).id_empresa
             self.assertIsNotNone(company_security.excluir_empresa(db.session, empresa))
@@ -591,7 +660,7 @@ class SessionRevocationCases:
         self.assertEqual(self._session_rows(), [(True, "empresa")])
         self._assert_private_denied(client)
         self._notify(text="PRIVATE_AFTER_TRASH")
-        self.assertNotIn("PRIVATE_AFTER_TRASH", repr(self._received(connection)))
+        self.assertNotIn("PRIVATE_AFTER_TRASH", self._assert_poll_denied(self._replay(cookie)).get_data(as_text=True))
         with self.app.app_context():
             self.assertIsNotNone(company_security.restaurar_empresa(db.session, empresa))
             db.session.commit()

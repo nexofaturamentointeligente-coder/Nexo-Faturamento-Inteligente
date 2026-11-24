@@ -16,7 +16,6 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_migrate import Migrate
 from flask_mail import Connection, Mail
-from flask_socketio import SocketIO
 from flask_wtf import CSRFProtect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -119,12 +118,6 @@ class MailComPrazo(Mail):
 # Flask-Mail: envio de e-mails transacionais por SMTP (alternativa à API do
 # Brevo; ver emails.py).
 mail = MailComPrazo()
-# Flask-SocketIO: notificações em tempo real (sininho ao vivo).
-# async_mode "threading" é o modo estável no Python 3.12 (sem eventlet/gevent),
-# usando o driver simple-websocket. As origens permitidas no handshake são
-# definidas na factory (config SOCKETIO_CORS_ORIGINS) para evitar Cross-Site
-# WebSocket Hijacking — nunca "*" com cookie de sessão.
-socketio = SocketIO(async_mode="threading", logger=False, engineio_logger=False)
 # Proteção CSRF (Flask-WTF): valida token em TODAS as requisições mutáveis
 # (POST/PUT/PATCH/DELETE). Inicializada na factory.
 csrf = CSRFProtect()

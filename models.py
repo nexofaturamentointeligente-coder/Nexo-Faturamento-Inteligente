@@ -246,7 +246,7 @@ class SessaoAutenticada(db.Model):
     aqui fica o seu hash SHA-256, o dono, a validade e a revogação.
 
     Sem a linha válida (ou com revogada_em preenchido) o cookie deixa de
-    autorizar HTTP e Socket.IO, em qualquer processo, mesmo que a assinatura
+    autorizar páginas e o polling do sininho, em qualquer processo, mesmo que a assinatura
     continue íntegra. O logout revoga só a sessão atual; a troca de senha,
     todas as do usuário. A geração de autorização (lixeira/cancelamento) e o
     BOOT_ID continuam valendo em cima desta verificação.
@@ -661,7 +661,7 @@ class Notificacao(db.Model):
     texto: Mapped[str] = mapped_column(String, nullable=False)
     link_destino: Mapped[Optional[str]] = mapped_column(String)
     lida: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Preenchido no flush (UTC): o payload do Socket.IO usa este mesmo instante.
+    # Preenchido no flush (UTC): a resposta do polling do sininho usa este mesmo instante.
     data_criacao: Mapped[datetime] = mapped_column(
         InstanteUTCSemFuso(), nullable=False, default=agora_utc, server_default=func.current_timestamp()
     )

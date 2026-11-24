@@ -213,21 +213,6 @@ class Config:
     LIMITE_LOGIN_CONTA = os.environ.get("NEXO_LIMITE_LOGIN_CONTA", "200 per 15 minutes")
     LIMITE_RECUPERACAO_CONTA = os.environ.get("NEXO_LIMITE_RECUPERACAO_CONTA", "10 per hour")
 
-    # === Tempo real (Socket.IO) ===
-    # Origens permitidas no handshake do WebSocket. NUNCA "*" com cookie de
-    # sessão (evita Cross-Site WebSocket Hijacking). Lista separada por vírgula
-    # no .env; default cobre o dev local.
-    SOCKETIO_CORS_ORIGINS = [
-        o.strip() for o in os.environ.get(
-            "SOCKETIO_CORS_ORIGINS",
-            "http://127.0.0.1:5000,http://localhost:5000",
-        ).split(",") if o.strip()
-    ]
-    # No Render, a URL pública (https://<servico>.onrender.com) chega pela
-    # variável RENDER_EXTERNAL_URL, definida automaticamente pela plataforma.
-    if os.environ.get("RENDER_EXTERNAL_URL"):
-        SOCKETIO_CORS_ORIGINS.append(os.environ["RENDER_EXTERNAL_URL"].rstrip("/"))
-
     # === Origem pública canônica (SEC-005) ===
     # Links sensíveis enviados por e-mail (ativação, recuperação de senha,
     # chamados, publicação) são montados SEMPRE a partir desta origem, nunca
@@ -290,6 +275,19 @@ class Config:
             "pool_size": int(os.environ.get("NEXO_DB_POOL_SIZE", 5)),
             "max_overflow": int(os.environ.get("NEXO_DB_MAX_OVERFLOW", 10)),
             "pool_timeout": int(os.environ.get("NEXO_DB_POOL_TIMEOUT", 10)),
+            # Prazo para ABRIR a conexão e keepalive TCP, do lado do aplicativo (não
+            # mudam o Supabase, o pool nem variáveis do ambiente). Com o banco
+            # inalcançável, cada tentativa falha em 5 s, em vez de prender uma thread
+            # por ~2 min (o padrão do TCP no Linux); uma conexão OCIOSA cujo outro lado
+            # sumiu é detectada em ~1 min (30 s + 3 sondas de 10 s). O keepalive não age
+            # com dados já enviados e sem resposta (aí vale a retransmissão do TCP).
+            "connect_args": {
+                "connect_timeout": 5,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
         })
 
     # === Admin Master (seed) ===

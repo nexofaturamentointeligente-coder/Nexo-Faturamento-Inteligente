@@ -6,7 +6,7 @@ Este documento detalha a configuração técnica necessária para publicar a apl
 
 - **Linguagem:** Python 3.12.10
 - **Banco de Dados:** PostgreSQL (Recomendado: Supabase)
-- **Servidor WSGI:** Gunicorn (com worker threading para suporte a WebSockets)
+- **Servidor WSGI:** Gunicorn com 1 worker e threads (o sininho usa polling leve; nenhuma conexão longa prende thread)
 - **Infraestrutura:** Render Web Service (Plano Free)
 
 ## 2. Publicação no GitHub

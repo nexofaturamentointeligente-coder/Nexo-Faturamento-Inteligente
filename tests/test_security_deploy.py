@@ -13,10 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.datastructures import FileStorage
 
 from blueprints import admin, api, auth
-from extensions import db, socketio
+from extensions import db
 from models import Usuario
 from tests import test_auth_tokens_security as token_cases
-import realtime
 import session_security
 
 
@@ -86,7 +85,9 @@ class BotInputTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
-class SocketSessionTests(token_cases._TokenCase):
+class PollingSessionTests(token_cases._TokenCase):
+    """O polling do sininho (substituiu o Socket.IO) só responde a sessão válida."""
+
     def _connect(self, usuario, boot_id="test-boot"):
         client = self.app.test_client()
         if usuario is not None:
@@ -94,7 +95,7 @@ class SocketSessionTests(token_cases._TokenCase):
                 stored = db.session.get(Usuario, self.ids["active"])
                 stored.ativo = usuario.is_active
                 stored.primeiro_acesso = usuario.primeiro_acesso
-                # SEC-001: só um cookie com sessão registrada no banco conecta.
+                # SEC-001: só um cookie com sessão registrada no banco consulta.
                 token, _ = session_security.registrar_sessao(db.session, stored.id_usuario)
                 db.session.commit()
                 fingerprint = session_security.impressao_sessao(stored)
@@ -104,11 +105,13 @@ class SocketSessionTests(token_cases._TokenCase):
                     session["boot_id"] = self.app.config["BOOT_ID"] if boot_id == "test-boot" else boot_id
                     session[session_security.CHAVE_CREDENCIAL] = fingerprint
                     session[session_security.CHAVE_SESSAO] = token
-        connection = socketio.test_client(self.app, flask_test_client=client)
-        connected = connection.is_connected()
-        if connected:
-            connection.disconnect()
-        return connected
+        response = client.get("/notificacoes/novas?desde=0")
+        if response.status_code == 200:
+            self.assertEqual(set(response.get_json()), {"nao_lidas", "novas", "ultimo"})
+            return True
+        self.assertIn(response.status_code, (401, 302))
+        self.assertNotIn("novas", response.get_data(as_text=True))
+        return False
 
     def test_current_active_session_connects(self):
         self.assertTrue(self._connect(_usuario()))

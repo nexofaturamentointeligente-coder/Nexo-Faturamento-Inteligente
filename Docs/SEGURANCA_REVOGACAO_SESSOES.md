@@ -1,5 +1,7 @@
 # NEXO-SEC-003: revogação HTTP e Socket.IO
 
+> **Atualização de 24/11/2026 (Fase 1 da auditoria de estresse):** o Socket.IO saiu do produto. O sininho passou a consultar `GET /notificacoes/novas` a cada 30 segundos, e cada consulta passa pela mesma validação de sessão das páginas (credencial, sessão registrada, `BOOT_ID`, empresa acessível). A revogação vale na consulta seguinte, sem varredura nem salas. As seções sobre sockets, salas e varredura abaixo são históricas. Banco indisponível também deixou de apagar o cookie: a requisição recebe 503 e a sessão volta a valer quando o banco volta (`falhas_banco.py`).
+
 ## Diagnóstico
 
 Na base `255957d`, o login gravava apenas o identificador Flask-Login e BOOT_ID.

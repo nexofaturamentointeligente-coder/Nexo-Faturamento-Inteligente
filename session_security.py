@@ -40,7 +40,7 @@ def condicoes_empresa_acessivel(instante=None, *, sessao=None):
     e, no regime contratual, com contrato vigente cuja suspensão não expirou.
 
     O prazo é comparado ao relógio da política no próprio SQL: a expiração
-    bloqueia login, sessão, tokens, Socket.IO e notificações antes mesmo de a
+    bloqueia login, sessão, tokens e o polling do sininho antes mesmo de a
     reconciliação gravar o cancelamento. `sessao` é a Session que executará a
     consulta (entregas pós-commit usam Session própria, não db.session).
     """
@@ -71,8 +71,8 @@ def usuario_pode_acessar(usuario, *, consulta=None) -> bool:
 
     Não usa o relacionamento ORM potencialmente desatualizado nem outra
     conexão: notificações/varreduras passam sua própria Session. O SELECT da
-    empresa é MVCC, sem lock: os leitores Socket.IO já mantêm FOR SHARE no
-    usuário, e a exclusão atualiza sua geração na mesma transação da empresa.
+    empresa é MVCC, sem lock; a exclusão atualiza a geração do usuário na mesma
+    transação da empresa.
     Assim, a exclusão só confirma depois da emissão autorizada anterior, sem
     inverter a ordem Empresa -> Usuario dos locks de escrita.
     """
@@ -168,17 +168,6 @@ def sessao_registrada_valida(id_usuario: int, hash_sessao, *, consulta=None) -> 
         )) is not None
 
 
-def hashes_sessoes_ativas(id_usuario: int, *, consulta=None) -> list[str]:
-    """Sessões que ainda autorizam o usuário (destinatárias de eventos privados)."""
-    consulta = db.session if consulta is None else consulta
-    with consulta.no_autoflush:
-        return list(consulta.scalars(select(SessaoAutenticada.identificador_hash).where(
-            SessaoAutenticada.id_usuario == id_usuario,
-            SessaoAutenticada.revogada_em.is_(None),
-            SessaoAutenticada.expira_em > agora_utc(),
-        )))
-
-
 def registrar_sessao(sessao_db, id_usuario: int) -> tuple[str, str]:
     """Insere (SEM commit) a linha da nova sessão; devolve (token, hash).
 
@@ -260,8 +249,8 @@ def sessao_valida(usuario, dados=None, *, permitir_primeiro_acesso=True, consult
                   hash_sessao=None) -> bool:
     """Todas as condições de autorização de um cookie (ou de um snapshot dele).
 
-    `hash_sessao` permite validar um registro de conexão Socket.IO, que guarda
-    o hash e não o identificador do cookie.
+    `hash_sessao` permite validar um registro que guarda só o hash, não o
+    identificador do cookie.
     """
     dados = session if dados is None else dados
     if (not usuario_pode_acessar(usuario, consulta=consulta)

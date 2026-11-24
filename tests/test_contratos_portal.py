@@ -1,7 +1,7 @@
 """Gestão contratual pelo HTTP real: portal do CLIENTE, login e administração.
 
 Complementa tests.test_contratos_gestao (operações no banco) exercitando as
-rotas reais, com CSRF, cookies de sessão, Socket.IO de teste e migrações reais
+rotas reais, com CSRF, cookies de sessão, o polling do sininho e migrações reais
 em SQLite temporário (tests.contratos_support.ContratosCase). Cobre:
   (a) regime legado ATIVA sem regressão (dashboard, histórico, análise, PDF);
   (b) regime contratual: só análises de períodos integralmente pagos chegam ao
@@ -17,7 +17,7 @@ em SQLite temporário (tests.contratos_support.ContratosCase). Cobre:
       versão desatualizada, visão geral e reconciliação);
   (i) nova contratação após cancelamento;
   (j) bloqueios administrativos (nova análise, edição da empresa, publicação);
-  (k) handshake Socket.IO após a expiração da suspensão.
+  (k) polling do sininho após a expiração da suspensão.
 
 Somente dados fictícios (example.invalid, CNPJs sintéticos). O relógio da
 política é injetado por NEXO_RELOGIO: nenhum teste espera tempo real nem
@@ -37,11 +37,6 @@ from unittest.mock import patch
 
 from sqlalchemy import func, select
 
-# Importado antes da primeira create_app (como em test_session_revocation_security):
-# os handlers de realtime entram na lista do SocketIO compartilhado e são
-# registrados em cada app de teste, não só no servidor da primeira.
-import realtime  # noqa: F401
-from extensions import socketio
 from tests.contratos_support import T0, TEXTO_PRIVADO, ContratosCase
 
 CLIENTE = "cliente-test@example.invalid"
@@ -143,20 +138,14 @@ class PortalContratualCase(ContratosCase):
     def _texto(resposta):
         return html.unescape(resposta.get_data(as_text=True))
 
-    def _socket(self, client):
-        # Sem o handler de connect o servidor aceitaria qualquer handshake.
-        self.assertIn("connect", socketio.server.handlers.get("/", {}))
-        # Contexto de aplicação próprio: o handshake não herda o g do teste,
-        # onde agora() fixaria o instante da primeira conexão.
-        with self.app.app_context():
-            conexao = socketio.test_client(self.app, flask_test_client=client)
-
-        def fechar():
-            if conexao.is_connected():
-                with self.app.app_context():
-                    conexao.disconnect()
-        self.addCleanup(fechar)
-        return conexao
+    @staticmethod
+    def _sininho(client):
+        """Status de uma consulta do polling do sininho (substituiu o Socket.IO).
+        Cada requisição tem o seu contexto: o relógio do teste vale a cada uma."""
+        resposta = client.get("/notificacoes/novas?desde=0")
+        if resposta.status_code != 200:
+            assert "novas" not in resposta.get_data(as_text=True)
+        return resposta.status_code
 
     # ---------------------------------------------------------------- dados
     def _publicar(self, id_analise, inicio, fim, perfil, concluida_em, base=None):
@@ -1546,20 +1535,20 @@ class BloqueiosAdministrativosTests(PortalContratualCase):
 
 
 # =============================================================================
-# (k) Socket.IO
+# (k) Sininho (polling, que substituiu o Socket.IO)
 # =============================================================================
-class SocketContratualTests(PortalContratualCase):
-    def test_handshake_recusado_com_suspensao_expirada(self):
+class SininhoContratualTests(PortalContratualCase):
+    def test_polling_recusado_com_suspensao_expirada(self):
         self._cenario()
         self.suspender()
         cookie = self._cookie(self._entrar())
-        self.assertTrue(self._socket(self._replay(cookie)).is_connected())  # suspensa, dentro do prazo
+        self.assertEqual(self._sininho(self._replay(cookie)), 200)  # suspensa, dentro do prazo
         self.relogio(SUSPENSAO_LIMITE - UM_MICRO)
-        self.assertTrue(self._socket(self._replay(cookie)).is_connected())
+        self.assertEqual(self._sininho(self._replay(cookie)), 200)
         self.relogio(SUSPENSAO_LIMITE)
-        self.assertFalse(self._socket(self._replay(cookie)).is_connected())
+        self.assertEqual(self._sininho(self._replay(cookie)), 401)
         self.relogio(SUSPENSAO_LIMITE + timedelta(days=10))
-        self.assertFalse(self._socket(self._replay(cookie)).is_connected())
+        self.assertEqual(self._sininho(self._replay(cookie)), 401)
 
 
 if __name__ == "__main__":

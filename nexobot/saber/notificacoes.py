@@ -1,6 +1,6 @@
 """Assunto N — notificações (sininho) e e-mails transacionais.
 
-Fontes: notifications.py, blueprints/notificacoes.py, realtime.py, emails.py,
+Fontes: notifications.py, blueprints/notificacoes.py, emails.py,
 config.py (MAIL_ATIVO, BREVO_API_KEY), templates/base.html (sininho),
 blueprints/admin.py e blueprints/cliente.py (gatilhos).
 """
@@ -19,8 +19,9 @@ REGISTROS = (
             "não lidas e as 5 mais recentes; clique em um aviso para abrir o item relacionado."
         ),
         explicacao=(
-            "Os avisos chegam em tempo real enquanto o portal está aberto (aparece também um alerta no canto "
-            "da tela) e ficam guardados para quando você entrar de novo. “Marcar todas como lidas” zera a "
+            "Os avisos chegam quase em tempo real enquanto o portal está aberto (em até 30 segundos; aparece "
+            "também um alerta no canto da tela) e ficam guardados para quando você entrar de novo. “Marcar "
+            "todas como lidas” zera a "
             "contagem. Cada aviso traz um selo: Nova Análise, Resolvido, Aberto, Contrato ou Aviso."
         ),
         perguntas=(
@@ -29,7 +30,7 @@ REGISTROS = (
         ),
         termos="notificacao notificacoes aviso avisos sininho sino alerta alertas receber avisado contagem",
         relacionados=("nexo.notificacoes.eventos", "nexo.notificacoes.nao_lidas", "nexo.notificacoes.email"),
-        fontes=("templates/base.html", "notifications.py", "realtime.py"),
+        fontes=("templates/base.html", "notifications.py", "blueprints/notificacoes.py"),
     ),
     registro(
         id="nexo.notificacoes.eventos",
@@ -144,9 +145,9 @@ REGISTROS = (
         titulo="As notificações chegam em tempo real?",
         categoria="Notificações",
         resumo=(
-            "Sim: com o portal aberto, o aviso aparece no sininho e como alerta no canto da tela no momento "
-            "em que a equipe confirma a ação. Com o portal fechado, o aviso fica guardado e aparece no próximo "
-            "acesso."
+            "Quase: com o portal aberto, o aviso aparece no sininho e como alerta no canto da tela em até "
+            "30 segundos depois que a equipe confirma a ação. Com o portal fechado, o aviso fica guardado e "
+            "aparece no próximo acesso."
         ),
         perguntas=(
             "As notificações são instantâneas?", "Preciso atualizar a página para ver avisos?",
@@ -154,6 +155,6 @@ REGISTROS = (
         ),
         termos="tempo real instantaneo atualizar pagina websocket alerta canto",
         relacionados=("nexo.notificacoes.sininho",),
-        fontes=("realtime.py", "notifications.py", "templates/base.html"),
+        fontes=("blueprints/notificacoes.py", "notifications.py", "templates/base.html"),
     ),
 )

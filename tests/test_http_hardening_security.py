@@ -23,8 +23,6 @@ SRI = {
         "sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz",
     "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js":
         "sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7",
-    "https://cdn.socket.io/4.7.5/socket.io.min.js":
-        "sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO",
 }
 _TAG_CDN = re.compile(r"<(script|link)\b[^>]*\b(?:src|href)=\"(https://[^\"]+)\"[^>]*>", re.S)
 _ATRIBUTO = re.compile(r'([\w-]+)="([^"]*)"')
@@ -242,8 +240,9 @@ class SecurityHeaderTests(DeployTestCase):
             "r = c.get('/healthz', headers={**host, 'X-Forwarded-Proto': 'https'})\n"
             "assert r.headers['Strict-Transport-Security'] == 'max-age=31536000', r.headers\n"
             "assert 'upgrade-insecure-requests' in r.headers['Content-Security-Policy']\n"
-            "assert 'wss://nexo-test.example.invalid' in r.headers['Content-Security-Policy']\n"
-            "assert 'ws://localhost' not in r.headers['Content-Security-Policy']\n"
+            "assert 'wss://' not in r.headers['Content-Security-Policy']\n"
+            "assert 'ws://' not in r.headers['Content-Security-Policy']\n"
+            "assert \"connect-src 'self';\" in r.headers['Content-Security-Policy']\n"
             "r = c.get('/healthz', headers=host)\n"
             "assert 'Strict-Transport-Security' not in r.headers\n"
         )

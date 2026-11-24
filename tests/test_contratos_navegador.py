@@ -89,9 +89,6 @@ _CDN_INTEGRO = {
     _CDN + "plotly.js-dist-min@2.35.2/plotly.min.js": (
         "plotly.min.js", "application/javascript",
         "cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7"),
-    "https://cdn.socket.io/4.7.5/socket.io.min.js": (
-        "socket.io.min.js", "application/javascript",
-        "2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"),
 }
 
 
@@ -145,16 +142,6 @@ def _servir_fonte(rota, url):
         rota.fulfill(status=200, content_type=tipo, body=b"")
 
 
-def _liberar_origem_socketio(caso, base):
-    """O servidor de teste nasce numa porta aleatória e o handshake do Socket.IO
-    (anti-CSWSH) só aceita as origens configuradas: a origem do teste é
-    acrescentada nesta instância, sem tocar na configuração do produto."""
-    from extensions import socketio
-    eio = socketio.server.eio
-    origens = list(eio.cors_allowed_origins) if isinstance(eio.cors_allowed_origins, (list, tuple)) else []
-    caso.stack.enter_context(patch.object(eio, "cors_allowed_origins", [*origens, base]))
-
-
 _MEDIR_LAYOUT = """() => {
     const largura = window.innerWidth;
     const raiz = document.documentElement;
@@ -205,7 +192,6 @@ class ContratosNavegadorTests(ContratosCase):
             self.stack.enter_context(patch(alvo, original))
         self.servidor = make_server("127.0.0.1", 0, self.app, threaded=True)
         self.base = f"http://127.0.0.1:{self.servidor.server_port}"
-        _liberar_origem_socketio(self, self.base)
         threading.Thread(target=self.servidor.serve_forever, daemon=True).start()
         self.addCleanup(self._parar_servidor)
         self.pw = sync_playwright().start()

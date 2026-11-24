@@ -2,11 +2,9 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import threading
-import time
 from unittest.mock import patch
 
-from flask import request
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from werkzeug.security import check_password_hash
 
@@ -14,10 +12,8 @@ from . import postgresql_auth_tokens as pg_cases
 from . import test_auth_tokens_security as token_cases
 from . import test_session_revocation_security as session_cases
 from .postgresql_support import PrivatePostgreSQL
-from extensions import db, socketio
+from extensions import db
 from blueprints import auth
-import notifications
-import realtime
 
 
 class PostgreSQLSessionRevocationSecurityTests(session_cases.SessionRevocationCases, token_cases._TokenCase):
@@ -30,84 +26,23 @@ class PostgreSQLSessionRevocationSecurityTests(session_cases.SessionRevocationCa
         pg_cases.PostgreSQLAuthTokenSecurityTests.setUp(self)
         self._session_routes()
 
-    def _wait_for_update_to_be_blocked_by_read_lock(self):
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            with self.engine.connect() as connection:
-                waiting = connection.scalar(text("""
-                    SELECT count(*) FROM pg_stat_activity
-                    WHERE datname = current_database() AND pid <> pg_backend_pid()
-                      AND wait_event_type = 'Lock'
-                      AND query ILIKE 'UPDATE usuario SET%'
-                      AND cardinality(pg_blocking_pids(pid)) > 0
-                """))
-            if waiting:
-                return
-            threading.Event().wait(0.01)
-        self.fail("O UPDATE real não demonstrou espera pelo lock PostgreSQL de autorização.")
-
-    def _wait_for_blocked_statement(self, query_like):
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            with self.engine.connect() as connection:
-                waiting = connection.scalar(text("""
-                    SELECT count(*) FROM pg_stat_activity
-                    WHERE datname = current_database() AND pid <> pg_backend_pid()
-                      AND wait_event_type = 'Lock' AND query ILIKE :padrao
-                      AND cardinality(pg_blocking_pids(pid)) > 0
-                """), {"padrao": query_like})
-            if waiting:
-                return
-            threading.Event().wait(0.01)
-        self.fail(f"Nenhuma consulta {query_like!r} demonstrou espera pelo lock PostgreSQL.")
-
-    def test_logout_waits_for_in_flight_delivery_and_later_deliveries_skip_the_session(self):
-        """SEC-001: FOR UPDATE do logout espera a entrega (FOR SHARE) terminar;
-        a sessão revogada deixa de ser destinatária de qualquer entrega posterior."""
-        locked, release = threading.Event(), threading.Event()
+    # O Socket.IO saiu (o sininho usa polling): não há mais entrega assíncrona que
+    # precise segurar FOR SHARE no usuário. Cada consulta é uma requisição HTTP
+    # comum, validada na entrada como qualquer página.
+    def test_logout_revokes_the_session_for_later_polls(self):
         http = self._login_client()
-        old_socket = self._socket(http)
-        csrf = self._csrf(http, "/auth/logout")
-        emitted = []
-        original_emit = socketio.emit
-
-        def recording_emit(*args, **kwargs):
-            emitted.append((args[0], kwargs.get("room")))
-            return original_emit(*args, **kwargs)
-
-        def after(connection, cursor, statement, parameters, context, executemany):
-            if "FOR SHARE" in statement.upper() and threading.current_thread().name.startswith("logout-race"):
-                locked.set()
-                if not release.wait(12):
-                    raise AssertionError("Entrega de teste não foi liberada.")
-        event.listen(self.engine, "after_cursor_execute", after)
-        try:
-            with patch.object(notifications.socketio, "emit", side_effect=recording_emit):
-                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="logout-race") as executor:
-                    delivery = executor.submit(self._notify, text="AUTHORIZED_BEFORE_LOGOUT_COMMIT")
-                    try:
-                        self.assertTrue(locked.wait(8))
-                        logout = executor.submit(http.post, "/auth/logout", data={"csrf_token": csrf})
-                        self._wait_for_blocked_statement("SELECT%FOR UPDATE%")
-                        self.assertEqual(self._session_rows(), [(False, None)])
-                        self.assertEqual(emitted, [])
-                    finally:
-                        release.set()
-                    delivery.result(timeout=12)
-                    response = logout.result(timeout=12)
-                self.assertEqual(response.status_code, 302)
-        finally:
-            release.set()
-            event.remove(self.engine, "after_cursor_execute", after)
-        self.assertEqual([name for name, _ in emitted], ["nova_notificacao"])
+        cookie = self._cookie(http)
+        self._notify(text="AUTHORIZED_BEFORE_LOGOUT")
+        self.assertIn("AUTHORIZED_BEFORE_LOGOUT", self._polled_texts(http))
+        self._logout(http)
         self.assertEqual(self._session_rows(), [(True, "logout")])
-        self.assertFalse(old_socket.is_connected())
-        self._assert_private_denied(http)
         self._notify(text="PRIVATE_AFTER_LOGOUT")
-        self.assertEqual(len(emitted), 1, "sessão revogada não pode ser destinatária")
+        response = self._assert_poll_denied(self._replay(cookie))
+        self.assertNotIn("PRIVATE_AFTER_LOGOUT", response.get_data(as_text=True))
+        self._assert_private_denied(http)
 
-    def test_notification_commit_delivers_with_single_connection_pool(self):
-        """O despachante precisa aguardar a devolução da conexão do COMMIT."""
+    def test_poll_works_with_single_connection_pool(self):
+        """Com uma única conexão no pool, criar a notificação e consultá-la não trava."""
         with self.app.app_context():
             db.session.remove()
             previous = self.engine
@@ -123,104 +58,59 @@ class PostgreSQLSessionRevocationSecurityTests(session_cases.SessionRevocationCa
             db.engines[None] = replacement
             self.engine = replacement
             previous.dispose()
-        connection = self._socket(self._login_client())
+        client = self._login_client()
         self._notify(text="SINGLE_CONNECTION_POOL_PRIVATE")
-        messages = self._received(connection)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["args"][0]["texto"], "SINGLE_CONNECTION_POOL_PRIVATE")
+        self.assertEqual(self._polled_texts(client), ["SINGLE_CONNECTION_POOL_PRIVATE"])
 
-    def test_private_event_and_password_update_are_serialized_by_postgresql(self):
-        entered, release_emit, enqueued, release_handler, update_attempted = (
-            threading.Event() for _ in range(5)
-        )
-        def private_action():
-            entered.set()
-            if not release_emit.wait(12):
-                raise AssertionError("Evento de teste não foi liberado.")
-            socketio.emit("_security_private_probe", {"private": "AUTHORIZED_BEFORE_PASSWORD_COMMIT"},
-                          to=request.sid)
-            enqueued.set()
-            if not release_handler.wait(12):
-                raise AssertionError("Handler de teste não foi liberado.")
-            return True
-        socketio.on_event("_security_blocking_probe", realtime.guarded_socket_event(private_action))
-        old_http = self._login_client()
-        old_socket = self._socket(old_http)
+    def test_polls_concurrent_with_password_update_answer_200_or_401_then_deny(self):
+        """Consultas em paralelo com a troca de senha no PostgreSQL real: cada uma
+        responde 200 (validada antes do COMMIT) ou 401, nunca erro; depois do COMMIT
+        o cookie antigo não recebe mais nada."""
+        cookie = self._cookie(self._login_client())
         token = self._token()
         reset_client = self.app.test_client()
         csrf = self._csrf(reset_client)
+        update_pending, polled_during_update, status = threading.Event(), threading.Event(), []
 
-        def before(connection, cursor, statement, parameters, context, executemany):
-            if statement.lstrip().upper().startswith("UPDATE USUARIO SET"):
-                update_attempted.set()
-        event.listen(self.engine, "before_cursor_execute", before)
+        # O UPDATE da senha espera até o polling consultar com a troca em andamento:
+        # a sobreposição é garantida, não deixada ao acaso.
+        def hold_update(connection, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().upper().startswith("UPDATE USUARIO SET") and not update_pending.is_set():
+                update_pending.set()
+                if not polled_during_update.wait(12):
+                    raise AssertionError("O polling não consultou durante a troca de senha.")
+
+        def poll_during_update():
+            self.assertTrue(update_pending.wait(8))
+            for _ in range(4):
+                status.append(self._poll(self._replay(cookie)).status_code)
+            polled_during_update.set()
+
+        event.listen(self.engine, "before_cursor_execute", hold_update)
         try:
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="session-event-race") as executor:
-                event_result = executor.submit(old_socket.emit, "_security_blocking_probe", callback=True)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="poll-race") as executor:
+                polls = executor.submit(poll_during_update)
                 try:
-                    self.assertTrue(entered.wait(8))
-                    reset_result = executor.submit(self._post, token, client=reset_client, csrf=csrf)
-                    self.assertTrue(update_attempted.wait(8))
-                    self._wait_for_update_to_be_blocked_by_read_lock()
-                    self.assertEqual(self._account()[0], token_cases.FIXTURE_HASH)
-                    release_emit.set()
-                    self.assertTrue(enqueued.wait(8))
-                    self.assertIn("AUTHORIZED_BEFORE_PASSWORD_COMMIT", repr(self._received(old_socket)))
-                    self.assertEqual(self._account()[0], token_cases.FIXTURE_HASH)
+                    self._assert_success(self._post(token, client=reset_client, csrf=csrf))
                 finally:
-                    release_emit.set()
-                    release_handler.set()
-                self.assertTrue(event_result.result(timeout=12))
-                self._assert_success(reset_result.result(timeout=12))
+                    polled_during_update.set()
+                polls.result(timeout=30)
         finally:
-            release_emit.set()
-            release_handler.set()
-            event.remove(self.engine, "before_cursor_execute", before)
-        self.assertTrue(check_password_hash(self._account()[0], token_cases.NEW_PASSWORD))
-        self._assert_private_denied(old_http)
-        self.assertFalse(old_socket.is_connected())
-        self.assertFalse(self._socket(old_http).is_connected())
-        self._assert_rejected(self._post(token, client=self.app.test_client()))
+            event.remove(self.engine, "before_cursor_execute", hold_update)
+        # Antes do COMMIT a credencial antiga ainda vale: 200, nunca erro.
+        self.assertEqual(status, [200] * 4)
+        self._notify(text="PRIVATE_AFTER_PASSWORD_COMMIT")
+        response = self._assert_poll_denied(self._replay(cookie))
+        self.assertNotIn("PRIVATE_AFTER_PASSWORD_COMMIT", response.get_data(as_text=True))
 
-    def test_private_notification_holds_read_lock_until_emit_then_new_generation_excludes_old_socket(self):
-        locked, release, update_attempted = threading.Event(), threading.Event(), threading.Event()
-        old_socket = self._socket(self._login_client())
-        token = self._token()
-        reset_client = self.app.test_client()
-        csrf = self._csrf(reset_client)
-
-        def after(connection, cursor, statement, parameters, context, executemany):
-            if "FOR SHARE" in statement.upper() and threading.current_thread().name.startswith("notification-race"):
-                locked.set()
-                if not release.wait(12):
-                    raise AssertionError("Emissão de teste não foi liberada.")
-        def before(connection, cursor, statement, parameters, context, executemany):
-            if statement.lstrip().upper().startswith("UPDATE USUARIO SET"):
-                update_attempted.set()
-        event.listen(self.engine, "after_cursor_execute", after)
-        event.listen(self.engine, "before_cursor_execute", before)
-        try:
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="notification-race") as executor:
-                emitted = executor.submit(self._notify, text="AUTHORIZED_BEFORE_PASSWORD_COMMIT")
-                try:
-                    self.assertTrue(locked.wait(8))
-                    reset_result = executor.submit(self._post, token, client=reset_client, csrf=csrf)
-                    self.assertTrue(update_attempted.wait(8))
-                    self._wait_for_update_to_be_blocked_by_read_lock()
-                    self.assertEqual(self._account()[0], token_cases.FIXTURE_HASH)
-                finally:
-                    release.set()
-                emitted.result(timeout=12)
-                self._assert_success(reset_result.result(timeout=12))
-        finally:
-            release.set()
-            event.remove(self.engine, "after_cursor_execute", after)
-            event.remove(self.engine, "before_cursor_execute", before)
+    def test_password_update_moves_delivery_to_the_new_login(self):
+        old = self._cookie(self._login_client())
+        self._reset_password()
         self.assertTrue(check_password_hash(self._account()[0], token_cases.NEW_PASSWORD))
-        current = self._socket(self._login_client(password=token_cases.NEW_PASSWORD))
+        current = self._login_client(password=token_cases.NEW_PASSWORD)
         self._notify(text="PRIVATE_AFTER_COMMIT")
-        self.assertNotIn("PRIVATE_AFTER_COMMIT", repr(self._received(old_socket)))
-        self.assertIn("PRIVATE_AFTER_COMMIT", repr(self._received(current)))
+        self.assertNotIn("PRIVATE_AFTER_COMMIT", self._assert_poll_denied(self._replay(old)).get_data(as_text=True))
+        self.assertIn("PRIVATE_AFTER_COMMIT", self._polled_texts(current))
 
     def test_login_cannot_bind_old_password_verification_to_newer_credential(self):
         """Um login já validou a senha antiga quando outra sessão a modifica."""

@@ -1,6 +1,6 @@
 """NEXO-AJ-06.1: CLIENTE de empresa CANCELADA sem acesso, com dados sintéticos.
 
-SQLite em diretório temporário, rotas reais com CSRF, Socket.IO de teste e
+SQLite em diretório temporário, rotas reais com CSRF, o polling do sininho e
 estado persistido. SUSPENSA mantém o acesso atual (restrições na NEXO-AJ-05.x)
 e a lixeira continua independente do status comercial. Os locks reais de
 PostgreSQL ficam em tests.test_cancelled_company_postgresql (opt-in).
@@ -8,23 +8,19 @@ PostgreSQL ficam em tests.test_cancelled_company_postgresql (opt-in).
 
 from datetime import date
 import re
-from unittest.mock import patch
 
-from flask import request
 from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from . import test_auth_tokens_security as token_cases
 from . import test_company_restore_security as restore_cases
 from . import test_session_revocation_security as session_cases
-from blueprints import admin as admin_routes
 from blueprints import auth
-from extensions import db, socketio
+from extensions import db
 from models import (
     Analise, Empresa, IndicadorAnalise, Notificacao, ProdutoCurvaABC, RelatorioAnalise, Usuario,
 )
 import notifications
-import realtime
 
 
 PRIVATE_TEXT = "CONCLUSAO_PRIVADA_SINTETICA_AJ061"
@@ -35,9 +31,12 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
     _session_routes = session_cases.SessionRevocationCases._session_routes
     _login_client = session_cases.SessionRevocationCases._login_client
     _assert_private_denied = session_cases.SessionRevocationCases._assert_private_denied
-    _socket = session_cases.SessionRevocationCases._socket
     _notify = session_cases.SessionRevocationCases._notify
-    _received = staticmethod(session_cases.SessionRevocationCases._received)
+    # Polling do sininho (substituiu o Socket.IO): GET /notificacoes/novas.
+    POLL = session_cases.SessionRevocationCases.POLL
+    _poll = session_cases.SessionRevocationCases._poll
+    _polled_texts = session_cases.SessionRevocationCases._polled_texts
+    _assert_poll_denied = session_cases.SessionRevocationCases._assert_poll_denied
     _action = restore_cases.CompanyRestoreSecurityTests._action
     _trash = restore_cases.CompanyRestoreSecurityTests._trash
     _restore = restore_cases.CompanyRestoreSecurityTests._restore
@@ -151,15 +150,6 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         users = self._users()
         return {name: users[self.ids[name]]["generation"] for name in names}
 
-    def _private_probe(self, name):
-        executed = []
-        def private_probe():
-            executed.append(True)
-            socketio.emit(f"{name}_private", {"private": f"PRIVATE_{name}"}, to=request.sid)
-            return True
-        socketio.on_event(name, realtime.guarded_socket_event(private_probe))
-        return executed
-
     # -------------------------------------------------------------- cenários
     def test_a_active_company_client_logs_in_and_uses_portal(self):
         client = self._login_client()
@@ -182,17 +172,13 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         self.assertIn("Conta suspensa", dashboard.get_data(as_text=True))
         self.assertEqual(client.get(f"/cliente/analise/{self.analysis_id}").status_code, 200)
         self.assertEqual(client.get(f"/cliente/analise/{self.analysis_id}/pdf").status_code, 200)
-        self.assertTrue(self._socket(client).is_connected())
+        self.assertEqual(self._poll(client).status_code, 200)
 
-    def test_b_suspended_company_keeps_open_socket_events_and_notifications(self):
-        executed = self._private_probe("_aj061_suspended_probe")
-        connection = self._socket(self._login_client())
+    def test_b_suspended_company_keeps_polling_notifications(self):
+        client = self._login_client()
         self._set_status("SUSPENSA")
-        self.assertTrue(connection.is_connected())
         self._notify(text="PRIVATE_SUSPENDED_STILL_DELIVERED")
-        self.assertIn("PRIVATE_SUSPENDED_STILL_DELIVERED", repr(self._received(connection)))
-        self.assertTrue(connection.emit("_aj061_suspended_probe", callback=True))
-        self.assertEqual(executed, [True])
+        self.assertIn("PRIVATE_SUSPENDED_STILL_DELIVERED", self._polled_texts(client))
 
     def test_b_suspended_company_keeps_password_recovery_and_activation(self):
         self._set_status("SUSPENSA")
@@ -321,70 +307,64 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
             self._replay(cookie).get(f"/notificacoes/{notification}/abrir"),
         ):
             self._assert_redirected_to_login(response)
+        polled = self._assert_poll_denied(self._replay(cookie))
+        self.assertNotIn("PRIVATE_NOTIFICATION_BEFORE_CANCEL", polled.get_data(as_text=True))
         with self.app.app_context():
             self.assertFalse(db.session.get(Notificacao, notification).lida)
 
-    def test_h_cancelled_client_open_socket_receives_no_private_events(self):
-        connection = self._socket(self._login_client())
-        other = self._socket(self._login_client("other"))
+    def test_h_cancelled_client_poll_receives_no_private_notification(self):
+        client, other = self._login_client(), self._login_client("other")
         self._notify(text="PRIVATE_BEFORE_CANCEL")
-        self.assertIn("PRIVATE_BEFORE_CANCEL", repr(self._received(connection)))
-        # Sem o fechamento local (como num socket de outro processo), a entrega
-        # ainda precisa ser negada pelo banco e pela sala da nova geração.
-        with patch.object(admin_routes, "_desconectar_revogados") as local_close:
-            self._set_status("CANCELADA")
-        local_close.assert_called_once()
-        self.assertTrue(connection.is_connected())
-        self._notify(text="PRIVATE_AFTER_CANCEL")
-        self.assertNotIn("PRIVATE_AFTER_CANCEL", repr(self._received(connection)))
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
-        self.assertTrue(other.is_connected())
-        self._notify("other", text="OTHER_COMPANY_STILL_AUTHORIZED")
-        self.assertIn("OTHER_COMPANY_STILL_AUTHORIZED", repr(self._received(other)))
-
-    def test_h_admin_route_closes_local_socket_after_commit(self):
-        connection = self._socket(self._login_client())
+        self.assertIn("PRIVATE_BEFORE_CANCEL", self._polled_texts(client))
         self._set_status("CANCELADA")
-        self.assertFalse(connection.is_connected())
+        self._notify(text="PRIVATE_AFTER_CANCEL")
+        response = self._assert_poll_denied(client)
+        self.assertNotIn("PRIVATE_AFTER_CANCEL", response.get_data(as_text=True))
+        self._notify("other", text="OTHER_COMPANY_STILL_AUTHORIZED")
+        self.assertIn("OTHER_COMPANY_STILL_AUTHORIZED", self._polled_texts(other))
 
-    def test_h_out_of_band_cancellation_blocks_delivery_and_sweep_disconnects(self):
-        connection = self._socket(self._login_client())
+    def test_h_admin_route_cancellation_denies_the_next_poll(self):
+        client = self._login_client()
+        self.assertEqual(self._poll(client).status_code, 200)
+        self._set_status("CANCELADA")
+        self._assert_poll_denied(client)
+
+    def test_h_out_of_band_cancellation_denies_the_next_poll(self):
+        # Outro processo cancelou (sem passar pela rota): não há conexão a derrubar;
+        # a consulta seguinte relê o banco e é negada.
+        client = self._login_client()
         self._notify(text="PRIVATE_BEFORE_OUT_OF_BAND")
-        self.assertIn("PRIVATE_BEFORE_OUT_OF_BAND", repr(self._received(connection)))
+        self.assertIn("PRIVATE_BEFORE_OUT_OF_BAND", self._polled_texts(client))
         self._set_status_out_of_band("CANCELADA")
-        # Outro processo cancelou: este socket segue aberto até a varredura, mas a
-        # entrega relê o banco antes de emitir e nada privado é enfileirado.
-        self.assertTrue(connection.is_connected())
         self._notify(text="PRIVATE_OUT_OF_BAND")
-        self.assertNotIn("PRIVATE_OUT_OF_BAND", repr(self._received(connection)))
-        with self.app.app_context():
-            realtime.revogar_sockets_invalidos(self.app)
-        self.assertFalse(connection.is_connected())
+        response = self._assert_poll_denied(client)
+        self.assertNotIn("PRIVATE_OUT_OF_BAND", response.get_data(as_text=True))
 
-    def test_h_guarded_event_after_cancellation_runs_no_private_handler(self):
-        executed = self._private_probe("_aj061_probe")
-        connection = self._socket(self._login_client())
-        self.assertTrue(connection.emit("_aj061_probe", callback=True))
-        self.assertIn("PRIVATE__aj061_probe", repr(self._received(connection)))
+    def test_h_denied_poll_after_cancellation_never_reads_notifications(self):
+        client = self._login_client()
+        self.assertEqual(self._poll(client).status_code, 200)
         self._set_status_out_of_band("CANCELADA")
-        response = connection.emit("_aj061_probe", callback=True)
-        self.assertNotIn("PRIVATE__aj061_probe", repr(response))
-        self.assertEqual(executed, [True])
-        self.assertFalse(connection.is_connected())
+        consultas = []
+        def registrar(conn, cursor, statement, parameters, context, executemany):
+            if "notificacao" in statement.lower():
+                consultas.append(statement)
+        event.listen(self.engine, "before_cursor_execute", registrar)
+        try:
+            self._assert_poll_denied(client)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", registrar)
+        self.assertEqual(consultas, [])
 
-    def test_i_cancelled_client_cannot_open_new_socket(self):
+    def test_i_cancelled_client_cookie_cannot_poll(self):
         cookie = self._cookie(self._login_client())
-        self.assertTrue(self._socket(self._replay(cookie)).is_connected())
+        self.assertEqual(self._poll(self._replay(cookie)).status_code, 200)
         self._set_status_out_of_band("CANCELADA")
-        self.assertFalse(self._socket(self._replay(cookie)).is_connected())
+        self._assert_poll_denied(self._replay(cookie))
         self._set_status_out_of_band("ATIVA")
         self._set_status("CANCELADA")
-        self.assertFalse(self._socket(self._replay(cookie)).is_connected())
+        self._assert_poll_denied(self._replay(cookie))
 
     def test_j_admin_keeps_administrative_access_to_cancelled_company(self):
-        admin_socket = self._socket(self.admin_client)
         before = self._users()[self.ids["admin"]]
         self._set_status("CANCELADA")
         self.assertEqual(self._users()[self.ids["admin"]], before)
@@ -392,9 +372,9 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         self.assertEqual(listing.status_code, 200)
         self.assertIn("Synthetic company 1", listing.get_data(as_text=True))
         self.assertEqual(self.admin_client.get(self._edit_path()).status_code, 200)
-        self.assertTrue(admin_socket.is_connected())
+        self.assertEqual(self._poll(self.admin_client).status_code, 200)
         self._notify("admin", text="ADMIN_STILL_RECEIVES")
-        self.assertIn("ADMIN_STILL_RECEIVES", repr(self._received(admin_socket)))
+        self.assertIn("ADMIN_STILL_RECEIVES", self._polled_texts(self.admin_client))
         with self.app.app_context():
             company = db.session.get(Empresa, self.company_id)
             self.assertIsNone(company.deletado_em)
@@ -443,10 +423,8 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
                 client = self._login_client()
                 self.assertEqual(client.get("/_security/protected").status_code, 200)
                 cookie = self._cookie(client)
-                connection = self._socket(client)
-                self.assertTrue(connection.is_connected())
                 self._notify(text=f"PRIVATE_AFTER_{status}")
-                self.assertIn(f"PRIVATE_AFTER_{status}", repr(self._received(connection)))
+                self.assertIn(f"PRIVATE_AFTER_{status}", self._polled_texts(client))
 
     def test_m_route_reactivation_after_out_of_band_cancellation_requires_new_login(self):
         cookie = self._cookie(self._login_client())
@@ -457,30 +435,38 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         self._assert_rejected(self._post(token))
         self.assertEqual(self._login_client().get("/_security/protected").status_code, 200)
 
-    def test_n_database_failure_during_authorization_fails_closed(self):
+    def test_n_database_failure_during_authorization_fails_closed_and_keeps_the_cookie(self):
         client = self._login_client()
         cookie = self._cookie(client)
-        connected = self._socket(self._login_client())
+        other_session = self._login_client()
+        admin = self._login_client("admin")
         def fail_status_lookup(connection, cursor, statement, parameters, context, executemany):
             if "status_conta" in statement and statement.lstrip().upper().startswith("SELECT"):
                 raise SQLAlchemyError("PRIVATE_STATUS_DB_SENTINEL")
         event.listen(self.engine, "before_cursor_execute", fail_status_lookup)
         try:
             response = client.get("/_security/protected")
-            replay_socket = self._socket(self._replay(cookie))
+            replay_poll = self._poll(self._replay(cookie))
             self._notify(text="PRIVATE_DURING_DB_FAILURE")
-            admin_socket = self._socket(self._login_client("admin"))
+            other_poll = self._poll(other_session)
+            admin_poll = self._poll(admin)
         finally:
             event.remove(self.engine, "before_cursor_execute", fail_status_lookup)
         self.assertEqual(response.status_code, 503)
         body = response.get_data(as_text=True)
         self.assertNotIn("synthetic-private-data", body)
         self.assertNotIn("PRIVATE_STATUS_DB_SENTINEL", body)
+        # Banco fora não é sessão inválida: nada privado sai, mas o cookie fica.
         with client.session_transaction() as data:
-            self.assertNotIn("_user_id", data)
-        self.assertFalse(replay_socket.is_connected())
-        self.assertNotIn("PRIVATE_DURING_DB_FAILURE", repr(self._received(connected)))
-        self.assertTrue(admin_socket.is_connected())  # ADMIN não depende da consulta à empresa
+            self.assertEqual(data["_user_id"], str(self.ids["active"]))
+        for poll in (replay_poll, other_poll):
+            self.assertEqual(poll.status_code, 503)
+            self.assertNotIn("PRIVATE_DURING_DB_FAILURE", poll.get_data(as_text=True))
+            self.assertNotIn("PRIVATE_STATUS_DB_SENTINEL", poll.get_data(as_text=True))
+        self.assertEqual(admin_poll.status_code, 200)  # ADMIN não depende da consulta à empresa
+        # Banco de volta: as mesmas sessões voltam a valer, sem novo login.
+        self.assertEqual(client.get("/_security/protected").status_code, 200)
+        self.assertIn("PRIVATE_DURING_DB_FAILURE", self._polled_texts(other_session))
 
     # ------------------------------------------------------- tokens de senha
     def test_password_tokens_are_not_issued_or_accepted_for_cancelled_company(self):
@@ -517,9 +503,8 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         self.assertEqual(self._account(), before)
 
     # ------------------------------------------------ transação e ADMIN
-    def test_failed_status_commit_does_not_revoke_sessions_or_sockets(self):
+    def test_failed_status_commit_does_not_revoke_sessions_or_polling(self):
         client = self._login_client()
-        connection = self._socket(client)
         before = self._generations("active", "pending", "inactive")
         data = self._edit_form("CANCELADA")
         sent = []
@@ -539,10 +524,9 @@ class CancelledCompanySecurityTests(token_cases._TokenCase):
         self.assertIn("USUARIO", sent)
         self.assertEqual(self._status(), "ATIVA")
         self.assertEqual(self._generations("active", "pending", "inactive"), before)
-        self.assertTrue(connection.is_connected())
         self.assertEqual(client.get("/_security/protected").status_code, 200)
         self._notify(text="PRIVATE_AFTER_FAILED_CANCEL")
-        self.assertIn("PRIVATE_AFTER_FAILED_CANCEL", repr(self._received(connection)))
+        self.assertIn("PRIVATE_AFTER_FAILED_CANCEL", self._polled_texts(client))
 
     def test_stale_or_incomplete_admin_form_cannot_change_status_silently(self):
         stale = self._edit_form("ATIVA")  # tela aberta com a empresa ATIVA

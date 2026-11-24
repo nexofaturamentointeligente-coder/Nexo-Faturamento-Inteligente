@@ -3,7 +3,7 @@
 Cada página relevante (pública, administrativa e do cliente) é aberta no
 Chromium com a política REAL enviada pelo servidor; qualquer violação
 (securitypolicyviolation) ou erro de console reprova o teste. Gráficos
-Plotly, Socket.IO, Bootstrap, NexoBot e os formulários com confirmação
+Plotly, o polling do sininho, Bootstrap, NexoBot e os formulários com confirmação
 são exercitados com as cópias íntegras da CDN (NEXO_TEST_CDN_DIR).
 """
 
@@ -71,7 +71,7 @@ class CSPNavegadorTests(NavegadorCase):
         self.assertEqual(self._violacoes(pagina), [])
         self.assertEqual(self.erros_js, [])
 
-    def test_client_pages_socket_and_nexobot_work_under_csp(self):
+    def test_client_pages_polling_and_nexobot_work_under_csp(self):
         pagina = self._abrir_com_coletor()
         self.entrar(pagina, "cliente-test@example.invalid")
         for caminho in ("/cliente/dashboard", f"/cliente/analise/{self.analise_id}", "/cliente/tickets",
@@ -79,13 +79,13 @@ class CSPNavegadorTests(NavegadorCase):
             with self.subTest(caminho=caminho):
                 self._assert_pagina_limpa(pagina, caminho)
         self.ir(pagina, "/cliente/dashboard")
-        pagina.wait_for_function("() => typeof io !== 'undefined'", timeout=15000)
-        conectado = pagina.evaluate("""() => new Promise((resolve) => {
-            var s = io({transports: ['websocket', 'polling']});
-            var fim = setTimeout(function () { resolve(false); }, 8000);
-            s.on('connect', function () { clearTimeout(fim); s.disconnect(); resolve(true); });
-        })""")
-        self.assertTrue(conectado, "Socket.IO bloqueado pela CSP (connect-src)")
+        pagina.wait_for_selector("#nexoToasts[data-endpoint]", state="attached")
+        consulta = pagina.evaluate("""() => fetch(
+            document.getElementById('nexoToasts').getAttribute('data-endpoint') + '?desde=0',
+            {credentials: 'same-origin', headers: {'Accept': 'application/json'}}
+        ).then((r) => r.json().then((j) => [r.status, Object.keys(j).sort()]))""")
+        self.assertEqual(consulta, [200, ["nao_lidas", "novas", "ultimo"]],
+                         "polling do sininho bloqueado pela CSP (connect-src)")
         self.assertTrue(pagina.locator("#nexobot").count() >= 1)
         self.assertEqual(self._violacoes(pagina), [])
         self.assertEqual(self.erros_js, [])

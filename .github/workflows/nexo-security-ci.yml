@@ -65,8 +65,6 @@ jobs:
         # Inter e JetBrains Mono (as mesmas do CSS) para o navegador medir o layout
         # com a tipografia real; Bootstrap 5.3.3 e Plotly 2.35.2 so sao usados se o
         # hash SRI conferir (os testes recalculam o hash do Bootstrap antes de servir).
-        # O cliente Socket.IO 4.7.5 (o mesmo de cdn.socket.io) alimenta o teste de
-        # horario em tempo real; sem a copia integra, esse teste e pulado.
         run: |
           sudo apt-get install --yes --no-install-recommends fonts-inter fonts-jetbrains-mono
           cdn_dir="$RUNNER_TEMP/nexo-cdn"
@@ -82,7 +80,6 @@ jobs:
           baixar bootstrap.min.css bootstrap@5.3.3/dist/css/bootstrap.min.css QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH || true
           baixar bootstrap.bundle.min.js bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz || true
           baixar plotly.min.js plotly.js-dist-min@2.35.2/plotly.min.js cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7 || true
-          baixar socket.io.min.js socket.io-client@4.7.5/dist/socket.io.min.js 2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO || true
           # SEC-009: com SRI nos templates, toda cópia servida nos testes de navegador precisa ser íntegra.
           baixar bootstrap-icons.min.css bootstrap-icons@1.11.3/font/bootstrap-icons.min.css XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+ || true
           # Fontes que essa CSS carrega (sem SRI possível); sem a cópia, os testes servem corpo vazio.
@@ -90,7 +87,7 @@ jobs:
             curl --fail --silent --show-error --location --max-time 60 --output "$cdn_dir/$fonte" "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/fonts/$fonte" || true
           done
           # Falha de download ou de hash: avisa quais testes serao pulados.
-          for copia in bootstrap.min.css:layout bootstrap.bundle.min.js:layout plotly.min.js:layout socket.io.min.js:HorarioBrasiliaNavegadorTests; do
+          for copia in bootstrap.min.css:layout bootstrap.bundle.min.js:layout plotly.min.js:layout; do
             test -s "$cdn_dir/${copia%%:*}" || echo "::warning::${copia%%:*} indisponivel; testes pulados: ${copia#*:}"
           done
           ls -l "$cdn_dir"

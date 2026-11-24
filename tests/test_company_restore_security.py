@@ -8,20 +8,17 @@ e Alembic: estes casos não substituem essas verificações.
 from datetime import date, datetime, timezone
 import hashlib
 import hmac
-from unittest.mock import patch
 
-from flask import request
 from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from . import test_auth_tokens_security as token_cases
 from . import test_session_revocation_security as session_cases
 from blueprints import auth
-from extensions import db, socketio
+from extensions import db
 from models import (
     Analise, ChamadoSuporte, Empresa, MensagemSuporte, Notificacao, Usuario,
 )
-import realtime
 import session_security
 
 
@@ -30,9 +27,12 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
     _session_routes = session_cases.SessionRevocationCases._session_routes
     _login_client = session_cases.SessionRevocationCases._login_client
     _assert_private_denied = session_cases.SessionRevocationCases._assert_private_denied
-    _socket = session_cases.SessionRevocationCases._socket
     _notify = session_cases.SessionRevocationCases._notify
-    _received = staticmethod(session_cases.SessionRevocationCases._received)
+    # Polling do sininho (substituiu o Socket.IO): GET /notificacoes/novas.
+    POLL = session_cases.SessionRevocationCases.POLL
+    _poll = session_cases.SessionRevocationCases._poll
+    _polled_texts = session_cases.SessionRevocationCases._polled_texts
+    _assert_poll_denied = session_cases.SessionRevocationCases._assert_poll_denied
 
     def setUp(self):
         super().setUp()
@@ -137,10 +137,8 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
             for field in ("active", "hash", "role", "company", "first_access"):
                 self.assertEqual(after[identifier][field], account[field], (identifier, field))
 
-    def test_other_company_and_global_admin_keep_states_cookies_and_sockets(self):
+    def test_other_company_and_global_admin_keep_states_cookies_and_polling(self):
         other = self._login_client("other")
-        other_socket = self._socket(other)
-        admin_socket = self._socket(self.admin_client)
         before = self._users()
         self._trash()
         self._restore()
@@ -149,11 +147,11 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
             self.assertEqual(after[self.ids[name]], before[self.ids[name]])
         self.assertEqual(other.get("/_security/protected").status_code, 200)
         self.assertEqual(self.admin_client.get("/admin/lixeira").status_code, 200)
-        self.assertTrue(other_socket.is_connected())
-        self.assertTrue(admin_socket.is_connected())
         self._notify("other", "ONLY_OTHER_COMPANY")
-        self.assertIn("ONLY_OTHER_COMPANY", repr(self._received(other_socket)))
-        self.assertNotIn("ONLY_OTHER_COMPANY", repr(self._received(admin_socket)))
+        self.assertIn("ONLY_OTHER_COMPANY", self._polled_texts(other))
+        admin_poll = self._poll(self.admin_client)
+        self.assertEqual(admin_poll.status_code, 200)
+        self.assertNotIn("ONLY_OTHER_COMPANY", admin_poll.get_data(as_text=True))
 
     def test_legacy_trash_unknown_previous_states_remain_blocked(self):
         # Estado conservador produzido pelo upgrade SEC-004 para lixeira antiga.
@@ -333,7 +331,7 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
         response = pending.get("/_security/protected")
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/auth/primeiro-acesso"))
-        self.assertFalse(self._socket(pending).is_connected())
+        self.assertEqual(self._poll(pending).status_code, 302)
         self._assert_success(self._post(self._token("pending", "activation"), "activation", client=self.app.test_client()))
         self.assertFalse(self._account("pending")[1])
         renewed = self._login_client("pending", password=token_cases.NEW_PASSWORD)
@@ -348,48 +346,38 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
         with forged.session_transaction() as data:
             data.update(_user_id=str(self.ids["active"]), boot_id=self.app.config["BOOT_ID"])
             data[session_security.CHAVE_CREDENCIAL] = fingerprint
-        self.assertFalse(self._socket(forged).is_connected())
+        self._assert_poll_denied(forged)
         self._assert_private_denied(forged)
 
-    def test_connected_old_socket_cannot_execute_private_event_after_restore(self):
-        executed = []
-        def private_probe():
-            executed.append(True)
-            socketio.emit("_company_private_probe", {"private": "SYNTHETIC_SECRET"}, to=request.sid)
-            return True
-        socketio.on_event("_company_private_probe", realtime.guarded_socket_event(private_probe))
-        old_socket = self._socket(self._login_client())
-        # A limpeza local é apenas uma otimização: simular conexão que ficou
-        # aberta em outro processo, mantendo a autoridade no banco persistido.
-        with patch.object(realtime, "_desconectar", return_value=None):
-            self._trash()
-            self._restore()
-        self.assertTrue(old_socket.is_connected())
-        self.assertFalse(old_socket.emit("_company_private_probe", callback=True))
-        self.assertEqual(executed, [])
-        self.assertFalse(old_socket.is_connected())
-
-    def test_old_socket_receives_no_new_private_notifications_during_or_after_trash(self):
-        old = self._socket(self._login_client())
-        with patch.object(realtime, "_desconectar", return_value=None):
-            self._trash()
-            self.assertTrue(old.is_connected())
-            self._notify(text="PRIVATE_DURING_TRASH")
-            self.assertEqual(self._received(old), [])
-            self._restore()
-            fresh = self._socket(self._login_client())
-            self._notify(text="PRIVATE_AFTER_RESTORE")
-            self.assertEqual(self._received(old), [])
-            self.assertIn("PRIVATE_AFTER_RESTORE", repr(self._received(fresh)))
-
-    def test_other_company_never_receives_restored_company_notifications(self):
-        other = self._socket(self._login_client("other"))
+    def test_old_cookie_cannot_poll_after_restore(self):
+        # A restauração não revive a sessão anterior à lixeira: o cookie antigo é
+        # negado já na validação e a consulta das notificações nem roda.
+        cookie = self._cookie(self._login_client())
         self._trash()
         self._restore()
-        restored = self._socket(self._login_client())
+        self._notify(text="SYNTHETIC_SECRET")
+        response = self._assert_poll_denied(self._replay(cookie))
+        self.assertNotIn("SYNTHETIC_SECRET", response.get_data(as_text=True))
+
+    def test_old_cookie_polls_no_private_notification_during_or_after_trash(self):
+        old = self._cookie(self._login_client())
+        self._trash()
+        self._notify(text="PRIVATE_DURING_TRASH")
+        self.assertNotIn("PRIVATE_DURING_TRASH", self._assert_poll_denied(self._replay(old)).get_data(as_text=True))
+        self._restore()
+        fresh = self._login_client()
+        self._notify(text="PRIVATE_AFTER_RESTORE")
+        self.assertNotIn("PRIVATE_AFTER_RESTORE", self._assert_poll_denied(self._replay(old)).get_data(as_text=True))
+        self.assertIn("PRIVATE_AFTER_RESTORE", self._polled_texts(fresh))
+
+    def test_other_company_never_receives_restored_company_notifications(self):
+        other = self._login_client("other")
+        self._trash()
+        self._restore()
+        restored = self._login_client()
         self._notify(text="ISOLATED_RESTORED_COMPANY_A")
-        self.assertNotIn("ISOLATED_RESTORED_COMPANY_A", repr(self._received(other)))
-        self.assertIn("ISOLATED_RESTORED_COMPANY_A", repr(self._received(restored)))
+        self.assertNotIn("ISOLATED_RESTORED_COMPANY_A", self._polled_texts(other))
+        self.assertIn("ISOLATED_RESTORED_COMPANY_A", self._polled_texts(restored))
 
     def test_permanent_delete_removes_only_target_users_and_auxiliary_history(self):
         with self.app.app_context():
@@ -494,7 +482,7 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
             self.assertFalse(auth._atualizar_credencial(snapshot, token_cases.NEW_PASSWORD))
         self.assertEqual(self._account()[0], token_cases.FIXTURE_HASH)
 
-    def test_company_lookup_failure_clears_authentication_and_fails_closed_without_details(self):
+    def test_company_lookup_failure_fails_closed_without_details_and_keeps_the_cookie(self):
         client = self._login_client()
         def fail_company_select(connection, cursor, statement, parameters, context, executemany):
             sql = statement.upper()
@@ -508,5 +496,8 @@ class CompanyRestoreSecurityTests(token_cases._TokenCase):
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("SYNTHETIC_PRIVATE_COMPANY_LOOKUP_FAILURE", response.get_data(as_text=True))
         self.assertNotIn("synthetic-private-data", response.get_data(as_text=True))
+        # Banco fora não é sessão inválida: nada privado sai, mas o cookie fica e a
+        # mesma sessão volta a valer quando a consulta da empresa volta a responder.
         with client.session_transaction() as data:
-            self.assertNotIn("_user_id", data)
+            self.assertEqual(data["_user_id"], str(self.ids["active"]))
+        self.assertEqual(client.get("/_security/protected").status_code, 200)

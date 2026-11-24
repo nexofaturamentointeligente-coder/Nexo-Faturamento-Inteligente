@@ -23,21 +23,18 @@ Raio-X: só nela a origem de MICROSSERVICO_RAIOX_URL entra no connect-src
 """
 
 import secrets
-from urllib.parse import urlsplit
-
 from flask import g, request, session
 
 from config import origem_https
 
 # Fontes de CDN fixadas por CAMINHO exato, não por origem: liberar "https://cdn.jsdelivr.net"
 # inteiro deixaria qualquer pacote publicado nesse CDN executar sob a política,
-# contornando o nonce. Os cinco recursos são os mesmos fixados por SRI nos templates
+# contornando o nonce. Os quatro recursos são os mesmos fixados por SRI nos templates
 # (atualizar a versão exige atualizar aqui, no SRI e na suíte de navegador).
 _JSDELIVR = "https://cdn.jsdelivr.net/npm/"
 CDN_SCRIPTS = (
     _JSDELIVR + "bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js",
     _JSDELIVR + "plotly.js-dist-min@2.35.2/plotly.min.js",
-    "https://cdn.socket.io/4.7.5/socket.io.min.js",
 )
 CDN_ESTILOS = (
     _JSDELIVR + "bootstrap@5.3.3/dist/css/bootstrap.min.css",
@@ -64,19 +61,6 @@ def nonce_da_requisicao() -> str:
     return nonce
 
 
-def origens_websocket(app) -> list[str]:
-    """Origem do Socket.IO: a pública (wss) em produção; locais em desenvolvimento."""
-    origens = []
-    publica = (app.config.get("PUBLIC_URL") or "").strip()
-    if publica:
-        partes = urlsplit(publica)
-        esquema = "wss" if partes.scheme == "https" else "ws"
-        origens.append(f"{esquema}://{partes.netloc}")
-    if not app.config.get("PRODUCAO_HTTP"):
-        origens.extend(["ws://localhost:*", "ws://127.0.0.1:*"])
-    return origens
-
-
 def origem_do_microsservico(app) -> str:
     """A origem de MICROSSERVICO_RAIOX_URL, conferida de novo (https://host[:porta]) porque vai para o
     cabeçalho: um valor posto direto no app.config não injeta diretiva nem libera outra origem."""
@@ -84,7 +68,8 @@ def origem_do_microsservico(app) -> str:
 
 
 def politica_csp(app, nonce: str, conexoes_extras=()) -> str:
-    conectar = " ".join(["'self'", *origens_websocket(app), *conexoes_extras])
+    # Sem WebSocket: o sininho consulta a própria origem por fetch (polling).
+    conectar = " ".join(["'self'", *conexoes_extras])
     diretivas = [
         "default-src 'self'",
         f"script-src 'self' 'nonce-{nonce}' {' '.join(CDN_SCRIPTS)}",

@@ -474,29 +474,6 @@ def _planos_segmentos():
     return planos, segmentos
 
 
-def _revogacoes_socket(usuarios):
-    """Antes do COMMIT: impressão nova e a da geração anterior de cada revogado."""
-    from session_security import impressao_sessao, impressao_credencial_sessao
-    return [
-        (usuario.id_usuario, impressao_sessao(usuario), impressao_credencial_sessao(
-            usuario.id_usuario, usuario.senha_hash, usuario.geracao_autorizacao - 1,
-        )) for usuario in usuarios
-    ]
-
-
-def _desconectar_revogados(revogacoes, operacao: str) -> None:
-    # Fechar conexões locais é best-effort após COMMIT. Geração, autorização
-    # pelo banco e salas continuam protegendo os demais processos/conexões.
-    try:
-        from realtime import revogar_conexoes_usuario
-        for id_usuario, impressao_atual, impressao_anterior in revogacoes:
-            revogar_conexoes_usuario(
-                id_usuario, impressao_atual, impressao_revogada=impressao_anterior,
-            )
-    except Exception as erro:
-        current_app.logger.warning("Revogação Socket.IO após %s indisponível (%s).", operacao, type(erro).__name__)
-
-
 # Grupos de falha para as telas de operação. Só se afirma "ajuste de
 # configuração" quando a causa é mesmo de configuração; o resto é neutro e
 # aponta o Diagnóstico de e-mail (a causa técnica fica lá e no log).
@@ -745,12 +722,10 @@ def empresa_editar(id_empresa):
                 return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
             empresa.faturamento_base_mensal = _parse_decimal_opcional(form.get("faturamento_base_mensal", ""))
             # Entrar ou sair de CANCELADA revoga as sessões dos CLIENTE na mesma
-            # transação; as conexões locais só caem depois do COMMIT.
-            revogados = aplicar_status_conta(db.session, empresa, novo_status)
+            # transação: a próxima requisição de cada um (página ou polling) é negada.
+            aplicar_status_conta(db.session, empresa, novo_status)
             empresa.data_atualizacao = datetime.now(timezone.utc)
-            revogacoes = _revogacoes_socket(revogados)
             db.session.commit()
-            _desconectar_revogados(revogacoes, "troca de status")
             flash("Empresa atualizada com sucesso.", "success")
             return redirect(url_for("admin.empresas"))
 
@@ -856,7 +831,6 @@ def empresa_excluir(id_empresa):
             flash("Empresa não encontrada (ou já está na lixeira).", "danger")
             return redirect(url_for("admin.empresas"))
         nome_emp = resultado.empresa.nome_fantasia or resultado.empresa.razao_social
-        revogacoes = _revogacoes_socket(resultado.usuarios)
         db.session.commit()
     except SQLAlchemyError as erro:
         db.session.rollback()
@@ -864,7 +838,6 @@ def empresa_excluir(id_empresa):
         flash("Não foi possível mover a empresa para a lixeira. Tente novamente.", "danger")
         return redirect(url_for("admin.empresas"))
 
-    _desconectar_revogados(revogacoes, "exclusão")
     flash(f"Cliente '{nome_emp}' movido para a lixeira com sucesso.", "success")
     return redirect(url_for("admin.empresas"))
 
@@ -1384,7 +1357,7 @@ def analise_relatorio(id_analise):
             analise.status_analise = "CONCLUIDO"
             analise.data_conclusao = agora
             # NÃO disparamos notificação/e-mail aqui: efeitos colaterais externos
-            # (WebSocket + SMTP) só acontecem APÓS o commit ter sucesso, para não
+            # (sininho + SMTP) só acontecem APÓS o commit ter sucesso, para não
             # avisar o cliente de uma publicação que pode sofrer rollback.
 
         elif acao == "despublicar":

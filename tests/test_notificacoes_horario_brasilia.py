@@ -2,9 +2,9 @@
 
 A correção grava cada evento em UTC (models.InstanteUTCSemFuso) e o exibe
 sempre em America/Sao_Paulo, formatado no servidor (horario.py). Jinja e
-Socket.IO usam a mesma função sobre o mesmo instante gravado. Os cenários
+o polling do sininho usam a mesma função sobre o mesmo instante gravado. Os cenários
 percorrem as rotas reais com dois usuários fictícios, ADMIN e CLIENTE, cada um
-com sessão HTTP e Socket.IO próprios. O relógio do portal é injetado
+com sessão HTTP e polling próprios. O relógio do portal é injetado
 (NEXO_RELOGIO): nenhum teste espera tempo real.
 
   A  29/10/2026 17:34 UTC aparece como 14:34 em todos os pontos
@@ -12,8 +12,8 @@ com sessão HTTP e Socket.IO próprios. O relógio do portal é injetado
   C  o fuso do processo (TZ do servidor) não muda nada
   D  a diferença observada: o relógio de outro fuso exibido como Brasília
   E  horário de verão histórico pelas regras IANA, sem deslocamento fixo
-  F  tempo real: o payload do Socket.IO leva o instante gravado
-  G  recarga: o sininho recarregado mostra o texto do tempo real
+  F  polling: o item entregue ao navegador leva o instante gravado
+  G  recarga: o sininho recarregado mostra o mesmo texto do polling
   H  ADMIN e CLIENTE veem o mesmo instante de cada mensagem
   I  roteiro: abertura, respostas, status, resolução e reabertura
   J  PostgreSQL descartável com o TimeZone da sessão em quatro fusos, num
@@ -22,13 +22,11 @@ com sessão HTTP e Socket.IO próprios. O relógio do portal é injetado
   L  segurança: nada é entregue após rollback, isolamento entre papéis,
      escape e recusa de horários sem fuso
 Navegador (NEXO_TEST_BROWSER=1): os dois papéis em navegadores com fusos que
-não são o de Brasília, com Socket.IO de verdade, recarga e conversa.
+não são o de Brasília, com o polling de verdade, recarga e conversa.
 """
 
-import base64
 import contextlib
 from datetime import datetime, timedelta
-import hashlib
 import html
 import io
 import json
@@ -52,10 +50,6 @@ if str(ROOT) not in sys.path:  # o processo do cenário J executa este arquivo d
 from sqlalchemy import text  # noqa: E402
 
 from horario import BRASILIA, UTC, horario_brasilia, iso_utc  # noqa: E402
-# Antes de qualquer create_app: o Flask-SocketIO só repassa a cada novo servidor
-# (um por app de teste) os handlers declarados quando ainda não havia servidor.
-# Sem isso, a partir do segundo app a conexão não entra na sala do usuário.
-import realtime  # noqa: E402,F401
 from tests.deploy_support import DeployTestCase  # noqa: E402
 
 A = datetime(2026, 10, 29, 17, 34, tzinfo=UTC)  # 29/10/2026 14:34 em Brasília
@@ -87,24 +81,18 @@ def fuso_do_processo(zona):
 
 
 class Portal:
-    """ADMIN e CLIENTE em sessões HTTP próprias, cada um com o seu Socket.IO."""
+    """ADMIN e CLIENTE em sessões HTTP próprias, cada um com o seu polling do sininho."""
 
     def __init__(self, app, senha, admin="admin-test@example.invalid", cliente="cliente-test@example.invalid"):
-        from extensions import socketio
         self.app = app
         self.http = {"ADMIN": self._entrar(admin, senha), "CLIENTE": self._entrar(cliente, senha)}
-        self.ws = {}
-        for papel, http in self.http.items():
-            conexao = socketio.test_client(app, flask_test_client=http)
-            if not conexao.is_connected():
-                raise AssertionError(f"Socket.IO do {papel} não conectou")
-            conexao.get_received()
-            self.ws[papel] = conexao
+        # Maior id que cada navegador já recebeu (o data-ultimo da página).
+        self.ultimo = {papel: 0 for papel in self.http}
+        for papel in self.http:
+            self.recebidos(papel)  # o que já existia antes do teste não conta
 
     def fechar(self):
-        for conexao in self.ws.values():
-            if conexao.is_connected():
-                conexao.disconnect()
+        """Nada a fechar: o polling não mantém conexão aberta."""
 
     def relogio(self, instante):
         self.app.config["NEXO_RELOGIO"] = lambda: instante
@@ -155,7 +143,13 @@ class Portal:
 
     # --------------------------------------------------------------- leituras
     def recebidos(self, papel):
-        return [pacote["args"][0] for pacote in self.ws[papel].get_received() if pacote["name"] == "nova_notificacao"]
+        """O que a próxima consulta do polling entrega a esse papel (como o navegador faz)."""
+        resposta = self.http[papel].get(f"/notificacoes/novas?desde={self.ultimo[papel]}")
+        if resposta.status_code != 200:
+            raise AssertionError(f"Polling do {papel}: HTTP {resposta.status_code}")
+        dados = resposta.get_json()
+        self.ultimo[papel] = dados["ultimo"]
+        return dados["novas"]
 
     @staticmethod
     def horarios(fragmento):
@@ -874,7 +868,7 @@ def _ensaio_postgresql():
 
 
 # ---------------------------------------------------------------------------
-# Navegador: Socket.IO de verdade, dois papéis, fusos de navegador diferentes
+# Navegador: polling de verdade, dois papéis, fusos de navegador diferentes
 # ---------------------------------------------------------------------------
 try:
     from playwright.sync_api import sync_playwright
@@ -882,45 +876,16 @@ except ImportError:  # dependência opcional de desenvolvimento
     sync_playwright = None
 
 _NAVEGADOR = os.environ.get("NEXO_TEST_BROWSER") == "1" and sync_playwright is not None
-_SOCKETIO_URL = "https://cdn.socket.io/4.7.5/socket.io.min.js"
-# sha384 oficial do socket.io.min.js 4.7.5 (o mesmo arquivo em cdn.socket.io e no jsdelivr).
-_SOCKETIO_SRI = "2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"
-# Expõe ao teste o socket criado pelo base.html (que o guarda numa closure).
-_CAPTURAR_SOCKET = """
-(() => {
-  let original;
-  Object.defineProperty(window, 'io', {
-    configurable: true,
-    get() { return original; },
-    set(valor) {
-      original = function () { const s = valor.apply(this, arguments); window.__nexoSocket = s; return s; };
-      Object.assign(original, valor);
-    },
-  });
-})();
-"""
 
 
 # Assunto do chamado com HTML: precisa aparecer como texto no sininho em tempo real.
 ASSUNTO_COM_HTML = 'Dúvida <img src=x onerror="window.__xss=1"> fictícia'
 
 
-def _socketio_local():
-    pasta = os.environ.get("NEXO_TEST_CDN_DIR")
-    arquivo = Path(pasta) / "socket.io.min.js" if pasta else None
-    if not arquivo or not arquivo.is_file():
-        return None
-    resumo = base64.b64encode(hashlib.sha384(arquivo.read_bytes()).digest()).decode()
-    return str(arquivo) if resumo == _SOCKETIO_SRI else None
-
-
 @unittest.skipUnless(_NAVEGADOR, "Defina NEXO_TEST_BROWSER=1 e instale o Playwright para os testes de navegador.")
 class HorarioBrasiliaNavegadorTests(DeployTestCase):
     def setUp(self):
         super().setUp()
-        self.socketio_local = _socketio_local()
-        if not self.socketio_local:
-            self.skipTest("Cliente Socket.IO 4.7.5 íntegro indisponível (NEXO_TEST_CDN_DIR/socket.io.min.js).")
         from werkzeug.serving import make_server
         from tests.test_contratos_navegador import _copias_locais_da_cdn
         from tests.test_nexobot_navegador import _CONECTAR_LOCAL
@@ -932,10 +897,6 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
             self.stack.enter_context(patch(alvo, original))
         self.servidor = make_server("127.0.0.1", 0, self.app, threaded=True)
         self.base = f"http://127.0.0.1:{self.servidor.server_port}"
-        # A mesma verificação de origem do produto (SOCKETIO_CORS_ORIGINS), com a
-        # origem exata deste servidor, que só é conhecida depois de abri-lo.
-        from extensions import socketio
-        socketio.server.eio.cors_allowed_origins = [self.base]
         threading.Thread(target=self.servidor.serve_forever, daemon=True).start()
         self.addCleanup(self._parar_servidor)
         self.cdn_local = _copias_locais_da_cdn()
@@ -958,8 +919,6 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
         url = rota.request.url
         if url.startswith(self.base + "/"):
             rota.continue_()
-        elif url == _SOCKETIO_URL:
-            rota.fulfill(status=200, path=self.socketio_local, content_type="application/javascript")
         elif url in self.cdn_local:
             caminho, tipo = self.cdn_local[url]
             rota.fulfill(status=200, path=caminho, content_type=tipo)
@@ -973,7 +932,6 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
         contexto = self.navegador.new_context(viewport={"width": 1366, "height": 900}, locale="pt-BR",
                                               timezone_id=fuso_do_navegador)
         self.addCleanup(contexto.close)
-        contexto.add_init_script(_CAPTURAR_SOCKET)
         pagina = contexto.new_page()
         pagina.on("pageerror", lambda erro: self.erros_js.append(f"{papel}: {erro}"))
         pagina.route("**/*", self._rota)
@@ -988,7 +946,15 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
     def ir(self, pagina, caminho):
         resposta = pagina.goto(self.base + caminho, wait_until="load")
         self.assertEqual(resposta.status, 200, caminho)
-        pagina.wait_for_function("() => window.__nexoSocket && window.__nexoSocket.connected", timeout=15000)
+        # O sininho da página consulta a rota de polling (sem Socket.IO).
+        pagina.wait_for_selector("#nexoToasts[data-endpoint='/notificacoes/novas']", state="attached")
+
+    @staticmethod
+    def consultar_agora(pagina):
+        """O polling consulta a cada 30 s e, ao voltar à aba, logo (respeitando 5 s
+        desde a última consulta). Simula a volta à aba depois desse mínimo."""
+        pagina.wait_for_timeout(5300)
+        pagina.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
 
     def assert_sem_html_injetado(self, pagina):
         """O assunto com HTML chega como texto: sem <img>, sem script executado."""
@@ -1003,7 +969,7 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
     def tempo_no_dom(pagina, seletor):
         return pagina.eval_on_selector(seletor, "t => [t.textContent, t.getAttribute('datetime'), t.title]")
 
-    def test_navegador_tempo_real_recarga_e_conversa_no_horario_de_brasilia(self):
+    def test_navegador_polling_recarga_e_conversa_no_horario_de_brasilia(self):
         admin = self.abrir("ADMIN", "Asia/Tokyo")
         cliente = self.abrir("CLIENTE", "America/Los_Angeles")
         self.ir(admin, "/admin/tickets")
@@ -1016,7 +982,8 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
         id_chamado = int(re.search(r"/cliente/tickets/(\d+)", cliente.url).group(1))
         abertura = tempo("29/10/2026 às 14:34", "2026-10-29T17:34:00+00:00", "29/10/2026 às 14:34")
         self.assertEqual(self.tempo_no_dom(cliente, ".chat-time time"), abertura)
-        # Tempo real no sininho do admin, sem recarregar.
+        # Polling no sininho do admin, sem recarregar.
+        self.consultar_agora(admin)
         admin.wait_for_selector("#bellList .bell-item time", state="attached", timeout=15000)
         sino = tempo("29/10 14:34", "2026-10-29T17:34:00+00:00", "29/10/2026 às 14:34")
         self.assertEqual(self.tempo_no_dom(admin, "#bellList .bell-item time"), sino)
@@ -1030,13 +997,14 @@ class HorarioBrasiliaNavegadorTests(DeployTestCase):
         admin.wait_for_selector(".ticket-card time", timeout=5000)
         self.assertEqual(self.tempo_no_dom(admin, ".ticket-card time"), abertura)
         self.assert_sem_html_injetado(admin)
-        # O admin responde às 14:52; o cliente recebe em tempo real.
+        # O admin responde às 14:52; o cliente recebe pelo polling, sem recarregar.
         self.ir(admin, f"/admin/tickets/{id_chamado}")
         self.ir(cliente, f"/cliente/tickets/{id_chamado}")
         self.agora = datetime(2026, 10, 29, 17, 52, tzinfo=UTC)
         admin.fill("textarea[name=mensagem]", "Resposta fictícia da equipe.")
         with admin.expect_navigation(wait_until="load"):
             admin.click("form.chat-reply button[type=submit]")
+        self.consultar_agora(cliente)
         cliente.wait_for_selector("#bellList .bell-item time", state="attached", timeout=15000)
         self.assertEqual(self.tempo_no_dom(cliente, "#bellList .bell-item time"),
                          tempo("29/10 14:52", "2026-10-29T17:52:00+00:00", "29/10/2026 às 14:52"))

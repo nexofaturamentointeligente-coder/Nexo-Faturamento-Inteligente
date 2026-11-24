@@ -8,7 +8,7 @@ Convenção única dos horários do suporte e do sininho de notificações:
                  é o relógio UTC sem fuso (models.InstanteUTCSemFuso). Quem
                  converte é o Python, não o TimeZone da sessão do banco.
   EXIBIÇÃO       sempre America/Sao_Paulo, formatada no servidor por este
-                 módulo. Jinja e payload do Socket.IO usam a mesma função.
+                 módulo. Jinja e a resposta do polling do sininho usam a mesma função.
   TRANSFERÊNCIA  ISO 8601 com fuso ("2026-10-29T17:34:00+00:00") no atributo
                  datetime de <time> e no payload; o JavaScript só exibe o
                  texto já formatado, sem converter horários.

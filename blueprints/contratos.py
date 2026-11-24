@@ -34,7 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import configuracoes_conta
 import contract_admin as operacoes
-from blueprints.admin import _desconectar_revogados, _revogacoes_socket, admin_required
+from blueprints.admin import admin_required
 from contract_policy import (
     EsquemaContratualIndisponivel, esquema_contratual_disponivel, formatar_instante,
     obter_coberturas_pagas, obter_contrato_aplicavel, obter_situacao_contratual, politica_prazos, utc,
@@ -147,7 +147,6 @@ def _executar(funcao, mensagem_sucesso, operacao_log):
     """
     try:
         resultado = funcao()
-        revogacoes = _revogacoes_socket(getattr(resultado, "revogados", ()) or ())
         db.session.commit()
     except operacoes.ErroContratual as erro:
         db.session.rollback()
@@ -161,7 +160,6 @@ def _executar(funcao, mensagem_sucesso, operacao_log):
                                    operacao_log, type(erro).__name__)
         return False, ("Não foi possível salvar: os dados foram recusados pelo banco ou alterados "
                        "por outra operação. Recarregue a página e tente novamente.")
-    _desconectar_revogados(revogacoes, operacao_log)
     flash(mensagem_sucesso, "success")
     return True, resultado
 
@@ -509,7 +507,6 @@ def reconciliar():
         return redirect(url_for("contratos.visao_geral"))
     try:
         relatorio = operacoes.reconciliar_vencimentos(db.session, aplicar=True, acionado_por=current_user)
-        revogacoes = _revogacoes_socket(relatorio.revogados)
         db.session.commit()
     except SQLAlchemyError as erro:
         db.session.rollback()
@@ -519,7 +516,6 @@ def reconciliar():
     if relatorio.bloqueada:
         flash("Outra reconciliação está em andamento. Tente novamente em instantes.", "warning")
     else:
-        _desconectar_revogados(revogacoes, "reconciliação contratual")
         flash(f"Reconciliação concluída: {len(relatorio.cancelados)} contrato(s) cancelado(s) "
               f"de {len(relatorio.candidatos)} vencido(s).", "success")
     return redirect(url_for("contratos.visao_geral"))

@@ -1029,13 +1029,25 @@
     </script>
 
     {% if current_user.is_authenticated and not bloqueio_termos %}
-    {# ---------------- Tempo real: sininho ao vivo (Socket.IO) ---------------- #}
-    <div class="nexo-toast-wrap" id="nexoToasts" aria-live="polite" aria-atomic="true"></div>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO" crossorigin="anonymous"></script>
+    {# ---------------- Sininho: consulta leve (polling) a cada 30 s ----------------
+       Sem WebSocket: cada consulta é uma requisição curta à rota notificacoes.novas,
+       que passa pela mesma validação de sessão de qualquer página. Só consulta com a
+       aba visível; em erro ou 503, espera mais (até 5 min); com a sessão encerrada
+       (401 ou redirecionamento), para. #}
+    <div class="nexo-toast-wrap" id="nexoToasts" aria-live="polite" aria-atomic="true"
+         data-endpoint="{{ url_for('notificacoes.novas') }}" data-ultimo="{{ '' if notif_ultimo_id is none else (notif_ultimo_id | default(0)) }}"></div>
     <script nonce="{{ csp_nonce }}">
       (function () {
-        if (typeof io === 'undefined') return;
-        var socket = io({ transports: ['websocket', 'polling'] });
+        var wrap = document.getElementById('nexoToasts');
+        if (!wrap || !window.fetch) return;
+        var endpoint = wrap.getAttribute('data-endpoint');
+        // Vazio: o sininho não carregou nesta página. A primeira consulta só fixa o
+        // ponto de partida, sem alertas para as não lidas que já existiam.
+        var semPontoDePartida = wrap.getAttribute('data-ultimo') === '';
+        var ultimo = parseInt(wrap.getAttribute('data-ultimo') || '0', 10) || 0;
+        var INTERVALO = 30000, MINIMO = 5000, MAXIMO = 300000, AVISOS_POR_VEZ = 3;
+        var espera = INTERVALO, timer = null, emCurso = false, encerrado = false;
+        var ultimaConsulta = Date.now();
 
         var badge = document.getElementById('bellBadge');
         var list = document.getElementById('bellList');
@@ -1051,8 +1063,6 @@
         }
 
         function showToast(texto, link) {
-          var wrap = document.getElementById('nexoToasts');
-          if (!wrap) return;
           var el = document.createElement('div');
           el.className = 'nexo-toast';
           el.innerHTML = '<span class="nt-icon"><i class="bi bi-bell-fill"></i></span>' +
@@ -1070,67 +1080,135 @@
           }, 5000);
         }
 
-        socket.on('nova_notificacao', function (n) {
-          // 1) Badge: incrementa e pulsa
-          if (badge) {
-            var count = parseInt(badge.getAttribute('data-count') || '0', 10) + 1;
-            badge.setAttribute('data-count', count);
-            badge.textContent = count < 100 ? count : '99+';
-            var sino = document.getElementById('bellBtn');
-            if (sino) sino.setAttribute('aria-label', 'Notificações (' + count + ' não lidas)');
-            badge.style.display = '';
+        // A contagem vem do servidor a cada consulta (marcar como lida em outra aba
+        // também corrige o número aqui).
+        function atualizarContagem(count) {
+          if (!badge) return;
+          var anterior = parseInt(badge.getAttribute('data-count') || '0', 10) || 0;
+          badge.setAttribute('data-count', count);
+          badge.textContent = count < 100 ? count : '99+';
+          badge.style.display = count ? '' : 'none';
+          if (foot) foot.style.display = count ? '' : 'none';
+          var sino = document.getElementById('bellBtn');
+          if (sino) sino.setAttribute('aria-label', count ? 'Notificações (' + count + ' não lidas)' : 'Notificações');
+          if (count > anterior) {
             badge.classList.remove('pulse');
             void badge.offsetWidth;        // reinicia a animação
             badge.classList.add('pulse');
           }
-          if (foot) foot.style.display = '';
-          if (empty) empty.style.display = 'none';
+        }
 
-          // 2) Injeta a notificação no topo do dropdown (com badge de status)
-          if (list) {
-            var tipo = n.badge || 'aberto';
-            var rotulo = n.badge_rotulo || ROTULO_PADRAO[tipo] || 'Aberto';
-            // SEC-002: mesmo formulário POST + CSRF do item renderizado pelo servidor.
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/notificacoes/' + parseInt(n.id, 10) + '/abrir';
-            form.className = 'bell-item-form';
-            var csrfMeta = document.querySelector('meta[name="csrf-token"]');
-            var csrf = document.createElement('input');
-            csrf.type = 'hidden';
-            csrf.name = 'csrf_token';
-            csrf.value = csrfMeta ? csrfMeta.getAttribute('content') : '';
-            form.appendChild(csrf);
-            var a = document.createElement('button');
-            a.type = 'submit';
-            a.className = 'bell-item is-unread';
-            a.innerHTML = '<span class="bell-dot"></span><span class="bell-text">' +
-                          '<span class="nbadge nb-' + escapeHtml(tipo) + '">' + escapeHtml(rotulo) + '</span>' +
-                          '<span class="bell-msg">' + escapeHtml(n.texto) + '</span>' +
-                          '<small></small></span>';
-            // Horário já formatado em Brasília pelo servidor (o mesmo texto da
-            // página recarregada); o navegador não converte nada.
-            var hora = a.querySelector('small');
-            if (n.instante) {
-              var quando = document.createElement('time');
-              quando.setAttribute('datetime', n.instante);
-              if (n.hora_completa) quando.title = n.hora_completa;
-              quando.textContent = n.hora || '';
-              hora.appendChild(quando);
-            } else {
-              hora.textContent = n.hora || '';
-            }
-            form.appendChild(a);
-            var first = list.querySelector('.bell-item-form');
-            if (first) { list.insertBefore(form, first); } else { list.insertBefore(form, list.firstChild); }
-            // mantém no máximo 5 itens visíveis
-            var items = list.querySelectorAll('.bell-item-form');
-            for (var i = items.length - 1; i >= 5; i--) { items[i].remove(); }
+        // Injeta a notificação no topo do dropdown (com badge de status).
+        function inserirItem(n) {
+          if (!list) return;
+          var id = parseInt(n.id, 10);
+          if (!(id > 0) || list.querySelector('form[action="/notificacoes/' + id + '/abrir"]')) return;
+          var tipo = n.badge || 'aberto';
+          var rotulo = n.badge_rotulo || ROTULO_PADRAO[tipo] || 'Aberto';
+          // SEC-002: mesmo formulário POST + CSRF do item renderizado pelo servidor.
+          var form = document.createElement('form');
+          form.method = 'POST';
+          form.setAttribute('action', '/notificacoes/' + id + '/abrir');
+          form.className = 'bell-item-form';
+          var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+          var csrf = document.createElement('input');
+          csrf.type = 'hidden';
+          csrf.name = 'csrf_token';
+          csrf.value = csrfMeta ? csrfMeta.getAttribute('content') : '';
+          form.appendChild(csrf);
+          var a = document.createElement('button');
+          a.type = 'submit';
+          a.className = 'bell-item is-unread';
+          a.innerHTML = '<span class="bell-dot"></span><span class="bell-text">' +
+                        '<span class="nbadge nb-' + escapeHtml(tipo) + '">' + escapeHtml(rotulo) + '</span>' +
+                        '<span class="bell-msg">' + escapeHtml(n.texto) + '</span>' +
+                        '<small></small></span>';
+          // Horário já formatado em Brasília pelo servidor (o mesmo texto da
+          // página recarregada); o navegador não converte nada.
+          var hora = a.querySelector('small');
+          if (n.instante) {
+            var quando = document.createElement('time');
+            quando.setAttribute('datetime', n.instante);
+            if (n.hora_completa) quando.title = n.hora_completa;
+            quando.textContent = n.hora || '';
+            hora.appendChild(quando);
+          } else {
+            hora.textContent = n.hora || '';
           }
+          form.appendChild(a);
+          var first = list.querySelector('.bell-item-form');
+          if (first) { list.insertBefore(form, first); } else { list.insertBefore(form, list.firstChild); }
+          if (empty) empty.style.display = 'none';
+          // mantém no máximo 5 itens visíveis
+          var items = list.querySelectorAll('.bell-item-form');
+          for (var i = items.length - 1; i >= 5; i--) { items[i].remove(); }
+        }
 
-          // 3) Alerta visual (toast) clicável
-          showToast(n.texto, n.link);
+        function aplicar(dados) {
+          var novas = Array.isArray(dados.novas) ? dados.novas : [];
+          for (var i = 0; i < novas.length; i++) inserirItem(novas[i]);
+          if (typeof dados.nao_lidas === 'number') atualizarContagem(dados.nao_lidas);
+          // Alerta visual (toast) clicável só das mais novas, para não empilhar avisos.
+          for (var j = Math.max(0, novas.length - AVISOS_POR_VEZ); !semPontoDePartida && j < novas.length; j++) {
+            showToast(novas[j].texto, novas[j].link);
+          }
+          semPontoDePartida = false;
+          var proximo = parseInt(dados.ultimo, 10);
+          if (proximo > ultimo) ultimo = proximo;
+        }
+
+        function agendar(ms) {
+          window.clearTimeout(timer);
+          timer = null;
+          if (encerrado || document.hidden) return;
+          timer = window.setTimeout(consultar, ms);
+        }
+
+        function encerrar() {
+          encerrado = true;
+          window.clearTimeout(timer);
+          timer = null;
+        }
+
+        function consultar() {
+          timer = null;
+          if (encerrado || emCurso || document.hidden) return;
+          emCurso = true;
+          ultimaConsulta = Date.now();
+          window.fetch(endpoint + '?desde=' + encodeURIComponent(ultimo), {
+            credentials: 'same-origin', cache: 'no-store', redirect: 'manual',
+            headers: { 'Accept': 'application/json' }
+          }).then(function (resposta) {
+            // Sessão encerrada (401) ou desviada para outra tela (primeiro acesso,
+            // termos, login): o polling para; a próxima navegação mostra o motivo.
+            if (resposta.status === 401 || resposta.type === 'opaqueredirect') { encerrar(); return null; }
+            var tipo = resposta.headers.get('Content-Type') || '';
+            if (resposta.ok && tipo.indexOf('application/json') === -1) { encerrar(); return null; }
+            if (!resposta.ok) throw new Error('HTTP ' + resposta.status);
+            return resposta.json();
+          }).then(function (dados) {
+            if (!dados) return;
+            espera = INTERVALO;
+            aplicar(dados);
+          }).catch(function () {
+            // Servidor ou banco indisponível (503), limite (429) ou rede: espera mais.
+            espera = Math.min(espera * 2, MAXIMO);
+          }).then(function () {
+            emCurso = false;
+            agendar(espera);
+          });
+        }
+
+        document.addEventListener('visibilitychange', function () {
+          if (document.hidden) { window.clearTimeout(timer); timer = null; return; }
+          if (emCurso || encerrado) return;
+          // De volta à aba: consulta logo (respeitando o mínimo entre consultas e,
+          // depois de erro, a espera em curso).
+          var alvo = espera === INTERVALO ? MINIMO : espera;
+          agendar(Math.max(0, alvo - (Date.now() - ultimaConsulta)));
         });
+
+        agendar(espera);
       })();
     </script>
     {% endif %}

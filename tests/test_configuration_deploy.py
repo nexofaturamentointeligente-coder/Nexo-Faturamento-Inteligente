@@ -93,7 +93,23 @@ class ConfigurationTests(unittest.TestCase):
             "app = create_app('production')\n"
             "assert app.config['PUBLIC_URL'] == 'https://nexo-test.example.invalid'\n"
             "assert app.config['TRUSTED_HOSTS'] == ['nexo-test.example.invalid']\n"
-            "assert 'https://nexo-test.example.invalid' in app.config['SOCKETIO_CORS_ORIGINS']\n",
+            "assert 'SOCKETIO_CORS_ORIGINS' not in app.config\n",
+            SECRET_KEY=secrets.token_hex(32), RENDER_EXTERNAL_URL="https://nexo-test.example.invalid/",
+            **self._PRODUCAO,
+        )
+
+    def test_postgres_engine_fails_fast_and_keeps_tcp_alive(self):
+        # Prazo de conexão e keepalive TCP do lado do aplicativo: com o banco
+        # inalcançável, a tentativa falha em 5 s em vez de prender a thread por
+        # minutos. O pool continua o mesmo (nenhum limite do banco mudou).
+        self.run_case(
+            "from app import create_app\n"
+            "app = create_app('production')\n"
+            "opcoes = app.config['SQLALCHEMY_ENGINE_OPTIONS']\n"
+            "assert opcoes['connect_args'] == {'connect_timeout': 5, 'keepalives': 1, 'keepalives_idle': 30, "
+            "'keepalives_interval': 10, 'keepalives_count': 3}, opcoes\n"
+            "assert (opcoes['pool_size'], opcoes['max_overflow'], opcoes['pool_timeout']) == (5, 10, 10), opcoes\n"
+            "assert opcoes['pool_pre_ping'] and opcoes['hide_parameters'], opcoes\n",
             SECRET_KEY=secrets.token_hex(32), RENDER_EXTERNAL_URL="https://nexo-test.example.invalid/",
             **self._PRODUCAO,
         )

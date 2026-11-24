@@ -38,9 +38,8 @@ def bloquear_empresa(sessao, id_empresa: int) -> Empresa | None:
 def bloquear_usuarios_empresa(sessao, id_empresa: int) -> tuple[Usuario, ...]:
     """Após bloquear a empresa, bloquear seus CLIENTE em ordem de PK.
 
-    Leitores Socket.IO/notificações mantêm FOR SHARE no usuário e consultam
-    a empresa por MVCC, sem adquirir seu lock. Atualizar a geração de todos os
-    usuários faz a exclusão esperar as emissões anteriores, sem inverter locks.
+    Atualizar a geração de todos os usuários na mesma transação revoga as
+    sessões deles: a próxima página ou consulta do sininho já é negada.
     """
     with sessao.no_autoflush:
         return tuple(sessao.scalars(select(Usuario).where(

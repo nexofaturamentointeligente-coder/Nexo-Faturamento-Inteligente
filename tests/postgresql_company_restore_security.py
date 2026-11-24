@@ -10,7 +10,6 @@ import threading
 import time
 from unittest.mock import patch
 
-from flask import request
 from sqlalchemy import event, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -21,9 +20,8 @@ from . import test_session_revocation_security as session_cases
 from .postgresql_support import PrivatePostgreSQL
 from blueprints import auth
 from company_security import excluir_empresa, restaurar_empresa
-from extensions import db, socketio
+from extensions import db
 from models import Empresa, Notificacao, Usuario
-import realtime
 
 
 class PostgreSQLCompanyRestoreSecurityTests(token_cases._TokenCase):
@@ -32,9 +30,14 @@ class PostgreSQLCompanyRestoreSecurityTests(token_cases._TokenCase):
     _session_routes = session_cases.SessionRevocationCases._session_routes
     _login_client = session_cases.SessionRevocationCases._login_client
     _assert_private_denied = session_cases.SessionRevocationCases._assert_private_denied
-    _socket = session_cases.SessionRevocationCases._socket
     _notify = session_cases.SessionRevocationCases._notify
-    _received = staticmethod(session_cases.SessionRevocationCases._received)
+    # Polling do sininho (substituiu o Socket.IO): GET /notificacoes/novas.
+    POLL = session_cases.SessionRevocationCases.POLL
+    _poll = session_cases.SessionRevocationCases._poll
+    _polled_texts = session_cases.SessionRevocationCases._polled_texts
+    _assert_poll_denied = session_cases.SessionRevocationCases._assert_poll_denied
+    _cookie = session_cases.SessionRevocationCases._cookie
+    _replay = session_cases.SessionRevocationCases._replay
 
     @classmethod
     def setUpClass(cls):
@@ -200,82 +203,43 @@ class PostgreSQLCompanyRestoreSecurityTests(token_cases._TokenCase):
         self.assertEqual(self._state(), before)
         self.assertTrue(self._transition("delete"))
 
-    def test_notification_read_lock_precedes_revocation_and_new_emissions_exclude_old_socket(self):
-        locked, release = threading.Event(), threading.Event()
+    # Sem Socket.IO não há entrega assíncrona segurando FOR SHARE: o que vale é a
+    # validação de cada consulta do sininho contra o banco real.
+    def test_company_delete_moves_delivery_to_the_new_login_after_restore(self):
         old_http = self._login_client()
-        old_socket = self._socket(old_http)
-
-        def after(connection, cursor, statement, parameters, context, executemany):
-            if ("FOR SHARE" in statement.upper()
-                    and threading.current_thread().name.startswith("sec004-notification")):
-                locked.set()
-                if not release.wait(12):
-                    raise AssertionError("Emissão SEC-004 de teste não foi liberada.")
-
-        event.listen(self.engine, "after_cursor_execute", after)
-        try:
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sec004-notification") as executor:
-                sent = executor.submit(self._notify, text="AUTHORIZED_BEFORE_COMPANY_DELETE_COMMIT")
-                try:
-                    self.assertTrue(locked.wait(8))
-                    deleted = executor.submit(self._transition, "delete")
-                    self._wait_for_blocked_transaction("usuario")
-                    self.assertIsNone(self._state()[0])
-                finally:
-                    release.set()
-                sent.result(timeout=12)
-                self.assertTrue(deleted.result(timeout=12))
-        finally:
-            release.set()
-            event.remove(self.engine, "after_cursor_execute", after)
-        self.assertIn("AUTHORIZED_BEFORE_COMPANY_DELETE_COMMIT", repr(self._received(old_socket)))
+        cookie = self._cookie(old_http)
+        self._notify(text="AUTHORIZED_BEFORE_COMPANY_DELETE_COMMIT")
+        self.assertIn("AUTHORIZED_BEFORE_COMPANY_DELETE_COMMIT", self._polled_texts(old_http))
+        self.assertTrue(self._transition("delete"))
         self._notify(text="PRIVATE_AFTER_COMPANY_DELETE_COMMIT")
-        self.assertNotIn("PRIVATE_AFTER_COMPANY_DELETE_COMMIT", repr(self._received(old_socket)))
+        self.assertNotIn("PRIVATE_AFTER_COMPANY_DELETE_COMMIT",
+                         self._assert_poll_denied(self._replay(cookie)).get_data(as_text=True))
         self._transition("restore")
-        fresh = self._socket(self._login_client())
+        fresh = self._login_client()
         self._notify(text="PRIVATE_RESTORED_NEW_AUTHORIZATION")
-        self.assertNotIn("PRIVATE_RESTORED_NEW_AUTHORIZATION", repr(self._received(old_socket)))
-        self.assertIn("PRIVATE_RESTORED_NEW_AUTHORIZATION", repr(self._received(fresh)))
+        self.assertNotIn("PRIVATE_RESTORED_NEW_AUTHORIZATION",
+                         self._assert_poll_denied(self._replay(cookie)).get_data(as_text=True))
+        self.assertIn("PRIVATE_RESTORED_NEW_AUTHORIZATION", self._polled_texts(fresh))
         self._assert_private_denied(old_http)
 
-    def test_authenticated_event_holds_share_lock_until_its_private_enqueue(self):
-        entered, release_emit, enqueued, release_handler = (threading.Event() for _ in range(4))
-
-        def private_action():
-            entered.set()
-            if not release_emit.wait(12):
-                raise AssertionError("Evento SEC-004 de teste não foi liberado.")
-            socketio.emit("_sec004_private_probe", {"private": "AUTHORIZED_BEFORE_COMPANY_COMMIT"},
-                          to=request.sid)
-            enqueued.set()
-            if not release_handler.wait(12):
-                raise AssertionError("Handler SEC-004 de teste não foi liberado.")
-            return True
-
-        socketio.on_event("_sec004_blocking_probe", realtime.guarded_socket_event(private_action))
-        old_http = self._login_client()
-        old_socket = self._socket(old_http)
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sec004-private-event") as executor:
-            emitted = executor.submit(old_socket.emit, "_sec004_blocking_probe", callback=True)
+    def test_polls_concurrent_with_company_delete_answer_200_or_401_then_deny(self):
+        cookie = self._cookie(self._login_client())
+        ready, release, status = threading.Event(), threading.Event(), []
+        # A exclusão fica pendente (escrita feita, sem COMMIT) enquanto o polling
+        # consulta: a sobreposição é garantida, não deixada ao acaso.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="sec004-poll-race") as executor:
+            deleted = executor.submit(self._transition, "delete", ready, release)
             try:
-                self.assertTrue(entered.wait(8))
-                deleted = executor.submit(self._transition, "delete")
-                self._wait_for_blocked_transaction("usuario")
-                self.assertIsNone(self._state()[0])
-                release_emit.set()
-                self.assertTrue(enqueued.wait(8))
-                self.assertIn("AUTHORIZED_BEFORE_COMPANY_COMMIT", repr(self._received(old_socket)))
-                self.assertIsNone(self._state()[0])
+                self.assertTrue(ready.wait(8))
+                for _ in range(4):
+                    status.append(self._poll(self._replay(cookie)).status_code)
             finally:
-                release_emit.set()
-                release_handler.set()
-            self.assertTrue(emitted.result(timeout=12))
+                release.set()
             self.assertTrue(deleted.result(timeout=12))
+        # Antes do COMMIT a empresa ainda está ativa: 200, nunca erro.
+        self.assertEqual(status, [200] * 4)
         self._transition("restore")
-        self.assertFalse(old_socket.emit("session_check", callback=True))
-        self.assertFalse(old_socket.is_connected())
-        self.assertFalse(self._socket(old_http).is_connected())
-        self._assert_private_denied(old_http)
+        self._assert_poll_denied(self._replay(cookie))
 
     def test_login_started_before_delete_cannot_adopt_the_restored_generation(self):
         before_cookie, release = threading.Event(), threading.Event()

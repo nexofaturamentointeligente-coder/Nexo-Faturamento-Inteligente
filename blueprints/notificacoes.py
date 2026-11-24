@@ -8,18 +8,22 @@ Rotas compartilhadas por ADMIN e CLIENTE (qualquer usuário autenticado):
   GET  /notificacoes/<id>/abrir      → só redireciona (SEC-002: nenhum GET
                                        altera estado; links antigos seguem
                                        funcionando sem marcar como lida).
+  GET  /notificacoes/novas?desde=<id> → polling do sininho: JSON com as não
+                                       lidas de id maior que `desde` e a
+                                       contagem; 401 sem sessão válida.
 A leitura/contagem para o sininho é injetada em todas as páginas pelo
 context processor (ver app.create_app).
 """
 
 from urllib.parse import urlparse
 
-from flask import Blueprint, redirect, url_for, request
+from flask import Blueprint, jsonify, redirect, url_for, request
 from flask_login import login_required, current_user
 from sqlalchemy import update
 
-from extensions import db
+from extensions import db, limiter
 from models import Notificacao
+from notifications import novas_do_usuario
 
 notificacoes_bp = Blueprint("notificacoes", __name__, url_prefix="/notificacoes")
 
@@ -40,6 +44,36 @@ def _local_ou_padrao(alvo: str) -> str:
         if not p.scheme and not p.netloc and alvo.startswith("/") and not alvo.startswith(("//", "/\\")):
             return alvo
     return _destino_padrao()
+
+
+def _chave_limite_sininho() -> str:
+    """Limite por usuário (várias abas somam); sem sessão, pelo IP."""
+    usuario = current_user.get_id() if current_user.is_authenticated else None
+    return f"sininho:u{usuario}" if usuario else f"sininho:ip{request.remote_addr}"
+
+
+def _id_desde(valor) -> int:
+    """Último id que o navegador já tem; qualquer valor estranho vale 0."""
+    if isinstance(valor, str) and valor.isascii() and valor.isdecimal() and len(valor) <= 10:
+        return int(valor)
+    return 0
+
+
+@notificacoes_bp.route("/novas", methods=["GET"])
+# A página consulta a cada 30 s por aba; o teto só barra um cliente em laço.
+@limiter.limit("30 per minute", key_func=_chave_limite_sininho)
+def novas():
+    """Polling leve do sininho (substitui o WebSocket).
+
+    Cada consulta é uma requisição curta: passa pelos mesmos guardas de sessão de
+    qualquer página (credencial, sessão registrada, BOOT_ID, empresa acessível,
+    primeiro acesso, termos) e libera a thread em milissegundos. Sem sessão
+    válida: 401 em JSON, e o navegador para de consultar.
+    """
+    if not current_user.is_authenticated:
+        resposta = jsonify(erro="Sessão encerrada. Entre novamente.")
+        return resposta, 401
+    return jsonify(novas_do_usuario(current_user.id_usuario, _id_desde(request.args.get("desde"))))
 
 
 @notificacoes_bp.route("/marcar-lidas", methods=["POST"])

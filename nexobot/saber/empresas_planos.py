@@ -151,7 +151,7 @@ REGISTROS = (
             "sob as regras contratuais, a suspensão libera só as análises de períodos efetivamente pagos, por "
             "prazo limitado, e a exportação de PDF tem prazo próprio; os prazos aparecem no aviso da Visão "
             "Geral. Terminado o prazo da suspensão, ou com a conta CANCELADA, login, sessões, PDFs, "
-            "notificações e conexões em tempo real dos usuários da empresa ficam bloqueados."
+            "notificações e o sininho em tempo real dos usuários da empresa ficam bloqueados."
         ),
         perguntas=(
             "O que é conta suspensa?", "O que é conta cancelada?", "Quais são os status da conta?",

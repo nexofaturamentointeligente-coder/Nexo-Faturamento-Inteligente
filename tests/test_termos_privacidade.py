@@ -112,7 +112,7 @@ class BloqueioTests(_TermosCase):
                 # texto (tests/test_aceite_rolagem_navegador.py).
                 self.assertRegex(modal, r'id="termosConfirmo"[^>]*\sdisabled\s')
                 self.assertRegex(modal, r'<button type="submit" class="btn-nexo" disabled data-aceite-libera')
-                for ausente in ('id="nexobot"', "socket.io.min.js", 'class="skip-link"'):
+                for ausente in ('id="nexobot"', 'id="nexoToasts"', "/notificacoes/novas", 'class="skip-link"'):
                     self.assertNotIn(ausente, html)
 
     def test_pdf_de_analise_publicada_tambem_fica_bloqueado(self):
@@ -154,7 +154,7 @@ class BloqueioTests(_TermosCase):
         self._publicar()
         html = self._modal(caminho="/como-aderir")
         self.assertIn('id="modalTermos"', html)
-        for ausente in ('id="nexobot"', "socket.io.min.js"):
+        for ausente in ('id="nexobot"', 'id="nexoToasts"', "/notificacoes/novas"):
             self.assertNotIn(ausente, html)
         self.assertEqual(self.app.test_client().get("/como-aderir").status_code, 200)
 

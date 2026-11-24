@@ -150,7 +150,7 @@ class OriginNormalizationTests(unittest.TestCase):
 
     def _app(self, **config):
         app = Flask(__name__)
-        app.config.update(SOCKETIO_CORS_ORIGINS=["http://localhost:5000"], **config)
+        app.config.update(**config)
         return app
 
     def test_production_requires_https_origin_and_derives_trusted_hosts(self):
@@ -162,7 +162,7 @@ class OriginNormalizationTests(unittest.TestCase):
         self.assertEqual(app.config["TRUSTED_HOSTS"], [
             "portal.example.invalid", "nexo-test.example.invalid", ".interno.example.invalid", "outro.example.invalid",
         ])
-        self.assertEqual(app.config["SOCKETIO_CORS_ORIGINS"], ["http://localhost:5000", "https://portal.example.invalid"])
+        self.assertNotIn("SOCKETIO_CORS_ORIGINS", app.config)
         for config in ({}, {"PUBLIC_URL": "http://portal.example.invalid"},
                        {"PUBLIC_URL": "https://portal.example.invalid/app"},
                        {"PUBLIC_URL": ORIGEM, "PUBLIC_URL_PLATAFORMA": "nope"},

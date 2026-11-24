@@ -440,8 +440,29 @@ class TemaNavegadorTests(NavegadorCase):
                 lados[lado] = round(max(_razao_pixels(com.getpixel(p), sem.getpixel(p)) for p in dentro), 2)
         return lados
 
-    def _reter_script(self, pagina, caminho, padrao="**/socket.io.min.js"):
-        """Vai à página com um script da CDN preso, como numa CDN lenta. Devolve o que o solta."""
+    _SCRIPT_LENTO = "/__nexo_script_lento.js"
+
+    def _reter_script(self, pagina, caminho, padrao=None):
+        """Vai à página com um script da CDN preso, como numa CDN lenta. Devolve o que o solta.
+
+        Sem `padrao`, um script externo bloqueante entra no fim do corpo, depois da
+        paleta e antes dos gráficos: o lugar do cliente do Socket.IO, que saiu quando
+        o sininho passou a usar polling (nenhum script do produto bloqueia ali)."""
+        injetado = padrao is None
+        if injetado:
+            padrao = "**" + self._SCRIPT_LENTO
+            pagina_alvo = self.base + caminho
+
+            def injetar(rota):
+                if rota.request.resource_type != "document":
+                    rota.fallback()
+                    return
+                resposta = rota.fetch()
+                corpo = resposta.text().replace(
+                    '<div class="nexo-toast-wrap"',
+                    f'<script src="{self._SCRIPT_LENTO}"></script><div class="nexo-toast-wrap"', 1)
+                rota.fulfill(response=resposta, body=corpo)
+            pagina.route(pagina_alvo, injetar)
         presos = []
         pagina.route(padrao, lambda rota: presos.append(rota))
         pagina.goto(self.base + caminho, wait_until="commit")
@@ -454,8 +475,13 @@ class TemaNavegadorTests(NavegadorCase):
 
         def soltar():
             pagina.unroute(padrao)
+            if injetado:
+                pagina.unroute(pagina_alvo)
             for rota in presos:
-                rota.fallback()
+                if injetado:
+                    rota.fulfill(status=200, content_type="application/javascript", body="")
+                else:
+                    rota.fallback()
             pagina.wait_for_load_state("load")
         return soltar
 
@@ -513,8 +539,8 @@ class TemaNavegadorTests(NavegadorCase):
     def test_armazenamento_bloqueado_antes_de_desenhar_os_graficos(self):
         """Sem recarga possível: o gráfico nasce na paleta do tema escolhido e, trocando de novo,
         ganha o fundo da paleta em que foi desenhado, seja qual for a fase do clique."""
-        # Clique com a paleta já calculada (socket.io preso) e clique antes dela (Plotly preso).
-        for padrao, esperar_paleta in (("**/socket.io.min.js", True), ("**/plotly.min.js", False)):
+        # Clique com a paleta já calculada (script do fim do corpo preso) e clique antes dela (Plotly preso).
+        for padrao, esperar_paleta in ((None, True), ("**/plotly.min.js", False)):
             with self.subTest(preso=padrao):
                 pagina = self._sessao(CLIENTE, antes=[_BLOQUEAR_STORAGE])
                 soltar = self._reter_script(pagina, "/cliente/dashboard", padrao)

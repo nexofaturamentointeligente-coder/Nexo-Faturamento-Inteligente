@@ -1,56 +1,40 @@
-"""Hardening complementar (FASE 6): teto de conexões Socket.IO por usuário,
+"""Hardening complementar (FASE 6): teto do polling do sininho por usuário,
 nome de produto com teto de tamanho/sem controles no ETL, e confinamento do
 script de migração de imagens do Guia a static/."""
 
 import unittest
 
-from .deploy_support import DeployTestCase
+from . import test_auth_tokens_security as token_cases
+from . import test_session_revocation_security as session_cases
 
 
-class SocketConnectionCapTests(DeployTestCase):
-    def setUp(self):
-        super().setUp()
-        self.fixtures()
+class SininhoPollingCapTests(token_cases._TokenCase):
+    """O polling do sininho (substituiu o Socket.IO) tem teto por usuário: várias
+    abas somam, e um cliente em laço recebe 429 sem ocupar o servidor."""
 
-    def _http_logado(self):
-        http = self.app.test_client()
-        response = http.post("/auth/login", data={
-            "email": "cliente-test@example.invalid", "senha": self.password,
-            "csrf_token": self._csrf_de(http),
-        })
-        self.assertEqual(response.status_code, 302)
-        return http
+    ENABLE_LIMITS = True  # o Flask-Limiter só instala os limites se nasce ligado
+    _login_client = session_cases.SessionRevocationCases._login_client
 
-    def _csrf_de(self, http):
-        import re
-        match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', http.get("/auth/login").get_data(as_text=True))
-        self.assertIsNotNone(match)
-        return match.group(1)
-
-    def test_per_user_socket_connections_are_capped(self):
-        from extensions import socketio
-        from realtime import MAX_CONEXOES_POR_USUARIO
-        http = self._http_logado()
-        conexoes = []
-        self.addCleanup(lambda: [c.disconnect() for c in conexoes if c.is_connected()])
-        try:
-            primeira = socketio.test_client(self.app, flask_test_client=http)
-        except Exception as erro:  # ambiente sem suporte a WebSocket de teste
-            self.skipTest(f"Socket.IO de teste indisponível: {erro}")
-        if not primeira.is_connected():
-            self.skipTest("Socket.IO de teste não conectou neste ambiente")
-        conexoes.append(primeira)
-        # Até o teto: todas conectam.
-        for _ in range(MAX_CONEXOES_POR_USUARIO - 1):
-            conexao = socketio.test_client(self.app, flask_test_client=http)
-            conexoes.append(conexao)
-            self.assertTrue(conexao.is_connected())
-        ativos = sum(1 for c in conexoes if c.is_connected())
-        self.assertEqual(ativos, MAX_CONEXOES_POR_USUARIO)
-        # A próxima excede o teto e é recusada pelo handshake.
-        excedente = socketio.test_client(self.app, flask_test_client=http)
-        conexoes.append(excedente)
-        self.assertFalse(excedente.is_connected(), "conexão acima do teto deveria ser recusada")
+    def test_per_user_polling_is_capped(self):
+        http = self._login_client()
+        outra_aba = self.app.test_client()
+        outra_aba.set_cookie(self.app.config["SESSION_COOKIE_NAME"],
+                             http.get_cookie(self.app.config["SESSION_COOKIE_NAME"]).value)
+        # Até o teto (30 por minuto), somando as duas abas: todas respondem.
+        status = [(http if i % 2 else outra_aba).get("/notificacoes/novas?desde=0").status_code
+                  for i in range(30)]
+        self.assertEqual(set(status), {200})
+        # A próxima excede o teto do usuário, em qualquer aba, e recebe JSON curto
+        # (sem montar a página, que consultaria o banco a cada recusa).
+        excedente = http.get("/notificacoes/novas?desde=0")
+        self.assertEqual(excedente.status_code, 429)
+        self.assertTrue(excedente.is_json)
+        self.assertIn("Aguarde", excedente.get_json()["erro"])
+        self.assertEqual(outra_aba.get("/notificacoes/novas?desde=0").status_code, 429)
+        # O teto é do usuário: outro usuário, no mesmo IP, segue consultando; e sem
+        # sessão a chave é o IP, que tem a sua própria contagem.
+        self.assertEqual(self._login_client("other").get("/notificacoes/novas?desde=0").status_code, 200)
+        self.assertEqual(self.app.test_client().get("/notificacoes/novas?desde=0").status_code, 401)
 
 
 class ProductNameCapTests(unittest.TestCase):

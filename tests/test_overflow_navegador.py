@@ -46,7 +46,7 @@ from unittest.mock import patch
 
 from tests.contratos_support import ContratosCase
 from tests.test_contratos_navegador import (_BOOTSTRAP_MINIMO, _CDN, _CDN_INTEGRO, _copias_locais_da_cdn,
-                                            _liberar_origem_socketio, _servir_fonte)
+                                            _servir_fonte)
 from tests.test_nexobot_navegador import _CONECTAR_LOCAL
 
 try:
@@ -227,7 +227,6 @@ class NavegadorCase(ContratosCase):
             self.stack.enter_context(patch(alvo, original))
         self.servidor = make_server("127.0.0.1", 0, self.app, threaded=True)
         self.base = f"http://127.0.0.1:{self.servidor.server_port}"
-        _liberar_origem_socketio(self, self.base)
         threading.Thread(target=self.servidor.serve_forever, daemon=True).start()
         self.addCleanup(self._parar_servidor)
         self.pw = sync_playwright().start()

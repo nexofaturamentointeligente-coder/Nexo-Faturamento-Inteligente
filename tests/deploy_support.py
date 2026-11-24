@@ -33,7 +33,7 @@ def ensure_test_environment():
         "MAIL_USE_TLS": "false", "MAIL_USE_SSL": "false",
         "ANTHROPIC_API_KEY": "", "HF_API_TOKEN": "",
         "RATELIMIT_STORAGE_URI": "memory://", "PROXY_FIX_HOPS": "0",
-        "RENDER_EXTERNAL_URL": "", "SOCKETIO_CORS_ORIGINS": "http://localhost",
+        "RENDER_EXTERNAL_URL": "",
         # SEC-005: origem canônica fictícia dos links; sem restrição de Host
         # (o cliente de teste usa "localhost" e o navegador, 127.0.0.1:porta).
         "NEXO_PUBLIC_URL": "https://nexo-test.example.invalid", "NEXO_TRUSTED_HOSTS": "",

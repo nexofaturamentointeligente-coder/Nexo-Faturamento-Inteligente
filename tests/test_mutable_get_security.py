@@ -107,9 +107,11 @@ class MutableGetSecurityTests(token_cases._TokenCase):
         self.assertIsNotNone(item)
         self.assertIn('name="csrf_token"', item.group(1))
         self.assertIn('<button type="submit" class="bell-item is-unread">', item.group(1))
-        # O JS do tempo real monta o mesmo formulário com o token do <meta>.
+        # O JS do polling monta o mesmo formulário com o token do <meta>.
         self.assertIn('<meta name="csrf-token"', html)
-        self.assertIn("form.action = '/notificacoes/' + parseInt(n.id, 10) + '/abrir'", html)
+        self.assertIn("var id = parseInt(n.id, 10);", html)
+        self.assertIn("form.method = 'POST';", html)
+        self.assertIn("form.setAttribute('action', '/notificacoes/' + id + '/abrir');", html)
         self.assertNotIn("a.href = '/notificacoes/'", html)
 
     def test_first_access_page_logs_out_by_post_only(self):

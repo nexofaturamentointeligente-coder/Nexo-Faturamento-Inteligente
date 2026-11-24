@@ -297,7 +297,7 @@ class PaletaDosGraficosTests(unittest.TestCase):
     def test_codigo_dos_graficos_sem_cor_fixa(self):
         """Toda cor de texto e contorno vem de NEXO.colors; só o fundo transparente fica literal."""
         cor = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\((?!0,\s*0,\s*0,\s*0\))")
-        graficos = BASE[BASE.index("/* Fonte única do tema dos gráficos"):BASE.index("Tempo real: sininho ao vivo")]
+        graficos = BASE[BASE.index("/* Fonte única do tema dos gráficos"):BASE.index("Sininho: consulta leve (polling)")]
         self.assertEqual(cor.findall(graficos), [])
         for relativo in ("admin/dashboard.html", "cliente/dashboard.html", "cliente/analise.html"):
             conteudo = (TEMPLATES / relativo).read_text(encoding="utf-8")

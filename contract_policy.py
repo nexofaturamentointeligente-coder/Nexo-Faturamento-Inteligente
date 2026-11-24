@@ -3,7 +3,7 @@
 Todas as decisões comerciais do portal partem daqui:
   - estado efetivo da empresa (regime LEGADO x CONTRATUAL);
   - acesso ao portal, também como cláusula SQL usada por login, sessão,
-    tokens de senha, Socket.IO e notificações (session_security);
+    tokens de senha e o polling do sininho (session_security);
   - consulta de análises pelos períodos efetivamente pagos;
   - exportação de PDF dentro do prazo contado da suspensão;
   - envio de arquivos e abertura de novas análises.
@@ -68,7 +68,7 @@ class EsquemaContratualIndisponivel(RuntimeError):
 
 class EsquemaContratualInconsistente(SQLAlchemyError):
     """Só parte das tabelas contratuais existe. É erro de banco: guarda de
-    sessão (503), Socket.IO (desconecta) e notificações falham fechado."""
+    sessão (503) e o polling do sininho falham fechado."""
 
 
 # ---------------------------------------------------------------------------

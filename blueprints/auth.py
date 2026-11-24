@@ -18,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from extensions import chave_limite_conta, chave_limite_usuario, db, limiter
 from models import Empresa, Usuario
+import falhas_banco
 from contas_email import buscar_usuario_por_email, email_em_uso, email_valido, normalizar_email
 from emails import (
     email_boas_vindas, email_email_alterado, email_recuperacao_senha, email_senha_alterada, envio_disponivel,
@@ -265,16 +266,6 @@ def _atualizar_credencial(estado: _CredencialEsperada, nova_senha: str, *, renov
     )
     if token_renovado is not None:
         carimbar_sessao(token_renovado, impressao_atual)
-    try:
-        from realtime import revogar_conexoes_usuario
-        revogar_conexoes_usuario(
-            estado.id_usuario, impressao_atual,
-            impressao_revogada=impressao_sessao(estado),
-        )
-    except Exception as erro:
-        # Senha já confirmada: falha de transporte não muda seu resultado.
-        # Salas por geração continuam negando dados aos sockets antigos.
-        logger.warning("Revogação Socket.IO indisponível (%s).", type(erro).__name__)
     return True
 
 
@@ -409,13 +400,6 @@ def _gravar_novo_email(estado: _CredencialEsperada, email_anterior: str, novo: s
     impressao_atual = impressao_credencial_sessao(estado.id_usuario, hash_final, proxima_geracao)
     if token_renovado is not None:
         carimbar_sessao(token_renovado, impressao_atual)
-    try:
-        from realtime import revogar_conexoes_usuario
-        revogar_conexoes_usuario(estado.id_usuario, impressao_atual,
-                                 impressao_revogada=impressao_sessao(estado))
-    except Exception as erro:  # noqa: BLE001
-        # E-mail já confirmado: as salas por geração negam dados aos sockets antigos.
-        logger.warning("Revogação Socket.IO indisponível (%s).", type(erro).__name__)
     return None
 
 
@@ -515,18 +499,31 @@ def login():
         # Procura o utilizador pelo e-mail: texto exato e, se não houver, a
         # única conta com o mesmo e-mail sem diferenciar maiúsculas
         # (cadastros antigos guardavam o endereço como foi digitado).
-        busca = buscar_usuario_por_email(db.session, email)
+        # Banco fora do ar na busca da conta ou na conferência de acesso: 503 com a
+        # mensagem amigável (falhas_banco.py), nunca o 500 genérico. A resposta é a
+        # mesma exista ou não a conta, e nenhuma sessão é criada.
+        try:
+            busca = buscar_usuario_por_email(db.session, email)
+            usuario = busca.usuario
+            # Valida o utilizador e a senha (usando o método check_senha definido no Model)
+            senha_confere = bool(usuario and usuario.check_senha(senha))
+            if senha_confere:
+                # Capturar a credencial cuja senha foi verificada antes de criar
+                # a sessão; nunca adotar um hash posterior por refresh do ORM.
+                impressao_login = impressao_sessao(usuario)
+                acesso_liberado = usuario_pode_acessar(usuario)
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            if not falhas_banco.eh_banco_indisponivel(erro):
+                raise  # erro de programação: segue para o 500, com traceback no log
+            logger.warning("Login indisponível (%s).", falhas_banco.descrever(erro))
+            return falhas_banco.resposta_indisponivel()
         if busca.ambigua:
             logger.warning("Login sem conta escolhida: mais de um cadastro tem este e-mail com maiúsculas "
                            "diferentes (resolver o cadastro duplicado).")
-        usuario = busca.usuario
 
-        # Valida o utilizador e a senha (usando o método check_senha definido no Model)
-        if usuario and usuario.check_senha(senha):
-            # Capturar a credencial cuja senha foi verificada antes de criar
-            # a sessão; nunca adotar um hash posterior por refresh do ORM.
-            impressao_login = impressao_sessao(usuario)
-            if not usuario_pode_acessar(usuario):
+        if senha_confere:
+            if not acesso_liberado:
                 if _conta_encerrada(usuario):
                     # Página própria, sem login_user, flash ou redirect: nenhuma
                     # sessão autenticada nem dado do portal é entregue.
@@ -588,7 +585,7 @@ def logout():
     SEC-002: GET apenas mostra a confirmação; nenhum link, imagem ou prefetch
     encerra a sessão. SEC-001: a linha registrada desta sessão é revogada no
     banco antes de o cookie ser descartado, de modo que uma cópia do cookie
-    deixa de autorizar HTTP e Socket.IO em qualquer processo. As demais
+    deixa de autorizar as páginas e o polling do sininho em qualquer processo. As demais
     sessões do mesmo usuário (outros navegadores) continuam válidas.
     """
     if request.method == "GET":
@@ -615,12 +612,6 @@ def logout():
         return resposta
     logout_user()
     session.clear()
-    try:
-        from realtime import revogar_conexoes_sessao
-        revogar_conexoes_sessao(hash_atual)
-    except Exception as erro:
-        # Já revogada no banco: a varredura e as salas por sessão completam.
-        logger.warning("Desconexão Socket.IO no logout indisponível (%s).", type(erro).__name__)
     flash("Sessão terminada com sucesso.", "success")
     return redirect(url_for("auth.login"))
 

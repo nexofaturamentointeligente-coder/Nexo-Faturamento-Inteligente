@@ -76,7 +76,7 @@ def host_da_origem(origem: str) -> str:
 
 
 def configurar_origem_publica(app, *, producao: bool) -> None:
-    """Valida PUBLIC_URL e deriva TRUSTED_HOSTS e a origem do Socket.IO.
+    """Valida PUBLIC_URL e deriva TRUSTED_HOSTS.
 
     Chamado pela factory antes de inicializar as extensões. Em produção a
     origem é obrigatória e https; em desenvolvimento, sem configuração, vale
@@ -97,13 +97,6 @@ def configurar_origem_publica(app, *, producao: bool) -> None:
     else:
         origem = ORIGEM_DESENVOLVIMENTO
     app.config["PUBLIC_URL"] = origem
-
-    # O handshake do Socket.IO confere o Origin exato: a origem canônica
-    # precisa constar da lista (nova lista: não alterar a da classe Config).
-    cors = list(app.config.get("SOCKETIO_CORS_ORIGINS") or [])
-    if origem not in cors:
-        cors.append(origem)
-    app.config["SOCKETIO_CORS_ORIGINS"] = cors
 
     extras = app.config.get("TRUSTED_HOSTS_EXTRAS") or []
     if not producao and not extras:
