@@ -214,7 +214,8 @@ class SensitiveLogTests(unittest.TestCase):
             "usuario_nome": "Synthetic", "usuario_email": "synthetic@example.invalid",
         }
         with app.test_request_context("/admin/empresas/nova", method="POST", data=form):
-            with patch.object(admin, "db", fake_db), patch.object(admin, "Empresa", return_value=empresa), patch.object(admin, "Usuario", return_value=usuario), patch.object(admin, "_planos_segmentos", return_value=([], [])):
+            with patch.object(admin, "db", fake_db), patch.object(admin, "Empresa", return_value=empresa), patch.object(admin, "Usuario", return_value=usuario), patch.object(admin, "_planos_segmentos", return_value=(
+                    [SimpleNamespace(id_plano=1)], [SimpleNamespace(id_segmento=1)])):
                 with self.assertLogs(app.logger, level="WARNING") as logs:
                     response = inspect.unwrap(admin.empresa_nova)()
                 self.assertEqual(response.status_code, 302)

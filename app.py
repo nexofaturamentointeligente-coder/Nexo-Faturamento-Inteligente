@@ -129,6 +129,11 @@ def create_app(config_name: str = None) -> Flask:
     # user_loader/blueprints; aqui basta registrar db + app.
     migrate.init_app(app, db)
     mail.init_app(app)
+    # Teto de 128 KiB no corpo dos pedidos de chamado (chamados_suporte): vale antes de qualquer leitura do
+    # formulário, inclusive a do token CSRF. Por isso este gancho é registrado antes do CSRFProtect: os
+    # before_request rodam na ordem de registro.
+    import chamados_suporte
+    app.before_request(chamados_suporte.aplicar_teto_do_corpo)
     # Proteção CSRF global (todas as rotas mutáveis exigem token válido).
     csrf.init_app(app)
     # Rate limiting (limites explícitos por rota via decorator).
@@ -340,6 +345,9 @@ def create_app(config_name: str = None) -> Flask:
     # legadas continuam servidas de static/).
     import storage
     app.jinja_env.globals["url_midia"] = storage.url_midia
+    # Teto das mensagens de chamado no maxlength e na dica dos formulários: o mesmo número da rota.
+    app.jinja_env.globals["LIMITE_MENSAGEM_CHAMADO"] = chamados_suporte.LIMITE_MENSAGEM
+    app.jinja_env.globals["LIMITE_MENSAGEM_CHAMADO_TEXTO"] = chamados_suporte.LIMITE_POR_EXTENSO
 
     @app.route("/midia/<path:chave>")
     @login_required
@@ -448,6 +456,14 @@ def create_app(config_name: str = None) -> Flask:
                             "Sua sessão expirou ou este formulário é antigo. Nada foi gravado: "
                             "abra a página de novo e repita.")
 
+    # Chaves dos limites contados pela conta ou pelo usuário (extensions.chave_limite_usuario e
+    # chave_limite_conta, e a do sininho); qualquer outra é o endereço de rede (o IP ou o HMAC dele).
+    _CHAVES_DA_CONTA = ("usuario:", "conta:", "sininho:u")
+
+    def _limite_por_endereco(limite) -> bool:
+        argumentos = [str(argumento) for argumento in (getattr(limite, "request_args", None) or ())]
+        return bool(argumentos) and not any(argumento.startswith(_CHAVES_DA_CONTA) for argumento in argumentos)
+
     @app.errorhandler(429)
     def _rate_limit(e):
         if request.path.startswith("/api/suporte-bot"):
@@ -462,10 +478,15 @@ def create_app(config_name: str = None) -> Flask:
         limite = limiter.current_limit
         minutos = max(1, math.ceil((limite.reset_at - 1 - time.time()) / 60)) if limite else 1
         espera = "um minuto" if minutos == 1 else f"{minutos} minutos"
+        mensagem = f"Você fez muitas requisições em pouco tempo. Aguarde {espera} e tente novamente."
+        if _limite_por_endereco(limite):
+            # Contado pelo endereço de rede (o login, por exemplo): colegas atrás do mesmo roteador ou do
+            # mesmo provedor somam as tentativas, e quem esbarrou no limite pode não ter feito todas.
+            mensagem += (" Esse limite vale para a conexão de internet, não só para você: em escritórios, redes "
+                         "Wi-Fi compartilhadas ou provedores que usam um mesmo endereço para vários clientes, as "
+                         "tentativas de outras pessoas da mesma rede também contam.")
         return render_template("erro_simples.html", titulo="Muitas tentativas", codigo=429,
-                               painel_url=_painel_url(),
-                               mensagem="Você fez muitas requisições em pouco tempo. "
-                                        f"Aguarde {espera} e tente novamente."), 429
+                               painel_url=_painel_url(), mensagem=mensagem), 429
 
     # Páginas de erro na identidade do NEXO (antes: a página padrão do servidor,
     # branca e em inglês). O status HTTP não muda; chamadas /api/ recebem JSON.
@@ -541,6 +562,9 @@ def create_app(config_name: str = None) -> Flask:
         elif request.endpoint in ("onboarding.diagnostico_enviar", "onboarding.api_diagnostico_enviar",
                                   "leads.avaliar", "leads.reenviar"):
             mensagem = f"Os relatórios enviados passam de {teto} somados. Nada foi gravado: envie menos meses por vez."
+        elif request.endpoint in chamados_suporte.ENDPOINTS_DE_SUPORTE:
+            # Os chamados têm teto próprio (128 KiB, chamados_suporte.aplicar_teto_do_corpo).
+            mensagem = chamados_suporte.MENSAGEM_CORPO_GRANDE
         else:
             mensagem = f"O envio passa de {teto}. Nada foi gravado: envie um arquivo menor."
         return _pagina_erro(413, "Envio grande demais", mensagem)

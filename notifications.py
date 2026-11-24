@@ -21,7 +21,7 @@ import logging
 from sqlalchemy import select
 
 from extensions import db
-from horario import horario_brasilia, iso_utc
+from horario import agora_utc, horario_brasilia, iso_utc
 from models import Empresa, Notificacao, Usuario
 from preferencias_usuario import ids_com_aviso_desligado
 from session_security import condicoes_empresa_acessivel
@@ -119,11 +119,29 @@ def criar_notificacao(id_usuario: int, texto: str, link_destino: str | None = No
     return n
 
 
-def notificar_admins(texto: str, link_destino: str | None = None) -> int:
-    """Notifica TODOS os usuários ADMIN ativos. Retorna a quantidade gerada."""
+def notificar_admins(texto: str, link_destino: str | None = None, *, agrupar_em=None, agora=None) -> int:
+    """Notifica TODOS os usuários ADMIN ativos. Retorna a quantidade gerada.
+
+    `agrupar_em` (timedelta): o admin que já tem um aviso igual (mesmo texto e mesmo destino), ainda não
+    lido e criado nessa janela até `agora`, não recebe outro. As respostas do cliente em sequência num
+    chamado viram um aviso só por admin (chamados_suporte); as mensagens continuam todas na conversa.
+    `agora` é o instante da resposta, para não ler o relógio de novo."""
     admins = db.session.execute(
         select(Usuario.id_usuario).where(Usuario.role == "ADMIN", Usuario.ativo.is_(True))
     ).scalars().all()
+    if agrupar_em is not None and admins:
+        agora = agora if agora is not None else agora_utc()
+        avisados = set(db.session.execute(
+            select(Notificacao.id_usuario).where(
+                Notificacao.id_usuario.in_(admins),
+                Notificacao.lida.is_(False),
+                Notificacao.texto == texto,
+                Notificacao.link_destino == link_destino,
+                Notificacao.data_criacao >= agora - agrupar_em,
+                Notificacao.data_criacao <= agora,
+            )
+        ).scalars())
+        admins = [uid for uid in admins if uid not in avisados]
     for uid in admins:
         criar_notificacao(uid, texto, link_destino)
     return len(admins)

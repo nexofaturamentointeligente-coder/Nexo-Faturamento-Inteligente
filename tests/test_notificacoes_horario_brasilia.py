@@ -360,7 +360,8 @@ class HorarioBrasiliaTests(DeployTestCase):
                 self.assertEqual(datetime.fromtimestamp(instante.timestamp()),
                                  instante.astimezone(ZoneInfo(zona)).replace(tzinfo=None))
                 self.portal.relogio(instante)
-                id_chamado = self.portal.abrir_chamado()
+                # Um assunto por fuso: o mesmo chamado em menos de 120 s seria o clique duplo (chamados_suporte).
+                id_chamado = self.portal.abrir_chamado(assunto=f"Dúvida fictícia no fuso {zona}")
                 (payload,) = self.portal.recebidos("ADMIN")
                 self.assertEqual(payload["hora"], f"29/10 {hora}")
                 self.assertEqual(self.portal.sininho("ADMIN")[payload["id"]][0], f"29/10 {hora}")
@@ -388,7 +389,8 @@ class HorarioBrasiliaTests(DeployTestCase):
                 adiantamento = exibido_antes - A.astimezone(BRASILIA).replace(tzinfo=None)
                 self.assertEqual(adiantamento, timedelta(hours=diferenca))
                 self.portal.relogio(A)
-                self.portal.abrir_chamado()
+                # Um assunto por fuso: o mesmo chamado no mesmo instante seria o clique duplo (chamados_suporte).
+                self.portal.abrir_chamado(assunto=f"Dúvida fictícia no fuso {zona}")
                 self.assertEqual(self.portal.recebidos("ADMIN")[0]["hora"], "29/10 14:34")
 
     # -------------------------------------------------------------------- E

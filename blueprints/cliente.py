@@ -45,6 +45,8 @@ from etl_uploads import deduzir_cota, ler_upload_validado, limitar_upload
 from blueprints.auth import (
     _destino_abre_por_get, _destino_seguro, limite_reautenticacao, trocar_email_autenticado, trocar_senha_autenticada,
 )
+import chamados_suporte
+from company_security import bloquear_empresa
 import configuracoes_conta
 from extensions import chave_limite_usuario, db, limiter
 import termos_legais
@@ -777,7 +779,7 @@ def tickets():
         # Uma linha curta: o assunto vai para notificações, e-mails e listagens.
         assunto = " ".join((request.form.get("assunto") or "").split())[:160]
         categoria = (request.form.get("categoria") or "").strip().upper()
-        mensagem = (request.form.get("mensagem") or "").strip()
+        mensagem = chamados_suporte.normalizar_mensagem(request.form.get("mensagem"))
 
         if not assunto or not mensagem:
             flash("Informe um assunto e descreva a sua dúvida.", "warning")
@@ -785,6 +787,19 @@ def tickets():
         if categoria not in CATEGORIAS_TICKET:
             flash("Selecione uma categoria válida.", "danger")
             return redirect(url_for("cliente.tickets"))
+        if chamados_suporte.mensagem_longa_demais(mensagem):
+            flash(chamados_suporte.MENSAGEM_LONGA, "warning")
+            return redirect(url_for("cliente.tickets"))
+
+        # Clique duplo: com a empresa bloqueada até o commit, um segundo pedido igual só confere depois de o
+        # primeiro gravar, e recebe o chamado que ele abriu em vez de abrir outro (chamados_suporte).
+        bloquear_empresa(db.session, empresa.id_empresa)
+        repetido = chamados_suporte.chamado_repetido(current_user.id_usuario, assunto, categoria, mensagem,
+                                                     agora_utc())
+        if repetido is not None:
+            db.session.rollback()
+            flash(chamados_suporte.MENSAGEM_CHAMADO_REPETIDO, "info")
+            return redirect(url_for("cliente.ticket_detalhe", id_chamado=repetido))
 
         chamado = ChamadoSuporte(
             id_empresa=empresa.id_empresa,
@@ -826,6 +841,9 @@ def tickets():
 
 @cliente_bp.route("/tickets/<int:id_chamado>", methods=["GET", "POST"])
 @cliente_required
+# Respostas do cliente: 30 por hora por usuário (cada uma pode avisar os admins). A equipe NEXO responde sem
+# esse teto (admin.ticket_detalhe): quem atende não fica travado.
+@limiter.limit("30 per hour", methods=["POST"], key_func=chave_limite_usuario)
 def ticket_detalhe(id_chamado):
     """Conversa de um chamado da empresa do cliente; POST envia nova mensagem."""
     chamado = db.session.get(ChamadoSuporte, id_chamado)
@@ -833,13 +851,23 @@ def ticket_detalhe(id_chamado):
         abort(404)
 
     if request.method == "POST":
-        texto = (request.form.get("mensagem") or "").strip()
+        texto = chamados_suporte.normalizar_mensagem(request.form.get("mensagem"))
         if not texto:
             flash("Digite uma mensagem.", "warning")
             return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))
+        if chamados_suporte.mensagem_longa_demais(texto):
+            flash(chamados_suporte.MENSAGEM_LONGA, "warning")
+            return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))
 
+        # Clique duplo: com a empresa bloqueada até o commit, a mesma mensagem que ainda é a última do
+        # chamado não se repete (chamados_suporte.resposta_repetida).
+        bloquear_empresa(db.session, chamado.id_empresa)
         # Uma leitura do relógio: a resposta é a mensagem e a atualização do chamado.
         instante = agora_utc()
+        if chamados_suporte.resposta_repetida(id_chamado, current_user.id_usuario, texto, instante):
+            db.session.rollback()
+            flash(chamados_suporte.MENSAGEM_RESPOSTA_REPETIDA, "info")
+            return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))
         db.session.add(MensagemSuporte(
             id_chamado=id_chamado,
             id_usuario_remetente=current_user.id_usuario,
@@ -854,6 +882,8 @@ def ticket_detalhe(id_chamado):
         notificar_admins(
             f"Nova resposta de {nome_emp} no chamado “{chamado.assunto}”.",
             url_for("admin.ticket_detalhe", id_chamado=id_chamado),
+            # Respostas em sequência: um aviso por admin enquanto o anterior, igual, não é lido (10 min).
+            agrupar_em=chamados_suporte.JANELA_AVISO_AGRUPADO, agora=instante,
         )
         db.session.commit()
         return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))

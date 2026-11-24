@@ -26,7 +26,8 @@
                 <form method="POST" action="{{ url_for('admin.ticket_detalhe', id_chamado=chamado.id_chamado) }}" class="chat-reply mt-3">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="acao" value="responder">
-                    <textarea name="mensagem" class="form-control nexo-input" rows="3" placeholder="Escreva a resposta ao cliente…" required></textarea>
+                    <textarea name="mensagem" class="form-control nexo-input" rows="3" placeholder="Escreva a resposta ao cliente…" aria-describedby="mensagem_dica" maxlength="{{ LIMITE_MENSAGEM_CHAMADO }}" required></textarea>
+                    <p class="field-hint mt-1 mb-0" id="mensagem_dica">Até {{ LIMITE_MENSAGEM_CHAMADO_TEXTO }} caracteres por mensagem.</p>
                     <div class="d-flex justify-content-end mt-2">
                         <button type="submit" class="btn-nexo"><i class="bi bi-send"></i> Responder cliente</button>
                     </div>

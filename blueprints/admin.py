@@ -1,9 +1,11 @@
 import os
 import hashlib
+import re
 import secrets
 from io import BytesIO
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 from PIL import Image, UnidentifiedImageError
@@ -14,6 +16,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from blueprints.auth import corrigir_email_pelo_admin, limite_reautenticacao, trocar_senha_autenticada
+import chamados_suporte
 import configuracoes_conta
 from extensions import chave_limite_usuario, db, limiter
 from horario import BRASILIA, agora_utc
@@ -333,6 +336,17 @@ def analises():
                            empresa_selecionada=empresa_selecionada)
 
 
+def _analise_da_competencia(id_empresa, mes, ano, tipo, quinzena):
+    """O id da análise que a empresa já tem na competência (mês e ano), no tipo e na quinzena, ou None."""
+    return db.session.scalar(
+        select(Analise.id_analise).where(
+            Analise.id_empresa == id_empresa, Analise.mes_referencia == mes, Analise.ano_referencia == ano,
+            Analise.tipo_analise == tipo,
+            Analise.quinzena_referencia.is_(None) if quinzena is None else Analise.quinzena_referencia == quinzena,
+        ).order_by(Analise.id_analise).limit(1)
+    )
+
+
 @admin_bp.route("/analises/nova", methods=["GET", "POST"])
 @admin_required
 def analise_nova():
@@ -428,6 +442,17 @@ def analise_nova():
         if not (2000 <= ano_ref <= 2100):
             flash("Ano de referência deve estar entre 2000 e 2100.", "danger")
             return redirect(url_for("admin.analise_nova"))
+        # Clique duplo ou repetição: a mesma empresa, competência, tipo e quinzena não ganham uma segunda
+        # análise. A empresa já está bloqueada (acima): um segundo pedido simultâneo só confere depois de o
+        # primeiro gravar. A restrição única no banco fica para uma migration futura.
+        existente = _analise_da_competencia(id_empresa, mes_ref, ano_ref, tipo_analise, quinzena_ref)
+        if existente is not None:
+            nome_empresa = empresa.nome_fantasia or empresa.razao_social
+            db.session.rollback()
+            quinzena = f", {quinzena_ref}ª quinzena" if quinzena_ref else ""
+            flash(f"Já existe a análise #{existente} de {nome_empresa} para {mes_ref:02d}/{ano_ref} "
+                  f"({tipo_analise.lower()}{quinzena}). Nenhuma outra foi criada: siga pela existente.", "warning")
+            return redirect(url_for("admin.analise_upload", id_analise=existente))
 
         nova = Analise(
             id_empresa=id_empresa,
@@ -545,15 +570,40 @@ def _flash_envio_email(envio, descricao: str, *, orientar_reenvio: bool = False,
               "peça ao cliente que use “Esqueci minha senha” na tela de login.", "info")
 
 
-def _parse_decimal_opcional(valor: str):
-    """Aceita string vazia / pt-BR / en-US para faturamento_base_mensal (opcional)."""
-    if not valor or not valor.strip():
+_RE_ID_DO_FORMULARIO = re.compile(r"[0-9]{1,9}")
+_FATURAMENTO_MAXIMO = Decimal("999999999999.99")
+MENSAGEM_SEGMENTO_PLANO = "Selecione um segmento e um plano da lista."
+MENSAGEM_FATURAMENTO = ("Faturamento base mensal inválido: use só números, como 15000,00 ou 15.000,00 (ou deixe "
+                        "o campo em branco).")
+
+
+def _id_do_formulario(valor, validos) -> int | None:
+    """O id escolhido num <select> do formulário de empresa, conferido contra as opções que a tela oferece
+    (e, na edição, o valor atual). Texto, vazio, sinal, dígito não ASCII, número enorme ou id fora da lista:
+    None, e a tela mostra o erro em vez de um 500 (int() de texto) ou de um erro de chave estrangeira."""
+    texto = valor.strip() if isinstance(valor, str) else ""
+    if not _RE_ID_DO_FORMULARIO.fullmatch(texto):
         return None
-    s = valor.strip().replace(".", "").replace(",", ".") if "," in valor else valor.strip()
+    numero = int(texto)
+    return numero if numero in validos else None
+
+
+def _faturamento_do_formulario(valor):
+    """faturamento_base_mensal (opcional): vazio vira None; aceita o formato do campo numérico do navegador
+    (1500.50) e o brasileiro (1.500,50). NaN, infinito, negativo, texto ou valor absurdo levantam ValueError
+    (a tela mostra o erro, em vez de gravar um número inválido ou de ignorá-lo em silêncio)."""
+    texto = valor.strip() if isinstance(valor, str) else ""
+    if not texto:
+        return None
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
     try:
-        return float(s)
-    except ValueError:
-        return None
+        numero = Decimal(texto) if len(texto) <= 32 else None
+    except InvalidOperation:
+        numero = None
+    if numero is None or not numero.is_finite() or not Decimal(0) <= numero <= _FATURAMENTO_MAXIMO:
+        raise ValueError("faturamento base mensal inválido")
+    return numero + 0
 
 
 @admin_bp.route("/empresas/nova", methods=["GET", "POST"])
@@ -568,6 +618,28 @@ def empresa_nova():
             data_contratacao = datetime.strptime(form.get("data_contratacao", "").strip(), "%Y-%m-%d").date()
         except ValueError:
             flash("Data de contratação inválida (use o seletor de data).", "danger")
+            return redirect(url_for("admin.empresa_nova"))
+        # Valores adulterados (o formulário só oferece opções válidas) voltam ao formulário com o erro, em vez
+        # de um 500 (int() de texto) ou de um erro de chave estrangeira no banco.
+        id_segmento = _id_do_formulario(form.get("id_segmento"), {s.id_segmento for s in segmentos})
+        id_plano = _id_do_formulario(form.get("id_plano_atual"), {p.id_plano for p in planos})
+        if id_segmento is None or id_plano is None:
+            flash(MENSAGEM_SEGMENTO_PLANO, "danger")
+            return redirect(url_for("admin.empresa_nova"))
+        status_conta = form.get("status_conta", "ATIVA")
+        if status_conta not in STATUS_CONTA:
+            flash("Status da conta inválido.", "danger")
+            return redirect(url_for("admin.empresa_nova"))
+        try:
+            faturamento = _faturamento_do_formulario(form.get("faturamento_base_mensal"))
+        except ValueError:
+            flash(MENSAGEM_FATURAMENTO, "danger")
+            return redirect(url_for("admin.empresa_nova"))
+        cnpj = (form.get("cnpj") or "").strip()
+        razao_social = (form.get("razao_social") or "").strip()
+        usuario_nome = (form.get("usuario_nome") or "").strip()
+        if not cnpj or not razao_social or not usuario_nome:
+            flash("Preencha o CNPJ, a razão social e o nome do usuário de acesso.", "danger")
             return redirect(url_for("admin.empresa_nova"))
 
         # E-mails gravados na forma canônica (sem espaços, minúsculas): login e
@@ -592,19 +664,19 @@ def empresa_nova():
             return redirect(url_for("admin.empresa_nova"))
 
         nova_emp = Empresa(
-            id_segmento=int(form["id_segmento"]),
-            id_plano_atual=int(form["id_plano_atual"]),
-            cnpj=form["cnpj"].strip(),
-            razao_social=form["razao_social"].strip(),
+            id_segmento=id_segmento,
+            id_plano_atual=id_plano,
+            cnpj=cnpj,
+            razao_social=razao_social,
             nome_fantasia=(form.get("nome_fantasia") or "").strip() or None,
             email_contato=email_contato,
             telefone_contato=(form.get("telefone_contato") or "").strip() or None,
             data_contratacao=data_contratacao,
-            faturamento_base_mensal=_parse_decimal_opcional(form.get("faturamento_base_mensal", "")),
-            status_conta=form.get("status_conta", "ATIVA"),
+            faturamento_base_mensal=faturamento,
+            status_conta=status_conta,
         )
         novo_user = Usuario(
-            nome=form["usuario_nome"].strip(),
+            nome=usuario_nome,
             email=usuario_email,
             role="CLIENTE",
             ativo=True,
@@ -700,10 +772,31 @@ def empresa_editar(id_empresa):
                 db.session.rollback()
                 flash("Informe um e-mail de contato válido.", "danger")
                 return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
+            # Valores adulterados voltam ao formulário com o erro, sem gravar nada. O segmento e o plano atuais
+            # valem mesmo que tenham sido desativados depois.
+            id_segmento = _id_do_formulario(form.get("id_segmento"),
+                                            {s.id_segmento for s in segmentos} | {empresa.id_segmento})
+            id_plano = _id_do_formulario(form.get("id_plano_atual"),
+                                         {p.id_plano for p in planos} | {empresa.id_plano_atual})
+            if id_segmento is None or id_plano is None:
+                db.session.rollback()
+                flash(MENSAGEM_SEGMENTO_PLANO, "danger")
+                return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
+            razao_social = (form.get("razao_social") or "").strip()
+            if not razao_social:
+                db.session.rollback()
+                flash("Preencha a razão social.", "danger")
+                return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
+            try:
+                faturamento = _faturamento_do_formulario(form.get("faturamento_base_mensal"))
+            except ValueError:
+                db.session.rollback()
+                flash(MENSAGEM_FATURAMENTO, "danger")
+                return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
             # CNPJ é readonly no formulário; ignoramos qualquer valor vindo dele.
-            empresa.id_segmento = int(form["id_segmento"])
-            empresa.id_plano_atual = int(form["id_plano_atual"])
-            empresa.razao_social = form["razao_social"].strip()
+            empresa.id_segmento = id_segmento
+            empresa.id_plano_atual = id_plano
+            empresa.razao_social = razao_social
             empresa.nome_fantasia = (form.get("nome_fantasia") or "").strip() or None
             empresa.email_contato = email_contato
             empresa.telefone_contato = (form.get("telefone_contato") or "").strip() or None
@@ -720,7 +813,7 @@ def empresa_editar(id_empresa):
                 db.session.rollback()
                 flash("O status desta empresa foi alterado por outra operação. Recarregue a página e confira antes de salvar.", "warning")
                 return redirect(url_for("admin.empresa_editar", id_empresa=id_empresa))
-            empresa.faturamento_base_mensal = _parse_decimal_opcional(form.get("faturamento_base_mensal", ""))
+            empresa.faturamento_base_mensal = faturamento
             # Entrar ou sair de CANCELADA revoga as sessões dos CLIENTE na mesma
             # transação: a próxima requisição de cada um (página ou polling) é negada.
             aplicar_status_conta(db.session, empresa, novo_status)
@@ -1689,12 +1782,22 @@ def ticket_detalhe(id_chamado):
         acao = (request.form.get("acao") or "").strip().lower()
 
         if acao == "responder":
-            texto = (request.form.get("mensagem") or "").strip()
+            texto = chamados_suporte.normalizar_mensagem(request.form.get("mensagem"))
             if not texto:
                 flash("Digite uma resposta.", "warning")
                 return redirect(url_for("admin.ticket_detalhe", id_chamado=id_chamado))
+            if chamados_suporte.mensagem_longa_demais(texto):
+                flash(chamados_suporte.MENSAGEM_LONGA, "warning")
+                return redirect(url_for("admin.ticket_detalhe", id_chamado=id_chamado))
+            # Clique duplo da equipe: o mesmo cuidado da resposta do cliente (chamados_suporte), sem o teto de
+            # respostas por hora, que é só do cliente.
+            bloquear_empresa(db.session, chamado.id_empresa)
             # Uma leitura do relógio: a resposta é a mensagem e a atualização do chamado.
             instante = agora_utc()
+            if chamados_suporte.resposta_repetida(id_chamado, current_user.id_usuario, texto, instante):
+                db.session.rollback()
+                flash(chamados_suporte.MENSAGEM_RESPOSTA_REPETIDA, "info")
+                return redirect(url_for("admin.ticket_detalhe", id_chamado=id_chamado))
             db.session.add(MensagemSuporte(
                 id_chamado=id_chamado,
                 id_usuario_remetente=current_user.id_usuario,

@@ -3,6 +3,7 @@
 import io
 import logging
 import re
+from unittest.mock import patch
 
 from flask import abort
 from sqlalchemy import text
@@ -122,8 +123,11 @@ class ErroInternoRastreioTests(DeployTestCase):
         self.db.session.execute(text("ALTER TABLE mensagem_suporte RENAME TO mensagem_suporte_fora"))
         self.db.session.commit()
 
-        resposta, log = self._capturar(lambda: self.client.post(
-            caminho, data={"mensagem": SENTINELA, "csrf_token": token}))
+        # A conferência do clique duplo (chamados_suporte.resposta_repetida) lê a mesma tabela antes do INSERT:
+        # aqui ela passa, para a falha cair no INSERT que leva a mensagem (o valor que não pode ir ao log).
+        with patch("chamados_suporte.resposta_repetida", return_value=False):
+            resposta, log = self._capturar(lambda: self.client.post(
+                caminho, data={"mensagem": SENTINELA, "csrf_token": token}))
         self.assertEqual(resposta.status_code, 500)
         self.assertIn("Traceback", log)
         self.assertIn("INSERT INTO mensagem_suporte", log)
@@ -133,3 +137,11 @@ class ErroInternoRastreioTests(DeployTestCase):
         corpo = resposta.get_data(as_text=True)
         self.assertNotIn("pessoa.sentinela", corpo)
         self.assertIn(f"Código para o suporte: <code>{self._codigo_do_log(log)}</code>", corpo)
+        # Sem a dublagem, quem falha primeiro é a leitura da conferência: o log também fica sem os valores.
+        resposta, log = self._capturar(lambda: self.client.post(
+            caminho, data={"mensagem": SENTINELA, "csrf_token": token}))
+        self.assertEqual(resposta.status_code, 500)
+        self.assertIn("FROM mensagem_suporte", log)
+        self.assertIn("[SQL parameters hidden due to hide_parameters=True]", log)
+        for trecho in (SENTINELA, "123.456.789-09", "pessoa.sentinela", "lojaficticia"):
+            self.assertNotIn(trecho, log)

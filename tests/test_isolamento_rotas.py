@@ -12,6 +12,9 @@
      módulo do projeto fora dos da Avaliação de Cenário cita as tabelas ou os módulos de lead.
   4. Leads não se misturam: o diagnóstico (tela e JSON) de um lead só traz as linhas dele, mesmo com
      os mesmos relatórios num segundo lead, com o cache do diagnóstico ativo e com os dois sem linhas.
+  5. Chamados, sininho e mídia: o cliente não lê nem responde chamado de outra empresa; cada um só lê e marca
+     as próprias notificações; a rota de mídia só serve as imagens do guia (nem planilha guardada no banco, nem
+     arquivo do disco); e o admin recebe 403 em toda rota do cliente, por GET e por POST com o token CSRF.
 
 Exceção deliberada (decisão do dono em 15/11/2026): o Raio-X público (blueprints/avaliacao_publica.py) é a
 única rota fora de /admin que grava e lê lead, e só o da própria sessão. Ele entra em MODULOS_DO_LEAD, a
@@ -27,7 +30,7 @@ import re
 import tempfile
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 import avaliacao_cenario
 from tests.deploy_support import DeployTestCase
@@ -395,3 +398,115 @@ class EntreLeadsTests(_IsolamentoCase):
         with self.assertRaises(ValueError):
             diagnostico_cenario.montar_payload(_lead_para_payload(self.db.session.get(LeadAvaliacao, primeiro.id)),
                                                linhas, agora=agora_utc(), retencao_dias=30)
+
+
+# =============================================================================
+# 5. Chamados, sininho, mídia e as rotas do cliente pelo admin
+# =============================================================================
+class ChamadosEntreEmpresasTests(_IsolamentoCase):
+    def test_cliente_nao_ve_nem_responde_chamado_de_outra_empresa(self):
+        from models import ChamadoSuporte, Empresa, MensagemSuporte, Notificacao, Usuario
+        outra = self.db.session.scalar(select(Empresa).where(Empresa.razao_social == "Empresa fictícia 2"))
+        dono = Usuario(nome="Cliente fictício da outra empresa", email="outra-empresa@example.invalid", role="CLIENTE",
+                       id_empresa=outra.id_empresa, primeiro_acesso=False)
+        dono.set_senha(self.password)
+        self.db.session.add(dono)
+        self.db.session.flush()
+        chamado = ChamadoSuporte(id_empresa=outra.id_empresa, id_usuario_cliente=dono.id_usuario,
+                                 assunto="Assunto exclusivo da outra empresa", categoria="FINANCEIRO")
+        self.db.session.add(chamado)
+        self.db.session.flush()
+        self.db.session.add(MensagemSuporte(id_chamado=chamado.id_chamado, id_usuario_remetente=dono.id_usuario,
+                                            mensagem="Mensagem exclusiva da outra empresa"))
+        self.db.session.commit()
+        id_chamado = chamado.id_chamado
+        privados = ("Assunto exclusivo da outra empresa", "Mensagem exclusiva da outra empresa", outra.razao_social)
+        avisos_antes = self.db.session.scalar(select(func.count()).select_from(Notificacao))
+        self.login()
+        lista = self.client.get("/cliente/tickets")
+        self.assertEqual(lista.status_code, 200)
+        token = self.csrf_token("/cliente/tickets")
+        for metodo, dados in (("GET", None), ("POST", {"csrf_token": token, "mensagem": "Tentativa fictícia"})):
+            with self.subTest(metodo=metodo):
+                resposta = self.client.open(f"/cliente/tickets/{id_chamado}", method=metodo, data=dados)
+                self.assertEqual(resposta.status_code, 404)
+                for texto in privados:
+                    self.assertNotIn(texto, resposta.get_data(as_text=True))
+        for texto in privados:
+            self.assertNotIn(texto, lista.get_data(as_text=True))
+        # Nada gravado: nem mensagem, nem aviso aos admins.
+        self.db.session.expire_all()
+        self.assertEqual(self.db.session.scalar(select(func.count()).select_from(MensagemSuporte).where(
+            MensagemSuporte.id_chamado == id_chamado)), 1)
+        self.assertEqual(self.db.session.scalar(select(func.count()).select_from(Notificacao)), avisos_antes)
+
+
+class SininhoEntreUsuariosTests(_IsolamentoCase):
+    def test_cada_um_so_le_e_marca_as_proprias_notificacoes(self):
+        from models import Notificacao
+        alheia = Notificacao(id_usuario=self.admin_id, texto="Aviso exclusivo do admin", link_destino="/admin/tickets")
+        propria = Notificacao(id_usuario=self.cliente_id, texto="Aviso do próprio cliente",
+                              link_destino="/cliente/tickets")
+        self.db.session.add_all([alheia, propria])
+        self.db.session.commit()
+        ids = {"alheia": alheia.id_notificacao, "propria": propria.id_notificacao}
+        self.login()
+        dados = self.client.get("/notificacoes/novas?desde=0").get_json()
+        self.assertEqual(([n["texto"] for n in dados["novas"]], dados["nao_lidas"]), (["Aviso do próprio cliente"], 1))
+        pagina = self.client.get("/cliente/dashboard").get_data(as_text=True)
+        self.assertNotIn("Aviso exclusivo do admin", pagina)
+        token = self.csrf_token("/cliente/dashboard")
+        # Abrir a do outro: volta ao painel do cliente, sem seguir o link e sem marcar como lida.
+        aberta = self.client.post(f"/notificacoes/{ids['alheia']}/abrir", data={"csrf_token": token})
+        self.assertEqual(aberta.status_code, 302)
+        self.assertNotIn("/admin/", aberta.headers["Location"])
+        self.assertEqual(self.client.post("/notificacoes/marcar-lidas", data={"csrf_token": token}).status_code, 302)
+        self.db.session.expire_all()
+        self.assertEqual({nome: self.db.session.get(Notificacao, ident).lida for nome, ident in ids.items()},
+                         {"alheia": False, "propria": True})
+
+
+class MidiaForaDoGuiaTests(_IsolamentoCase):
+    def test_so_as_imagens_do_guia_saem_pela_rota_de_midia(self):
+        import storage
+        storage.salvar(b"\x89PNG\r\n\x1a\nimagem-ficticia-do-guia", "guia/imagem-ficticia.png")
+        storage.salvar(b"Produto;Qtde\nPlanilha exclusiva do cliente;1\n", "relatorio-ficticio.csv")
+        self.db.session.commit()
+        visitante = self.app.test_client()
+        self.assertIn(visitante.get("/midia/guia/imagem-ficticia.png").status_code, NEGADO_AO_VISITANTE)
+        fora = ("/midia/relatorio-ficticio.csv", "/midia/guia/relatorio-ficticio.csv",
+                "/midia/guia/../relatorio-ficticio.csv", "/midia/guia/%2e%2e/relatorio-ficticio.csv",
+                "/midia/guia/..%2frelatorio-ficticio.csv", "/midia/guia//relatorio-ficticio.csv",
+                "/midia/./relatorio-ficticio.csv",
+                # Nem arquivo do disco: a chave nunca vira caminho.
+                "/midia/guia/../../app.py", "/midia/guia/..%2f..%2fapp.py", "/static/../app.py", "/static/..%2fapp.py")
+        for email in ("cliente-test@example.invalid", "admin-test@example.invalid"):
+            self.login(email)
+            # Controle: a imagem do guia sai para quem está logado.
+            self.assertEqual(self.client.get("/midia/guia/imagem-ficticia.png").status_code, 200)
+            for caminho in fora:
+                with self.subTest(usuario=email, caminho=caminho):
+                    # A barra dupla volta um 308 para o caminho sem ela: vale a resposta final.
+                    resposta = self.client.get(caminho, follow_redirects=True)
+                    self.assertIn(resposta.status_code, (400, 404))
+                    corpo = resposta.get_data().decode("utf-8", errors="replace")
+                    self.assertNotIn("Planilha exclusiva do cliente", corpo)
+                    self.assertNotIn("create_app", corpo)
+            self.logout()
+
+
+class RotasDoClienteComoAdminTests(_IsolamentoCase):
+    def test_admin_recebe_403_em_toda_rota_do_cliente_mesmo_com_csrf(self):
+        regras = self.regras("/cliente")
+        self.assertGreaterEqual(len(regras), 20)
+        self.login("admin-test@example.invalid")
+        token = self.csrf_token("/admin/tickets")
+        valores = {"id_analise": self.analise_id, "id_chamado": 1}
+        for regra in regras:
+            caminho = _url(regra, valores)
+            for metodo in sorted(regra.methods - {"HEAD", "OPTIONS"}):
+                with self.subTest(metodo=metodo, rota=regra.rule):
+                    dados = {"csrf_token": token} if metodo == "POST" else None
+                    resposta = self.client.open(caminho, method=metodo, data=dados)
+                    self.assertEqual(resposta.status_code, 403)
+                    self.assertNotIn("Empresa fictícia 1", resposta.get_data(as_text=True))
