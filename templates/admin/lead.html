@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
+{% import "admin/_leads_macros.html" as lm %}
 
 {% block title %}{{ lead.nome_loja }} · Avaliação de Cenário — NEXO Admin{% endblock %}
 {% block page_title %}Avaliação de Cenário{% endblock %}
@@ -12,7 +13,7 @@
 <div class="page-head">
     <div>
         <h1 class="text-break">{{ lead.nome_loja }}</h1>
-        <p class="sub text-break">{{ lead.nome_contato }} · <span class="t-email">{{ lead.email }}</span>{% if lead.whatsapp %} · WhatsApp {{ lead.whatsapp }}{% endif %}</p>
+        <p class="sub text-break">{{ lead.nome_contato }} · <span class="t-email">{{ lead.email }}</span>{% if lead.whatsapp %} · WhatsApp {{ lm.whatsapp(lead.whatsapp, lead.nome_contato) }}{% endif %}</p>
         {%- if lead.origem == 'site' %}
         <p class="sub text-break"><span class="nexo-badge b-purple"><span class="dot"></span>Site</span> Raio-X público · protocolo {{ lead.protocolo }}{% if lead.plano_interesse %} · plano de interesse: {{ rotulos_planos_interesse.get(lead.plano_interesse, lead.plano_interesse) }}{% endif %}{% if lead.faixa_faturamento %} · faturamento: {{ rotulos_faixas_faturamento.get(lead.faixa_faturamento, lead.faixa_faturamento) }}{% endif %}</p>
         {%- if lead.dificuldade %}

@@ -26,7 +26,7 @@
             <a href="{{ url_upgrade }}" class="btn-nexo"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> {{ ('Conhecer o plano ' ~ plano_necessario.nome) if plano_necessario else 'Falar com a equipe NEXO' }}</a>
             {%- if wa %}
             {%- if codigo == 'assinatura_inativa' %}
-            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Atendimento pelo WhatsApp') }}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Falar pelo WhatsApp') }}
             {%- elif plano_necessario %}
             {{ m.link_whatsapp(wa, m.whatsapp_textos.mudar_plano, 'Mudar de plano pelo WhatsApp') }}
             {%- else %}

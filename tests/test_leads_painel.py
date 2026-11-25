@@ -6,7 +6,9 @@
   2. O fragmento do painel (GET /admin/leads/<id>/painel): só o consultor, sem cache, marcado, sem base.html, com o
      diagnóstico completo (o mesmo da página do lead, sem desfoque) e os ids prefixados; o lead pendente; o log.
   3. A página completa do lead continua com o mesmo conteúdo de antes do painel (tests/fixtures/
-     lead_antes_do_painel.html, a cópia fiel do template de antes), mais as planilhas do lead da landing.
+     lead_antes_do_painel.html, a cópia fiel do template de antes), mais as planilhas do lead da landing. Desde
+     24/11/2026, a fixture e a página mostram o WhatsApp do lead no cabeçalho como link (macro lm.whatsapp), como na
+     lista e no painel; o resto da página segue conferido contra o template de antes.
   4. As planilhas no Storage (um dublê do cliente; nenhum serviço externo): só as do registro conferido viram pedido;
      download avulso e .zip com os cabeçalhos certos; 404, 502 e 503 curtos e sem detalhe interno; log só com ids.
   5. O processamento (POST /admin/leads/<id>/processar): grava a avaliação no próprio lead e volta com o painel
@@ -551,6 +553,28 @@ class PaginaCompletaTests(_PainelCase):
         for secao in ("caixaTitulo", "triagemTitulo", "matrizTitulo", "estoqueTitulo", "simuladorTitulo",
                       "auditoriaTitulo", "blocourgencia", "refazerTitulo"):
             self.assertIn(f'id="{secao}"', antes)
+
+    def test_cabecalho_mostra_o_whatsapp_do_lead_como_link(self):
+        """Como na lista e no painel (macro lm.whatsapp): o número que serve para o wa.me vira link, sem mensagem
+        pronta e com o contato para o leitor de tela; o que não serve fica como texto; sem número, nada."""
+        from models import LeadAvaliacao
+        lead_id = self.lead_do_consultor()
+
+        def cabecalho(whatsapp):
+            self.db.session.get(LeadAvaliacao, lead_id).whatsapp = whatsapp
+            self.db.session.commit()
+            html = self.html(f"{PAGINA}/{lead_id}")
+            return html[html.index('<div class="page-head">'):html.index('<div class="page-head-actions">')]
+
+        trecho = cabecalho("11900000000")
+        self.assertIn('href="https://wa.me/5511900000000?text=" target="_blank" rel="noopener noreferrer"', trecho)
+        self.assertIn("(11) 90000-0000", trecho)
+        self.assertIn('<span class="visually-hidden"> de Contato fictício (abre o WhatsApp em nova aba)</span>', trecho)
+        self.assertNotIn("WhatsApp 11900000000", trecho)
+        trecho = cabecalho("+12025550100")
+        self.assertNotIn("wa.me", trecho)
+        self.assertIn('· WhatsApp <span class="t-mono text-break">+12025550100</span>', trecho)
+        self.assertNotIn("WhatsApp", cabecalho(None))
 
     def test_pagina_do_lead_do_site_ganha_so_as_planilhas(self):
         lead_id = self.lead_do_site([LOTE[0], XLSX], nomes={1: "<b>vendas</b>.csv"})

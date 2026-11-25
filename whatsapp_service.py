@@ -198,49 +198,65 @@ def _saudacao(nome_cliente) -> str:
 # ---------------------------------------------------------------------------
 # Textos das mensagens automáticas (gatilhos)
 # ---------------------------------------------------------------------------
+# A primeira linha leva o fato (é o que a notificação do celular mostra); a marca fica na assinatura.
+ASSINATURA = "_Equipe NEXO Faturamento Inteligente_"
+
+
+def _mensagem(*blocos) -> str:
+    """Blocos separados por uma linha em branco (formatação do WhatsApp); os vazios saem. As quebras
+    de linha vêm só destes blocos fixos: nomes e status passam por texto_seguro, numa linha só."""
+    return "\n\n".join(bloco for bloco in blocos if bloco)
+
+
 def texto_relatorio_pronto(nome_cliente, empresa, valor_recuperavel, *, acesso_ao_portal: bool = True) -> str:
-    """Relatório pronto. O valor só entra quando é um número positivo: sem ele (a análise
-    mensal não calcula potencial recuperável), a mensagem avisa só que o relatório saiu.
-    Quem não tem acesso ao portal recebe o convite da equipe no lugar do link."""
+    """Relatório pronto (análise publicada, Raio-X ou avaliação do lead): o fato, o próximo passo e a
+    assinatura.
+
+    O valor não entra mais no texto, em caso nenhum (cliente, Raio-X ou lead), por decisão do dono
+    de 24/11/2026 (segurança e LGPD): o telefone de destino não é confirmado e pode ser de outra
+    pessoa. `valor_recuperavel` continua na assinatura só para os chamadores (as rotas de
+    blueprints/admin.py, leads.py e onboarding.py) não mudarem; os detalhes ficam no portal.
+    Quem não tem acesso ao portal (o lead) recebe "a avaliação", como na confirmação do consultor,
+    e o aviso de que a equipe NEXO vai entrar em contato no lugar do portal."""
+    del valor_recuperavel  # decisão do dono de 24/11/2026: nenhum valor em reais na mensagem
     nome_empresa = texto_seguro(empresa, _LIMITE_EMPRESA)
-    alvo = f"O relatório de {nome_empresa}" if nome_empresa else "O seu relatório"
-    partes = [_saudacao(nome_cliente), f"{alvo} está pronto no NEXO Faturamento Inteligente."]
-    centavos = _centavos(valor_recuperavel)
-    if centavos is not None and centavos > 0:  # R$ 0,004 não vira "R$ 0,00 recuperável"
-        partes.append(f"Encontramos {formatar_reais(centavos)} em potencial recuperável.")
-    partes.append("Acesse o portal para ver os detalhes." if acesso_ao_portal
-                  else "A equipe NEXO vai entrar em contato para apresentar os resultados.")
-    return " ".join(partes)
+    if acesso_ao_portal:
+        fato = f"O relatório de {nome_empresa} está pronto." if nome_empresa else "O seu relatório está pronto."
+        acao = "Acesse o portal NEXO para ver os detalhes."
+    else:
+        fato = f"A avaliação de {nome_empresa} está pronta." if nome_empresa else "A sua avaliação está pronta."
+        acao = "A equipe NEXO vai entrar em contato para apresentar os resultados."
+    return _mensagem(f"{_saudacao(nome_cliente)} {fato}", acao, ASSINATURA)
 
 
 def texto_abertura_mensal(nome_cliente, mes_referencia, *, quinzena=None) -> str:
-    """Abertura do envio dos relatórios do mês de referência (mês ilegível: "do mês"); na análise
-    quinzenal, a quinzena que abriu ("da 1ª quinzena de outubro de 2026")."""
+    """Envio aberto para o mês de referência (mês ilegível: "do mês"); na análise quinzenal,
+    a quinzena que abriu ("da *1ª quinzena de outubro de 2026*")."""
     mes = mes_por_extenso(mes_referencia)
     if quinzena in (1, 2) and not isinstance(quinzena, bool):
-        periodo = f"dos relatórios da {quinzena}ª quinzena " + (f"de {mes}" if mes else "do mês")
+        periodo = f"da *{quinzena}ª quinzena de {mes}*" if mes else f"da {quinzena}ª quinzena do mês"
     else:
-        periodo = f"dos relatórios de {mes}" if mes else "dos relatórios do mês"
-    return " ".join((
-        _saudacao(nome_cliente),
-        f"O envio {periodo} está aberto no NEXO Faturamento Inteligente.",
-        "Envie os arquivos pelo portal para receber a análise do mês.",
-    ))
+        periodo = f"de *{mes}*" if mes else "do mês"
+    return _mensagem(
+        f"{_saudacao(nome_cliente)} Você já pode enviar os relatórios {periodo}.",
+        "Anexe o de vendas e o de compras em *Enviar relatórios*, no portal NEXO, para receber a sua análise.",
+        ASSINATURA,
+    )
 
 
 def texto_atualizacao_ticket(nome_cliente, ticket_id, novo_status) -> str:
-    """Chamado de suporte respondido ou com o status alterado."""
+    """Chamado de suporte respondido ou com o status alterado; resolvido diz como pedir mais ajuda."""
     if isinstance(ticket_id, int) and not isinstance(ticket_id, bool):
         numero = f" #{ticket_id}"
     else:
         identificador = texto_seguro(ticket_id, 20).lstrip("#")
         numero = f" #{identificador}" if identificador else ""
     status = rotulo_status(novo_status)
-    partes = [_saudacao(nome_cliente), f"O seu chamado{numero} no NEXO Faturamento Inteligente foi atualizado."]
-    if status:
-        partes.append(f"Situação atual: {status}.")
-    partes.append("Acesse o portal para ver os detalhes.")
-    return " ".join(partes)
+    acao = ("Se ainda precisar de ajuda, responda no próprio chamado, no portal NEXO, em *Suporte*."
+            if status == ROTULOS_STATUS["RESOLVIDO"]
+            else "Acesse o portal NEXO, em *Suporte*, para ver os detalhes e responder.")
+    return _mensagem(f"{_saudacao(nome_cliente)} O seu chamado{numero} foi atualizado.",
+                     f"Situação atual: *{status}*" if status else "", acao, ASSINATURA)
 
 
 # ---------------------------------------------------------------------------

@@ -60,7 +60,8 @@
                 <div class="col-12 col-md-4">
                     <label class="nexo-label" for="telefone_contato">Telefone de contato</label>
                     <input type="text" class="form-control" id="telefone_contato" name="telefone_contato"
-                           value="{{ empresa.telefone_contato if (ed and empresa.telefone_contato) else '' }}" placeholder="(00) 00000-0000">
+                           value="{{ empresa.telefone_contato if (ed and empresa.telefone_contato) else '' }}" placeholder="(00) 00000-0000" aria-describedby="telefone_contato_dica">
+                    <p class="field-hint mt-1 mb-0" id="telefone_contato_dica">Com DDD. Se for celular com WhatsApp, recebe os avisos automáticos do NEXO quando eles estão ligados.</p>
                 </div>
                 <div class="col-12 col-md-4">
                     <label class="nexo-label" for="data_contratacao">Data de contratação <span class="req">*</span></label>

@@ -68,7 +68,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="mudarPlanoTitulo"><i class="bi bi-arrow-up-circle text-purple" aria-hidden="true"></i> Mudar de plano</h2>
-            <p class="sub">A mudança é feita pela equipe NEXO. Este pedido abre um chamado no Suporte, com o plano escolhido.{% if wa %} Se preferir, peça pelo WhatsApp.{% endif %}</p>
+            <p class="sub">A mudança é feita pela equipe NEXO. Este pedido abre um chamado no Suporte, com o plano escolhido.{% if wa %} Se preferir, fale com a equipe pelo WhatsApp e informe lá o plano desejado.{% endif %}</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -88,7 +88,7 @@
             {%- if wa %}
             <div class="d-flex flex-wrap gap-2">
                 <button type="submit" class="btn-nexo"><i class="bi bi-send" aria-hidden="true"></i> Pedir a mudança pelo Suporte</button>
-                {{ m.link_whatsapp(wa, m.whatsapp_textos.mudar_plano, 'Pedir a mudança pelo WhatsApp') }}
+                {{ m.link_whatsapp(wa, m.whatsapp_textos.mudar_plano, 'Conversar pelo WhatsApp') }}
             </div>
             {%- else %}
             <button type="submit" class="btn-nexo"><i class="bi bi-send" aria-hidden="true"></i> Pedir a mudança pelo Suporte</button>

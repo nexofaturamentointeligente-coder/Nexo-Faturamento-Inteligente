@@ -43,6 +43,7 @@ from politica_senha import TAMANHO_MAXIMO, TAMANHO_MINIMO
 from preferencias_usuario import (
     esquema_configuracoes_disponivel, ids_com_aviso_desligado, obter_preferencias,
 )
+import whatsapp_service
 
 logger = logging.getLogger(__name__)
 
@@ -655,8 +656,24 @@ def situacao_smtp() -> dict:
             "testavel": diagnostico["transporte"] == "smtp"}
 
 
+def _avisos_por_whatsapp(empresa) -> tuple[bool, bool]:
+    """(avisos por WhatsApp ligados, telefone cadastrado que não recebe esses avisos), só para o texto da
+    tela: lê a configuração da Evolution e o telefone já gravado, sem rede e sem gravar nada. A regra do
+    número é a do próprio disparo (higienizar_telefone). Com os disparos desligados, ou se a conferência
+    falhar, os dois saem falsos e a tela fica como sem o WhatsApp."""
+    try:
+        ligados = whatsapp_service.notificador().configurado
+    except Exception as erro:  # noqa: BLE001 - texto auxiliar: a página abre como sem o WhatsApp
+        logger.warning("Configurações: estado dos avisos por WhatsApp não conferido (%s).", type(erro).__name__)
+        return False, False
+    telefone = getattr(empresa, "telefone_contato", None)
+    cadastrado = isinstance(telefone, str) and bool(telefone.strip())
+    return ligados, ligados and cadastrado and whatsapp_service.higienizar_telefone(telefone) is None
+
+
 def contexto_cliente(usuario: Usuario) -> dict:
     disponivel = esquema_configuracoes_disponivel()
+    avisos_whatsapp, telefone_sem_whatsapp = _avisos_por_whatsapp(usuario.empresa)
     return {
         "esquema_disponivel": disponivel,
         "preferencias": obter_preferencias(usuario.id_usuario),
@@ -665,6 +682,8 @@ def contexto_cliente(usuario: Usuario) -> dict:
         "dias_aviso_renovacao": current_app.config["CONTRATO_AVISO_RENOVACAO_DIAS"],
         "senha_minima": TAMANHO_MINIMO, "senha_maxima": TAMANHO_MAXIMO,
         "envio_ativo": envio_disponivel(current_app.config),
+        "whatsapp_avisos_ativos": avisos_whatsapp,
+        "telefone_sem_whatsapp": telefone_sem_whatsapp,
     }
 
 

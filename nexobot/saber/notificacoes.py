@@ -45,7 +45,11 @@ REGISTROS = (
         ),
         explicacao=(
             "A equipe NEXO, por sua vez, é avisada quando você envia um relatório, abre um chamado ou responde "
-            "em um chamado. Os avisos só são enviados depois que a ação foi confirmada no sistema."
+            "em um chamado. Os avisos só são enviados depois que a ação foi confirmada no sistema.\n\n"
+            "Quando a equipe NEXO liga os avisos por WhatsApp, o telefone de contato da empresa (o de "
+            "Configurações) também recebe uma mensagem curta quando uma análise é publicada, quando um Raio-X "
+            "fica pronto, quando o envio do mês é liberado e quando um chamado é respondido ou muda de situação. "
+            "A mensagem só avisa: os detalhes ficam no portal."
         ),
         perguntas=(
             "Quando recebo uma notificação?", "Que avisos o portal envia?", "Quais eventos geram notificação?",
@@ -101,8 +105,9 @@ REGISTROS = (
             "e-mail ativo, uma mensagem por e-mail. Clique no aviso para abrir a conversa."
         ),
         explicacao=(
-            "Você pode desligar esses alertas em Configurações. O e-mail de contato da empresa, se for outro, "
-            "continua recebendo o aviso de chamado resolvido."
+            "Você pode desligar esses alertas em Configurações; com os avisos por WhatsApp ligados, desligar "
+            "também interrompe as mensagens dos chamados que você abriu no telefone da empresa. O e-mail de "
+            "contato da empresa, se for outro, continua recebendo o aviso de chamado resolvido."
         ),
         perguntas=(
             "Vou ser avisado da resposta do chamado?", "Como sei que responderam meu ticket?",

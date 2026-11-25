@@ -139,6 +139,16 @@ class _WhatsAppMixin:
     def _sem_mensagem(self):
         self.assertEqual(self.pedidos, [])
 
+    def _sem_valor(self, texto, valor=None):
+        """Nenhum valor em reais no aviso (decisão do dono de 24/11/2026, segurança e LGPD): nem o
+        valor que a rota passou, em nenhuma das formas em que ele poderia aparecer."""
+        self.assertNotIn("R$", texto)
+        self.assertNotIn("recuperável", texto)
+        if valor is not None:
+            numero = Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            for forma in (_reais(valor), _reais(valor)[3:], str(numero), str(numero).replace(".", ",")):
+                self.assertNotIn(forma, texto)
+
     # ------------------------------------------------------------------ HTTP
     def _csrf(self, cliente, caminho):
         resposta = cliente.get(caminho)
@@ -540,8 +550,8 @@ class AberturaDoEnvioTests(_PortalCase):
                 self.assertEqual(resposta.status_code, 302)
                 textos.append(self._mensagem(NUMERO_EMPRESA)["texto"])
         self.assertEqual(self._analises_confirmadas(10, 2026), 2)
-        self.assertIn("O envio dos relatórios da 1ª quinzena de outubro de 2026 está aberto", textos[0])
-        self.assertIn("O envio dos relatórios da 2ª quinzena de outubro de 2026 está aberto", textos[1])
+        self.assertIn("Você já pode enviar os relatórios da *1ª quinzena de outubro de 2026*.", textos[0])
+        self.assertIn("Você já pode enviar os relatórios da *2ª quinzena de outubro de 2026*.", textos[1])
 
     def test_lancamento_retroativo_nao_avisa_e_o_mes_anterior_avisa(self):
         # Hoje é 13/11/2026: setembro é histórico (o admin sobe os arquivos), outubro é o mês
@@ -607,9 +617,8 @@ class AnalisePublicadaTests(_PortalCase):
         # Aviso da empresa: cumprimenta a empresa, como a abertura do envio.
         self.assertTrue(pedido["texto"].startswith(f"Olá, {EMPRESA}! O seu relatório está pronto"), pedido["texto"])
         self.assertIn("Acesse o portal", pedido["texto"])
-        # A análise mensal não calcula potencial recuperável: a mensagem sai sem valor.
-        for ausente in ("Encontramos", "R$", "potencial recuperável"):
-            self.assertNotIn(ausente, pedido["texto"])
+        # Nenhum relatório pronto leva valor (decisão do dono de 24/11/2026).
+        self._sem_valor(pedido["texto"])
         self.assertTrue(pedido["no_banco"])
         self.email.assert_called_once()
 
@@ -653,13 +662,14 @@ class AnalisePublicadaTests(_PortalCase):
 
 
 class RaioXEntradaTests(_PortalCase):
-    """Raio-X de entrada do cliente (página e API): relatório pronto com o potencial recuperável."""
+    """Raio-X de entrada do cliente (página e API): relatório pronto, sem o valor recuperável (decisão do
+    dono de 24/11/2026: o valor fica só no portal)."""
 
     def setUp(self):
         super().setUp()
         self.cliente_http = self._entrar(CLIENTE)
 
-    def test_raio_x_pela_pagina_avisa_com_o_valor_recuperavel(self):
+    def test_raio_x_pela_pagina_avisa_sem_o_valor_recuperavel(self):
         self._telefone()
         self.ao_disparar = self._raio_x_confirmados
         resposta = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO), ("fev.csv", FEVEREIRO))
@@ -668,34 +678,35 @@ class RaioXEntradaTests(_PortalCase):
         linha = self._raio_x_gravado()
         self.assertGreater(linha.valor_recuperavel, 0)
         pedido = self._mensagem(NUMERO_EMPRESA)
-        for trecho in (NOME_CLIENTE, f"O relatório de {EMPRESA} está pronto",
-                       f"Encontramos {_reais(linha.valor_recuperavel)} em potencial recuperável.",
-                       "Acesse o portal"):
+        for trecho in (NOME_CLIENTE, f"O relatório de {EMPRESA} está pronto.",
+                       "Acesse o portal NEXO para ver os detalhes."):
             self.assertIn(trecho, pedido["texto"])
+        # A rota passa o valor positivo, mas ele não entra na mensagem.
+        self._sem_valor(pedido["texto"], linha.valor_recuperavel)
         # Depois do commit e fora da vaga única de upload.
         self.assertEqual(pedido["no_banco"], 1)
         self.assertTrue(pedido["vaga_livre"])
 
-    def test_raio_x_pela_api_avisa_e_sem_potencial_sai_sem_valor(self):
+    def test_raio_x_pela_api_avisa_sem_valor_com_e_sem_potencial(self):
         self._telefone()
         resposta = self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO), api=True)
         self.assertEqual(resposta.status_code, 201)
         linha = self._raio_x_gravado()
         self.assertGreater(linha.valor_recuperavel, 0)
-        # O valor da mensagem é o da tela e do JSON (recuperavel.total), gravado em DiagnosticoEntrada.
+        # O valor fica na tela e no JSON (recuperavel.total), gravado em DiagnosticoEntrada; não na mensagem.
         self.assertEqual(Decimal(str(resposta.get_json()["resultado"]["recuperavel"]["total"])), linha.valor_recuperavel)
         pedido = self._mensagem(NUMERO_EMPRESA)
         self.assertIn(NOME_CLIENTE, pedido["texto"])
-        self.assertIn(f"Encontramos {_reais(linha.valor_recuperavel)} em potencial recuperável.", pedido["texto"])
+        self._sem_valor(pedido["texto"], linha.valor_recuperavel)
         self.assertTrue(pedido["vaga_livre"])
-        # Sem nada a recuperar, o aviso sai sem a linha do valor.
+        # Sem nada a recuperar, o aviso é o mesmo: o valor não muda o texto.
         resposta = self._enviar_raio_x(self.cliente_http, ("fev.csv", FEVEREIRO), api=True)
         self.assertEqual(resposta.status_code, 201)
         self.assertEqual(self._raio_x_gravado().valor_recuperavel, 0)
         texto = self._mensagem(NUMERO_EMPRESA)["texto"]
         self.assertIn(f"O relatório de {EMPRESA} está pronto", texto)
-        self.assertNotIn("Encontramos", texto)
-        self.assertNotIn("R$", texto)
+        self._sem_valor(texto)
+        self.assertEqual(texto, pedido["texto"])
 
     def test_raio_x_sem_telefone_nao_avisa(self):
         self.assertEqual(self._enviar_raio_x(self.cliente_http, ("jan.csv", JANEIRO)).status_code, 303)
@@ -883,10 +894,11 @@ class LeadTests(_LeadsCase):
         valor = lead.vazamento_total_reais
         self.assertGreater(valor, 0)
         pedido = self._mensagem(NUMERO_LEAD)
-        for trecho in ("Contato fictício", "O relatório de Mercado fictício está pronto",
-                       f"Encontramos {_reais(valor)} em potencial recuperável.",
-                       "A equipe NEXO vai entrar em contato"):
+        for trecho in ("Contato fictício", "A avaliação de Mercado fictício está pronta.",
+                       "A equipe NEXO vai entrar em contato para apresentar os resultados."):
             self.assertIn(trecho, pedido["texto"])
+        # O valor da avaliação fica com a equipe: não vai ao WhatsApp do lead (decisão do dono de 24/11/2026).
+        self._sem_valor(pedido["texto"], valor)
         # O lead não tem acesso ao portal.
         self.assertNotIn("Acesse o portal", pedido["texto"])
         # Depois do commit e fora da vaga única de upload.
@@ -898,10 +910,9 @@ class LeadTests(_LeadsCase):
         lead = self._lead()
         self.assertEqual(lead.vazamento_total_reais, 0)
         texto = self._mensagem(NUMERO_LEAD)["texto"]
-        self.assertIn("O relatório de Mercado fictício está pronto", texto)
+        self.assertIn("A avaliação de Mercado fictício está pronta", texto)
         self.assertIn("A equipe NEXO vai entrar em contato", texto)
-        self.assertNotIn("Encontramos", texto)
-        self.assertNotIn("R$", texto)
+        self._sem_valor(texto)
 
     def test_whatsapp_com_ddi_digitado_sai_no_mesmo_numero(self):
         self.assertEqual(self._avaliar(*_arquivos(LOTE), whatsapp="+55 (11) 90000-0000").status_code, 303)
@@ -928,10 +939,10 @@ class LeadTests(_LeadsCase):
         self.assertEqual((lead.id, lead.arquivos), (lead_id, 2))
         self.assertGreater(lead.vazamento_total_reais, 0)
         pedido = self._mensagem(NUMERO_LEAD)
-        # O contato é o gravado no primeiro envio; o valor, o da avaliação refeita.
-        for trecho in ("Contato fictício", "O relatório de Mercado fictício está pronto",
-                       f"Encontramos {_reais(lead.vazamento_total_reais)} em potencial recuperável."):
+        # O contato é o gravado no primeiro envio; o valor da avaliação refeita não entra na mensagem.
+        for trecho in ("Contato fictício", "A avaliação de Mercado fictício está pronta."):
             self.assertIn(trecho, pedido["texto"])
+        self._sem_valor(pedido["texto"], lead.vazamento_total_reais)
         self.assertEqual(pedido["no_banco"], 1)
         self.assertTrue(pedido["vaga_livre"])
         # Retriagem: o consultor ajusta a triagem dos mesmos dados; não é relatório novo.

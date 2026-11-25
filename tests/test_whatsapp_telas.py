@@ -622,12 +622,12 @@ class ComNumeroTests(_WhatsAppCase):
         self.login()
         html, dom = self.pagina("/onboarding/planos")
         [link] = dom.whatsapp()
-        self.assert_link(link, MENSAGENS["mudar_plano"], "Pedir a mudança pelo WhatsApp", classe="btn-ghost")
+        self.assert_link(link, MENSAGENS["mudar_plano"], "Conversar pelo WhatsApp", classe="btn-ghost")
         secao = _trecho(html, 'aria-labelledby="mudarPlanoTitulo"', "</section>")
         self.assertEqual(len(_Pagina(secao).whatsapp()), 1)
         self.assertIn('action="/cliente/tickets"', secao)
         self.assertIn("Pedir a mudança pelo Suporte</button>", secao)
-        self.assertIn("Se preferir, peça pelo WhatsApp.", secao)
+        self.assertIn("Se preferir, fale com a equipe pelo WhatsApp e informe lá o plano desejado.", secao)
         self.assertTrue(re.findall(r'<option value="Mudança de plano: [^"]+"', secao))
 
     def test_planos_indisponivel_oferece_duvidas_pelo_whatsapp(self):
@@ -657,7 +657,7 @@ class ComNumeroTests(_WhatsAppCase):
         self.mudar_status_empresa("SUSPENSA")
         html, dom = self.pagina("/onboarding/diagnostico", 403)
         [link] = dom.whatsapp()
-        self.assert_link(link, MENSAGENS["suporte"], "Atendimento pelo WhatsApp", classe="btn-ghost")
+        self.assert_link(link, MENSAGENS["suporte"], "Falar pelo WhatsApp", classe="btn-ghost")
         self.assertIn('href="/cliente/tickets" class="btn-nexo"', html)
 
     def test_painel_tem_atendimento_no_card_de_contato_e_renovacao_na_faixa(self):
@@ -672,7 +672,7 @@ class ComNumeroTests(_WhatsAppCase):
         cartao = _trecho(html, 'id="contato-nexo"', "</main>")
         pagina = _Pagina(cartao)
         [suporte] = pagina.whatsapp()
-        self.assert_link(suporte, MENSAGENS["suporte"], "Atendimento pelo WhatsApp", classe=None)
+        self.assert_link(suporte, MENSAGENS["suporte"], "Falar pelo WhatsApp", classe=None)
         self.assertEqual([link["attrs"]["href"] for link in pagina.links][0], "/cliente/tickets")
         self.assertIn("envie um chamado pelo suporte do portal ou fale com a equipe NEXO pelo WhatsApp.", pagina.texto)
         self.assertEqual(len(dom.whatsapp()), 2)
@@ -682,14 +682,14 @@ class ComNumeroTests(_WhatsAppCase):
         html, dom = self.pagina("/cliente/dashboard")
         self.assertNotIn("Seu contrato vence", html)
         [suporte] = dom.whatsapp()
-        self.assert_link(suporte, MENSAGENS["suporte"], "Atendimento pelo WhatsApp", classe=None)
+        self.assert_link(suporte, MENSAGENS["suporte"], "Falar pelo WhatsApp", classe=None)
 
     def test_suporte_atende_pelo_whatsapp_so_com_o_numero_do_chamado(self):
         from models import ChamadoSuporte, Empresa
         self.login()
         html, dom = self.pagina("/cliente/tickets")
         [link] = _Pagina(_trecho(html, 'class="page-head-actions"', "</div>")).whatsapp()
-        self.assert_link(link, MENSAGENS["suporte"], "Atendimento pelo WhatsApp", classe="btn-ghost")
+        self.assert_link(link, MENSAGENS["suporte"], "Falar pelo WhatsApp", classe="btn-ghost")
         self.assertEqual(len(dom.whatsapp()), 1)
         assunto = "Assunto sigiloso da empresa fictícia"
         chamado = ChamadoSuporte(id_empresa=self.empresa_id, id_usuario_cliente=self.cliente_id,

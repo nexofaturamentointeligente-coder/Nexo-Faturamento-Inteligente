@@ -303,7 +303,7 @@
         <div class="contact-details">
             <a href="{{ url_for('cliente.tickets') }}"><i class="bi bi-headset" aria-hidden="true"></i> Abrir suporte</a>
             {%- if wa %}
-            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Atendimento pelo WhatsApp', classe=none) }}
+            {{ m.link_whatsapp(wa, m.whatsapp_textos.suporte, 'Falar pelo WhatsApp', classe=none) }}
             {%- endif %}
         </div>
     </div>

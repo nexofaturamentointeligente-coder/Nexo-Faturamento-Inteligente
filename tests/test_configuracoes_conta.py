@@ -28,6 +28,7 @@ import emails
 import politica_senha
 import preferencias_usuario
 import raio_x_servico
+import whatsapp_service
 from blueprints import auth
 from tests.contratos_support import T0, TEXTO_PRIVADO, ContratosCase
 from tests.deploy_support import ROOT
@@ -770,6 +771,112 @@ class PreferenciasTests(_ConfigCase):
         with self._emails() as enviados:
             self._enviar("/cliente/configuracoes/senha", senha_atual=SENHA, nova_senha=NOVA, confirmacao_nova_senha=NOVA)
         self.assertEqual(enviados[0].recipients, [CLIENTE])
+
+
+class AvisosPorWhatsAppTests(_ConfigCase):
+    """As dicas do telefone e dos alertas de chamado com os avisos por WhatsApp (whatsapp_service.py)
+    ligados ou desligados, e o alerta do número que o próprio disparo recusaria. A tela só lê a
+    configuração e o telefone gravado: o transporte do notificador é um dublê que falha o teste se
+    for chamado, e nenhuma mensagem sai."""
+
+    DICA = "É o telefone de contato da empresa, o mesmo para todos os usuários dela."
+    DICA_WHATSAPP = (" Se for um celular com WhatsApp, ele recebe os avisos do NEXO: análise ou Raio-X pronto, "
+                     "envio do mês liberado e chamado atualizado.")
+    ALERTA = ('<i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Este número não recebe os avisos '
+              "por WhatsApp. Para recebê-los, informe um celular do Brasil com DDD, sem ramal.")
+    ALERTAS_DE_CHAMADO = "Chega um aviso no sininho quando a equipe responde ou resolve um chamado."
+    FRASE_DOS_CHAMADOS = " Nos chamados que você abriu, o aviso também chega pelo WhatsApp, no telefone da empresa."
+
+    def setUp(self):
+        super().setUp()
+        self.client, _ = self._entrar()
+        self.rede = self.stack.enter_context(patch.object(
+            whatsapp_service, "_abrir", side_effect=AssertionError("A tela não pode chamar a Evolution API")))
+
+    def _ligar_avisos(self):
+        """A fábrica devolve um notificador configurado com dados fictícios, como com as EVOLUTION_* no ambiente."""
+        ligado = whatsapp_service.WhatsAppNotificador("https://evolution.example.invalid", "chave-ficticia", "nexo",
+                                                      assincrono=False)
+        self.assertTrue(ligado.configurado)
+        self.stack.enter_context(patch.object(whatsapp_service, "notificador", return_value=ligado))
+
+    def _telefone(self, valor):
+        self._empresa().telefone_contato = valor
+        self.db.session.commit()
+
+    def _pagina(self):
+        resposta = self.client.get(PAGINA_CLIENTE)
+        self.assertEqual(resposta.status_code, 200)
+        html = resposta.get_data(as_text=True)
+        campo = re.search(r'<input type="tel"[^>]*id="telefone"[^>]*>', html).group(0)
+        alerta = re.search(r'<p class="field-hint mt-1 mb-0" id="telefone_alerta">(.*?)</p>', html, re.S)
+        return SimpleNamespace(
+            html=html, descrito_por=re.search(r'aria-describedby="([^"]*)"', campo).group(1),
+            dica=re.search(r'<p class="field-hint mt-1 mb-0" id="telefone_dica">(.*?)</p>', html, re.S).group(1),
+            alerta=alerta.group(1) if alerta else None,
+            chamados=re.search(r'for="alerta_chamado">Alertas de chamados do suporte</label>\s*'
+                               r'<small class="field-hint">(.*?)</small>', html, re.S).group(1))
+
+    def test_desligados_a_tela_fica_como_sem_o_whatsapp(self):
+        # O padrão dos testes (EVOLUTION_* vazias): nem o número que o disparo recusaria muda a tela.
+        for telefone in (None, "(62) 98888-7766", "(62) 3222-1234 ramal 2"):
+            with self.subTest(telefone=telefone):
+                self._telefone(telefone)
+                pagina = self._pagina()
+                self.assertEqual(pagina.descrito_por, "telefone_dica")
+                self.assertEqual(pagina.dica, self.DICA)
+                self.assertIsNone(pagina.alerta)
+                self.assertEqual(pagina.chamados, self.ALERTAS_DE_CHAMADO)
+                self.assertNotIn("WhatsApp", pagina.html)
+        self.rede.assert_not_called()
+
+    def test_ligados_as_dicas_dizem_para_onde_vao_os_avisos(self):
+        self._ligar_avisos()
+        self._telefone("(62) 98888-7766")
+        pagina = self._pagina()
+        self.assertEqual(pagina.dica, self.DICA + self.DICA_WHATSAPP)
+        self.assertEqual(pagina.descrito_por, "telefone_dica")
+        self.assertIsNone(pagina.alerta)
+        self.assertEqual(pagina.chamados, self.ALERTAS_DE_CHAMADO + self.FRASE_DOS_CHAMADOS)
+        # Com o e-mail ligado, a frase do WhatsApp vem no fim, depois da do e-mail, que continua igual.
+        with patch("configuracoes_conta.envio_disponivel", return_value=True):
+            chamados = self._pagina().chamados
+        self.assertEqual(chamados, "Chega um aviso no sininho quando a equipe responde ou resolve um chamado, e um "
+                                   "e-mail quando resolve. Desligar não vale para o e-mail de contato da empresa, se "
+                                   "ele for diferente do seu." + self.FRASE_DOS_CHAMADOS)
+        self.rede.assert_not_called()
+
+    def test_ligados_o_numero_que_o_whatsapp_recusa_ganha_o_alerta(self):
+        # O cadastro do admin aceita texto livre: ramal, fixo sem DDD, número estrangeiro, número de exemplo.
+        self._ligar_avisos()
+        for telefone in ("(62) 3222-1234 ramal 2", "3222-1234", "+1 202 555 0100", "(62) 99999-9999"):
+            with self.subTest(telefone=telefone):
+                self.assertIsNone(whatsapp_service.higienizar_telefone(telefone))
+                self._telefone(telefone)
+                pagina = self._pagina()
+                self.assertEqual(pagina.alerta, self.ALERTA)
+                self.assertEqual(pagina.descrito_por, "telefone_dica telefone_alerta")
+                self.assertEqual(pagina.dica, self.DICA + self.DICA_WHATSAPP)
+        # O que o disparo aceita (com DDD, com ou sem o 55) e o campo vazio não têm alerta.
+        for telefone in ("(62) 98888-7766", "+55 62 98888-7766", "(62) 3222-1234", None, "  "):
+            with self.subTest(telefone=telefone):
+                self._telefone(telefone)
+                pagina = self._pagina()
+                self.assertIsNone(pagina.alerta)
+                self.assertEqual(pagina.descrito_por, "telefone_dica")
+                self.assertEqual(pagina.dica, self.DICA + self.DICA_WHATSAPP)
+        self.rede.assert_not_called()
+
+    def test_falha_ao_conferir_os_avisos_nao_derruba_a_pagina(self):
+        self.stack.enter_context(patch.object(whatsapp_service, "notificador",
+                                              side_effect=RuntimeError("PRIVATE_SENTINEL")))
+        self._telefone("(62) 3222-1234 ramal 2")
+        with patch.object(configuracoes_conta.logger, "disabled", False), \
+                self.assertLogs(configuracoes_conta.logger, "WARNING") as registro:
+            pagina = self._pagina()
+        self.assertEqual((pagina.dica, pagina.alerta, pagina.chamados), (self.DICA, None, self.ALERTAS_DE_CHAMADO))
+        self.assertIn("estado dos avisos por WhatsApp não conferido (RuntimeError)", "\n".join(registro.output))
+        self.assertNotIn("PRIVATE_SENTINEL", "\n".join(registro.output))
 
 
 class CopiaDeChamadosTests(_ConfigCase):

@@ -158,9 +158,9 @@ REGISTROS = (
         tipo="roteiro",
         resumo=(
             "Pelo portal, o canal é a página Suporte: abra um chamado descrevendo a dúvida e acompanhe a "
-            "resposta na própria conversa. Para assuntos comerciais ou se não conseguir entrar no portal, use "
-            "o WhatsApp comercial, quando a equipe o publica (o botão aparece no card Contato NEXO, na página "
-            "Suporte e em Como aderir), ou o canal externo combinado no onboarding."
+            "resposta na própria conversa. Para assuntos comerciais, ou se não conseguir entrar no portal, fale "
+            "com a equipe pelo WhatsApp: o botão aparece no card Contato NEXO da Visão Geral, na página Suporte e "
+            "em Como obter acesso. Se o botão não aparecer, use o e-mail de suporte do rodapé do site da NEXO."
         ),
         passos=(
             "Abra Suporte no menu lateral e clique em “Novo chamado”.",

@@ -46,9 +46,10 @@
                     </div>
                     <div>
                         <label class="nexo-label" for="telefone">Telefone de contato</label>
-                        <input type="tel" class="form-control" id="telefone" name="telefone" value="{{ empresa.telefone_contato or '' }}" autocomplete="tel" maxlength="25" placeholder="(00) 00000-0000" aria-describedby="telefone_dica">
+                        <input type="tel" class="form-control" id="telefone" name="telefone" value="{{ empresa.telefone_contato or '' }}" autocomplete="tel" maxlength="25" placeholder="(00) 00000-0000" aria-describedby="telefone_dica{% if telefone_sem_whatsapp %} telefone_alerta{% endif %}">
                         <input type="hidden" name="telefone_exibido" value="{{ empresa.telefone_contato or '' }}">
-                        <p class="field-hint mt-1 mb-0" id="telefone_dica">É o telefone de contato da empresa, o mesmo para todos os usuários dela.</p>
+                        <p class="field-hint mt-1 mb-0" id="telefone_dica">É o telefone de contato da empresa, o mesmo para todos os usuários dela.{% if whatsapp_avisos_ativos %} Se for um celular com WhatsApp, ele recebe os avisos do NEXO: análise ou Raio-X pronto, envio do mês liberado e chamado atualizado.{% endif %}</p>{% if telefone_sem_whatsapp %}
+                        <p class="field-hint mt-1 mb-0" id="telefone_alerta"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Este número não recebe os avisos por WhatsApp. Para recebê-los, informe um celular do Brasil com DDD, sem ramal.</p>{% endif %}
                     </div>
                     <button type="submit" class="btn-nexo"><i class="bi bi-check2" aria-hidden="true"></i> Salvar dados</button>
                 </form>
@@ -219,7 +220,7 @@
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" role="switch" id="alerta_chamado" name="alerta_chamado" value="1" {{ 'checked' if preferencias.alerta_chamado }} {{ 'disabled' if not esquema_disponivel }}>
                         <label class="form-check-label" for="alerta_chamado">Alertas de chamados do suporte</label>
-                        <small class="field-hint">Chega um aviso no sininho quando a equipe responde ou resolve um chamado{% if envio_ativo %}, e um e-mail quando resolve. Desligar não vale para o e-mail de contato da empresa, se ele for diferente do seu{% endif %}.</small>
+                        <small class="field-hint">Chega um aviso no sininho quando a equipe responde ou resolve um chamado{% if envio_ativo %}, e um e-mail quando resolve. Desligar não vale para o e-mail de contato da empresa, se ele for diferente do seu{% endif %}.{% if whatsapp_avisos_ativos %} Nos chamados que você abriu, o aviso também chega pelo WhatsApp, no telefone da empresa.{% endif %}</small>
                     </div>
                     <button type="submit" class="btn-nexo" {{ 'disabled' if not esquema_disponivel }}><i class="bi bi-check2" aria-hidden="true"></i> Salvar preferências</button>
                 </form>

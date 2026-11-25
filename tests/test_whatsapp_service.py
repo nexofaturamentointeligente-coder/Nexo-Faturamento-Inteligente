@@ -186,56 +186,104 @@ class FormatacaoTests(unittest.TestCase):
 
 
 class TextosTests(unittest.TestCase):
-    def test_relatorio_pronto_com_valor(self):
-        self.assertEqual(
-            whatsapp_service.texto_relatorio_pronto("Maria Souza", "Mercado Bom Preço", Decimal("12345.67")),
-            "Olá, Maria Souza! O relatório de Mercado Bom Preço está pronto no NEXO Faturamento Inteligente. "
-            "Encontramos R$ 12.345,67 em potencial recuperável. Acesse o portal para ver os detalhes.")
+    # Decisão do dono de 24/11/2026 (segurança e LGPD): nenhum relatório pronto leva valor em reais.
+    VALORES = (None, 0, Decimal("0.00"), Decimal("0.004"), -10, "abc", float("nan"), float("inf"),
+               10, 0.01, "99.90", Decimal("12345.67"), Decimal("999999999999.99"))
 
-    def test_relatorio_pronto_sem_valor_positivo_nao_cita_valor(self):
-        for valor in (None, 0, Decimal("0.00"), Decimal("0.004"), -10, "abc", float("nan"), float("inf")):
-            with self.subTest(valor=valor):
-                texto = whatsapp_service.texto_relatorio_pronto("Ana", "Loja", valor)
-                self.assertNotIn("Encontramos", texto)
-                self.assertIn("O relatório de Loja está pronto", texto)
+    def test_relatorio_pronto_com_valor_informado_sai_sem_o_valor(self):
+        texto = whatsapp_service.texto_relatorio_pronto("Maria Souza", "Mercado Bom Preço", Decimal("12345.67"))
+        self.assertEqual(texto,
+                         "Olá, Maria Souza! O relatório de Mercado Bom Preço está pronto.\n\n"
+                         "Acesse o portal NEXO para ver os detalhes.\n\n"
+                         "_Equipe NEXO Faturamento Inteligente_")
+        for ausente in ("R$", "12.345,67", "12345.67", "recuperável"):
+            self.assertNotIn(ausente, texto)
+
+    def test_relatorio_pronto_nao_cita_valor_em_caso_nenhum(self):
+        for acesso in (True, False):
+            sem_valor = whatsapp_service.texto_relatorio_pronto("Ana", "Loja", None, acesso_ao_portal=acesso)
+            for valor in self.VALORES:
+                with self.subTest(valor=valor, acesso_ao_portal=acesso):
+                    texto = whatsapp_service.texto_relatorio_pronto("Ana", "Loja", valor, acesso_ao_portal=acesso)
+                    # O valor não muda nada no texto, nem positivo: nenhum número, nenhum "R$".
+                    self.assertEqual(texto, sem_valor)
+                    self.assertNotIn("R$", texto)
+                    self.assertNotIn("recuperável", texto)
+                    self.assertNotRegex(texto, r"\d")
+                    self.assertIn("O relatório de Loja está pronto." if acesso else "A avaliação de Loja está pronta.",
+                                  texto)
 
     def test_relatorio_pronto_sem_acesso_ao_portal(self):
         texto = whatsapp_service.texto_relatorio_pronto("Ana", "Loja X", 10, acesso_ao_portal=False)
-        self.assertTrue(texto.endswith("A equipe NEXO vai entrar em contato para apresentar os resultados."))
+        self.assertEqual(texto,
+                         "Olá, Ana! A avaliação de Loja X está pronta.\n\n"
+                         "A equipe NEXO vai entrar em contato para apresentar os resultados.\n\n"
+                         "_Equipe NEXO Faturamento Inteligente_")
         self.assertNotIn("portal", texto)
+        self.assertNotIn("R$", texto)
+        self.assertIn("A sua avaliação está pronta.",
+                      whatsapp_service.texto_relatorio_pronto(None, None, 10, acesso_ao_portal=False))
 
     def test_relatorio_pronto_sem_nome_e_sem_empresa(self):
         self.assertEqual(whatsapp_service.texto_relatorio_pronto(None, "  ", None),
-                         "Olá! O seu relatório está pronto no NEXO Faturamento Inteligente. "
-                         "Acesse o portal para ver os detalhes.")
+                         "Olá! O seu relatório está pronto.\n\n"
+                         "Acesse o portal NEXO para ver os detalhes.\n\n"
+                         "_Equipe NEXO Faturamento Inteligente_")
 
     def test_abertura_mensal(self):
         self.assertEqual(
             whatsapp_service.texto_abertura_mensal("Mercado Bom Preço", "2026-10"),
-            "Olá, Mercado Bom Preço! O envio dos relatórios de outubro de 2026 está aberto no NEXO "
-            "Faturamento Inteligente. Envie os arquivos pelo portal para receber a análise do mês.")
-        self.assertIn("O envio dos relatórios do mês está aberto", whatsapp_service.texto_abertura_mensal("Ana", "2026-13"))
-        self.assertIn("O envio dos relatórios da 2ª quinzena de outubro de 2026 está aberto",
+            "Olá, Mercado Bom Preço! Você já pode enviar os relatórios de *outubro de 2026*.\n\n"
+            "Anexe o de vendas e o de compras em *Enviar relatórios*, no portal NEXO, para receber a sua análise.\n\n"
+            "_Equipe NEXO Faturamento Inteligente_")
+        self.assertIn("Você já pode enviar os relatórios do mês.", whatsapp_service.texto_abertura_mensal("Ana", "2026-13"))
+        self.assertIn("Você já pode enviar os relatórios da *2ª quinzena de outubro de 2026*.",
                       whatsapp_service.texto_abertura_mensal("Ana", "2026-10", quinzena=2))
+        self.assertIn("Você já pode enviar os relatórios da 2ª quinzena do mês.",
+                      whatsapp_service.texto_abertura_mensal("Ana", "2026-13", quinzena=2))
         for quinzena in (None, 0, 3, True, "1"):
             with self.subTest(quinzena=quinzena):
-                self.assertIn("O envio dos relatórios de outubro de 2026 está aberto",
+                self.assertIn("Você já pode enviar os relatórios de *outubro de 2026*.",
                               whatsapp_service.texto_abertura_mensal("Ana", "2026-10", quinzena=quinzena))
 
     def test_chamado_atualizado(self):
         self.assertEqual(
             whatsapp_service.texto_atualizacao_ticket("João", 12, "EM_ATENDIMENTO"),
-            "Olá, João! O seu chamado #12 no NEXO Faturamento Inteligente foi atualizado. "
-            "Situação atual: Em atendimento. Acesse o portal para ver os detalhes.")
-        self.assertIn("chamado #12 no", whatsapp_service.texto_atualizacao_ticket("João", "#12", "RESOLVIDO"))
+            "Olá, João! O seu chamado #12 foi atualizado.\n\n"
+            "Situação atual: *Em atendimento*\n\n"
+            "Acesse o portal NEXO, em *Suporte*, para ver os detalhes e responder.\n\n"
+            "_Equipe NEXO Faturamento Inteligente_")
+        resolvido = whatsapp_service.texto_atualizacao_ticket("João", "#12", "RESOLVIDO")
+        self.assertIn("chamado #12 foi atualizado", resolvido)
+        # Resolvido diz como pedir mais ajuda, como a tela do chamado.
+        self.assertIn("Situação atual: *Resolvido*\n\n"
+                      "Se ainda precisar de ajuda, responda no próprio chamado, no portal NEXO, em *Suporte*.", resolvido)
         sem_numero = whatsapp_service.texto_atualizacao_ticket("João", None, None)
-        self.assertIn("O seu chamado no NEXO", sem_numero)
+        self.assertIn("O seu chamado foi atualizado.", sem_numero)
         self.assertNotIn("Situação atual", sem_numero)
 
     def test_nome_cadastrado_nao_muda_a_forma_da_mensagem(self):
         texto = whatsapp_service.texto_atualizacao_ticket("João\n\nClique: http://x.invalid", 1, "ABERTO")
-        self.assertNotIn("\n", texto)
+        # As quebras vêm só dos blocos fixos (4 blocos, 6 quebras): o nome fica na primeira linha.
+        self.assertEqual(texto.splitlines()[0], "Olá, João Clique: http://x.invalid! O seu chamado #1 foi atualizado.")
+        self.assertEqual(texto.count("\n"), 6)
         self.assertTrue(texto.startswith("Olá, João Clique: http://x.invalid! O seu chamado #1"))
+
+    def test_pior_caso_fica_dentro_do_limite_e_o_fato_na_primeira_linha(self):
+        # Nome e empresa longos (truncados por texto_seguro) e com quebras: a mensagem cabe no limite,
+        # o primeiro bloco é uma linha só (o fato, que a notificação mostra) e a assinatura fecha.
+        nome, empresa = "Ana\nLima " + "N" * 200, "Loja\r\n" + "E" * 200
+        textos = (whatsapp_service.texto_relatorio_pronto(nome, empresa, Decimal("999999999999.99")),
+                  whatsapp_service.texto_relatorio_pronto(nome, empresa, 1, acesso_ao_portal=False),
+                  whatsapp_service.texto_abertura_mensal(nome, "2026-09", quinzena=2),
+                  whatsapp_service.texto_atualizacao_ticket(nome, "9" * 40, "EM_ATENDIMENTO"))
+        for texto in textos:
+            with self.subTest(texto=texto[:40]):
+                self.assertLess(len(texto), 1000)
+                self.assertTrue(texto.startswith("Olá, Ana Lima NNN"))
+                self.assertTrue(texto.endswith("\n\n_Equipe NEXO Faturamento Inteligente_"))
+                self.assertEqual(texto.splitlines()[0], texto.split("\n\n")[0])
+                self.assertNotIn("R$", texto)
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +342,9 @@ class NotificadorTests(_ComLog):
         self.assertNotIn("Apikey", pedido.headers)
         self.assertEqual(json.loads(pedido.data.decode("utf-8")), {
             "number": NUMERO,
-            "text": "Olá, Ana! O seu chamado #12 no NEXO Faturamento Inteligente foi atualizado. "
-                    "Situação atual: Em atendimento. Acesse o portal para ver os detalhes."})
+            "text": "Olá, Ana! O seu chamado #12 foi atualizado.\n\nSituação atual: *Em atendimento*\n\n"
+                    "Acesse o portal NEXO, em *Suporte*, para ver os detalhes e responder.\n\n"
+                    "_Equipe NEXO Faturamento Inteligente_"})
         self.assertIn("aceito pela Evolution API para ***8877", log.output[-1])
         self.assert_log_sem_segredo(log.output)
 
@@ -532,7 +581,7 @@ class ServidorLocalTests(_ComLog):
         self.assertEqual(recebido["tipo"], "application/json")
         corpo = json.loads(recebido["corpo"].decode("utf-8"))
         self.assertEqual(corpo["number"], NUMERO)
-        self.assertIn("Situação atual: Resolvido.", corpo["text"])
+        self.assertIn("Situação atual: *Resolvido*", corpo["text"])
 
     def test_recusa_real(self):
         with self.assertLogs(whatsapp_service.logger, "WARNING") as log:

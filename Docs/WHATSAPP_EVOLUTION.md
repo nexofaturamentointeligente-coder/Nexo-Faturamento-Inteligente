@@ -32,11 +32,17 @@ Todo gatilho roda **depois do commit**, só quando há telefone cadastrado, e nu
 
 | Evento | Onde | Telefone | Regra | Mensagem |
 | :--- | :--- | :--- | :--- | :--- |
-| Relatório pronto: avaliação do lead | `blueprints/leads.py` (`avaliar`, `reenviar`; não em `retriar`) | WhatsApp do lead | Só com a caixa "O lead aceitou receber pelo WhatsApp o aviso de que a avaliação ficou pronta" marcada. Ela vem desmarcada, porque a autorização de uso dos relatórios não cobre esse contato. | "Olá, {contato}! O relatório de {loja} está pronto… Encontramos R$ X em potencial recuperável. A equipe NEXO vai entrar em contato para apresentar os resultados." O valor é o do KPI da tela do lead, o total retroativo. |
-| Relatório pronto: Raio-X de entrada | `blueprints/onboarding.py` (página e API) | `Empresa.telefone_contato` | — | "Olá, {usuário}! O relatório de {empresa} está pronto… Encontramos R$ X… Acesse o portal…". O valor é o `recuperavel.total` da tela, que o plano não esconde. |
-| Relatório pronto: análise publicada | `blueprints/admin.py` (`analise_relatorio`, publicar) | `Empresa.telefone_contato` | Só quando o cliente pode abrir a análise, como o e-mail. Republicar avisa de novo, como o e-mail e o sininho. | "Olá, {empresa}! O seu relatório está pronto… Acesse o portal…". Sai sem valor, porque a análise mensal não calcula potencial recuperável. |
-| Abertura do envio do mês | `blueprints/admin.py` (`analise_nova`) | `Empresa.telefone_contato` | Só quando a política deixa o cliente enviar (`pode_enviar_relatorio`); empresa suspensa só recebe para período pago. Só para o mês corrente, o anterior ou um futuro: o lançamento retroativo de histórico, em que o admin sobe os arquivos, não avisa. | "Olá, {empresa}! O envio dos relatórios de {mês de ano} está aberto…". Na análise quinzenal: "…da 1ª quinzena de {mês de ano}…". |
-| Chamado atualizado | `blueprints/admin.py` (`ticket_detalhe`): resposta da equipe e mudança real de status, inclusive a reabertura | `Empresa.telefone_contato` | Só com acesso ao portal e com "Alertas de chamados" ligado, como o sininho. | "Olá, {cliente}! O seu chamado #N… foi atualizado. Situação atual: {status}…" |
+| Relatório pronto: avaliação do lead | `blueprints/leads.py` (`avaliar`, `reenviar`; não em `retriar`) | WhatsApp do lead | Só com a caixa "O lead aceitou receber pelo WhatsApp o aviso de que a avaliação ficou pronta" marcada. Ela vem desmarcada, porque a autorização de uso dos relatórios não cobre esse contato. | "Olá, {contato}! A avaliação de {loja} está pronta.⏎⏎A equipe NEXO vai entrar em contato para apresentar os resultados.⏎⏎_Equipe NEXO Faturamento Inteligente_". Sem valor: o total retroativo fica na tela do lead, com o consultor. |
+| Relatório pronto: Raio-X de entrada | `blueprints/onboarding.py` (página e API) | `Empresa.telefone_contato` | — | "Olá, {usuário}! O relatório de {empresa} está pronto.⏎⏎Acesse o portal NEXO para ver os detalhes.⏎⏎_Equipe NEXO Faturamento Inteligente_". Sem valor: o `recuperavel.total` fica só na tela do Raio-X. |
+| Relatório pronto: análise publicada | `blueprints/admin.py` (`analise_relatorio`, publicar) | `Empresa.telefone_contato` | Só quando o cliente pode abrir a análise, como o e-mail. Republicar avisa de novo, como o e-mail e o sininho. | "Olá, {empresa}! O seu relatório está pronto.⏎⏎Acesse o portal NEXO para ver os detalhes.⏎⏎_Equipe NEXO Faturamento Inteligente_". |
+| Abertura do envio do mês | `blueprints/admin.py` (`analise_nova`) | `Empresa.telefone_contato` | Só quando a política deixa o cliente enviar (`pode_enviar_relatorio`); empresa suspensa só recebe para período pago. Só para o mês corrente, o anterior ou um futuro: o lançamento retroativo de histórico, em que o admin sobe os arquivos, não avisa. | "Olá, {empresa}! Você já pode enviar os relatórios de *{mês de ano}*.⏎⏎Anexe o de vendas e o de compras em *Enviar relatórios*, no portal NEXO, para receber a sua análise.⏎⏎_Equipe NEXO Faturamento Inteligente_". Na análise quinzenal: "…da *1ª quinzena de {mês de ano}*…". |
+| Chamado atualizado | `blueprints/admin.py` (`ticket_detalhe`): resposta da equipe e mudança real de status, inclusive a reabertura | `Empresa.telefone_contato` | Só com acesso ao portal e com "Alertas de chamados" ligado, como o sininho. | "Olá, {cliente}! O seu chamado #N foi atualizado.⏎⏎Situação atual: *{status}*⏎⏎Acesse o portal NEXO, em *Suporte*, para ver os detalhes e responder.⏎⏎_Equipe NEXO Faturamento Inteligente_". Resolvido: a ação vira "Se ainda precisar de ajuda, responda no próprio chamado, no portal NEXO, em *Suporte*." |
+
+Regras do texto (`whatsapp_service.py`; na tabela, ⏎⏎ marca a linha em branco entre os blocos):
+- A primeira linha traz o fato, que é o que a notificação do celular mostra. Depois vêm a situação (só no chamado), a ação com o nome do menu do portal e a assinatura, em itálico.
+- Negrito (`*…*`) só em valores do sistema: mês, situação e menu. Nunca em nome digitado (cliente, empresa, loja).
+- **Nenhuma mensagem leva valor em reais**, em caso nenhum: cliente, Raio-X ou lead (decisão do dono de 24/11/2026, por segurança e LGPD, porque o telefone de destino não é confirmado). As rotas continuam passando o valor, e `texto_relatorio_pronto` o descarta. A mensagem só diz que ficou pronto e qual é o próximo passo: o portal ou, para quem não tem acesso a ele, o contato da equipe NEXO.
+- Nomes e status passam por `texto_seguro` (uma linha, sem caractere de controle, truncados): as quebras de linha vêm só dos blocos fixos. O texto final tem no máximo 1.000 caracteres; o maior caso possível fica abaixo de 300.
 
 Não havia rotina de avisos no sistema. O cliente só envia arquivos para uma análise que o admin abriu, então o "período mensal de envio" de uma empresa abre quando o admin cria a análise do mês. Por isso o aviso de abertura sai nesse momento, e não num disparo em massa: uma mensagem a todas as empresas mandaria enviar arquivos quem ainda não tem análise aberta.
 
@@ -44,6 +50,7 @@ Não havia rotina de avisos no sistema. O cliente só envia arquivos para uma an
 
 São desenhados pela macro `link_whatsapp` de `templates/_macros.html`, só com `WHATSAPP_EMPRESA_NUMERO` válido. Sem ele, cada tela sai idêntica à de antes, byte a byte (`tests/test_whatsapp_telas.py`).
 - O link abre em nova aba, com `rel="noopener noreferrer"` e sem JavaScript.
+- Rótulo do portal: "Falar pelo WhatsApp" (card Contato NEXO, Suporte, chamado e convite de upgrade com a assinatura inativa). Em Planos, "Conversar pelo WhatsApp", ao lado do pedido pelo formulário, porque o WhatsApp só abre a conversa e não leva o plano escolhido.
 - A mensagem pré-preenchida nunca leva dado do cliente: nem nome, nem empresa, nem o assunto do chamado, só o número dele.
 - **Exceção (decisão do dono, 15/11/2026): o pré-cadastro da landing.** Com JavaScript, o CONTRATAR abre um formulário (`static/js/landing-precadastro.js`), e a mensagem das saídas "Preciso de ajuda com os relatórios" e "Finalizar sem Raio-X" leva os dados que o próprio visitante digitou: nome, empresa, WhatsApp, plano de interesse e, se preenchidos, e-mail, faixa de faturamento e dificuldade. Nada disso vai ao servidor nessas saídas, e o visitante confere a mensagem no WhatsApp antes de enviá-la. O número continua vindo só de `WHATSAPP_EMPRESA_NUMERO`, entregue ao script pelo atributo `data-numero`. A LGPD do lead (logo abaixo) continua pendente. Detalhes em [PRE_CADASTRO_LANDING.md](PRE_CADASTRO_LANDING.md).
 
@@ -58,7 +65,7 @@ São desenhados pela macro `link_whatsapp` de `templates/_macros.html`, só com 
 
 - **Login.** Fica como estava. O cartão precisa caber em 375×667 sem rolagem, e o "É novo por aqui?" já leva ao Como aderir, que tem os botões.
 - **Fora dos botões.** Recuperação de senha, primeiro acesso e e-mails não citam o WhatsApp.
-- **NexoBot.** As respostas sobre o contato com a equipe citam o botão "quando a equipe publica o WhatsApp comercial", sem número nem URL.
+- **NexoBot.** As respostas sobre o contato com a equipe citam o botão "Falar pelo WhatsApp" do card Contato NEXO, da página Suporte e do Como obter acesso, sem número nem URL. As respostas sobre avisos e Configurações dizem, sempre de forma condicional ("quando a equipe NEXO liga os avisos por WhatsApp"), que o telefone de contato da empresa recebe as mensagens automáticas.
 
 ## 3. Fail-safe e privacidade
 
@@ -96,13 +103,15 @@ São desenhados pela macro `link_whatsapp` de `templates/_macros.html`, só com 
 
 - **LGPD do lead.** Hoje o aviso ao lead depende da confirmação do consultor no formulário. Falta definir a base legal e o aviso de privacidade do contato por WhatsApp ([BAIA_DE_SEGURANCA_E_LEADS.md](BAIA_DE_SEGURANCA_E_LEADS.md)). O texto jurídico não foi inventado aqui.
 - **Telefone sem confirmação.**
-  - Problema: o `telefone_contato` da empresa é texto livre no cadastro do admin, e qualquer usuário cliente da empresa pode trocá-lo em Configurações. Com um dígito errado ou o número de um ex-funcionário, um terceiro recebe o nome da empresa, a situação do chamado ou o valor recuperável do Raio-X.
-  - Mitigações possíveis, cada uma é decisão do dono:
+  - Problema: o `telefone_contato` da empresa é texto livre no cadastro do admin, e qualquer usuário cliente da empresa pode trocá-lo em Configurações. Com um dígito errado ou o número de um ex-funcionário, um terceiro recebe o nome da empresa e a situação do chamado.
+  - Feito em 24/11/2026 (decisão do dono): as mensagens não levam mais o valor recuperável nem outro valor em reais.
+  - Mitigações que continuam como decisão do dono:
     - confirmar o número com um código enviado pelo WhatsApp;
-    - avisar por e-mail quando o telefone mudar;
-    - tirar o valor das mensagens.
+    - avisar por e-mail quando o telefone mudar.
 - **Opt-out.** Só o "Alertas de chamados" vale para o WhatsApp. Relatório pronto e abertura do mês não têm preferência própria, e criar uma pede migration.
 - **WhatsApp do cliente.** É o `telefone_contato` da empresa. Não há campo próprio de WhatsApp, e criar um pede migration.
+  - Com os disparos ligados, a tela de Configurações diz que esse telefone recebe os avisos do NEXO e alerta quando o número cadastrado não serve para o WhatsApp, pela mesma regra do disparo (`higienizar_telefone`). A dica de "Alertas de chamados do suporte" avisa que a escolha vale também para o WhatsApp dos chamados.
+  - O cadastro da empresa no admin traz a mesma informação na dica do campo "Telefone de contato".
 - **Protocolo.** A Evolution API com o motor Baileys usa o protocolo do WhatsApp Web, que não é oficial, e há risco de banimento do número em volume alto. A alternativa oficial é a WhatsApp Cloud API da Meta, que a Evolution também suporta.
 
 ## 6. Testes
