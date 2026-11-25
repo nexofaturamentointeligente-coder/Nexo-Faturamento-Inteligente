@@ -13,14 +13,14 @@
 <div class="page-head">
     <div>
         <h1>{{ rel.titulo if rel else 'Análise publicada' }}</h1>
-        <p class="sub">Período: {{ analise.periodo_inicio.strftime('%d/%m/%Y') }} – {{ analise.periodo_fim.strftime('%d/%m/%Y') }}</p>
+        <p class="sub">{{ 'Análise quinzenal' if analise.tipo_analise == 'QUINZENAL' else 'Análise mensal' }} · {{ m.periodo(analise.periodo_inicio, analise.periodo_fim) }}</p>
     </div>
     <div class="page-head-actions">
         {% if pode_exportar_pdf %}
-        <a href="{{ url_for('cliente.analise_pdf', id_analise=analise.id_analise) }}" class="btn-nexo"><i class="bi bi-file-earmark-pdf"></i> Exportar PDF</a>
+        <a href="{{ url_for('cliente.analise_pdf', id_analise=analise.id_analise) }}" class="btn-nexo"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> Exportar PDF</a>
         {% endif %}
-        <a href="{{ url_for('cliente.historico') }}" class="btn-ghost"><i class="bi bi-clock-history"></i> Histórico</a>
-        <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left"></i> Voltar ao painel</a>
+        <a href="{{ url_for('cliente.historico') }}" class="btn-ghost"><i class="bi bi-clock-history" aria-hidden="true"></i> Histórico</a>
+        <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar ao painel</a>
     </div>
 </div>
 
@@ -31,12 +31,45 @@
 </div>
 {% endif %}
 
-{# ---------------- Barra de auditoria: origem dos dados desta análise ---------------- #}
-{{ audit.barra(auditoria) }}
-
-{# ===================== Seção 1 — Indicadores ===================== #}
+{# ===================== Seção 1 — Devolutiva (lida primeiro) ===================== #}
 <div class="nexo-card-head px-0" style="border:none;">
-    <div><h2><i class="bi bi-bar-chart-line text-purple"></i> Indicadores do período</h2></div>
+    <div><h2><i class="bi bi-file-earmark-text text-purple" aria-hidden="true"></i> Devolutiva estratégica</h2></div>
+</div>
+<div class="nexo-card mb-3 {{ 'ia-doc' if (rel and rel.gerado_por_ia) }}">
+    {% if rel and rel.gerado_por_ia %}
+    <div class="ia-banner"><i class="bi bi-robot" aria-hidden="true"></i><span>Gerado por <strong>Inteligência Artificial Nexo</strong> · síntese automática dos indicadores e da Curva ABC</span></div>
+    {% endif %}
+    <div class="nexo-card-body relatorio-doc">
+        {% if rel.resumo_executivo %}
+        <div class="relatorio-block">
+            <div class="rb-label"><i class="bi bi-card-text" aria-hidden="true"></i> Resumo executivo</div>
+            <div class="rb-body">{{ rel.resumo_executivo }}</div>
+        </div>
+        {% endif %}
+        <div class="relatorio-block is-conclusao mb-0">
+            <div class="rb-label"><i class="bi bi-flag" aria-hidden="true"></i> Conclusão estratégica</div>
+            <div class="rb-body">{{ rel.conclusao_estrategica }}</div>
+        </div>
+    </div>
+</div>
+<div class="d-flex flex-wrap align-items-center gap-2 mb-5">
+    <span class="analise-duvidas small">Dúvidas sobre esta análise?</span>
+    <a href="{{ url_for('cliente.tickets', novo=1) }}" class="btn-ghost btn-sm-x"><i class="bi bi-life-preserver" aria-hidden="true"></i> Abrir chamado</a>
+</div>
+
+{# ===================== Seção 2 — Síntese executiva ===================== #}
+{% if semaforos %}
+<div class="nexo-card-head px-0" style="border:none;">
+    <div><h2><i class="bi bi-stoplights text-purple" aria-hidden="true"></i> Síntese executiva</h2><p class="sub">O que fazer agora e por quê</p></div>
+</div>
+<div class="semaforo-grid mb-5">
+    {% for card in semaforos %}{{ m.semaforo_card(card) }}{% endfor %}
+</div>
+{% endif %}
+
+{# ===================== Seção 3 — Indicadores, gráficos e Curva ABC ===================== #}
+<div class="nexo-card-head px-0" style="border:none;">
+    <div><h2><i class="bi bi-bar-chart-line text-purple" aria-hidden="true"></i> Indicadores do período</h2></div>
 </div>
 {% if ind %}
 <div class="row g-3 mb-3">
@@ -47,7 +80,7 @@
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Total comprado</span><span class="kpi-icon is-info"><i class="bi bi-bag-check"></i></span></div><div class="kpi-value"><small>R$</small> {{ m.brl(ind.total_comprado) }}</div></div>
     </div>
     <div class="col-12 col-sm-6 col-xl-4">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Indicador de Pressão de Estoque</span><span class="kpi-icon is-amber"><i class="bi bi-box-seam"></i></span></div><div class="kpi-value"><small>R$</small> {{ m.brl(ind.saldo_estimado_compras_vendas) }}</div></div>
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Indicador de Pressão de Estoque</span><span class="kpi-icon is-amber"><i class="bi bi-box-seam" aria-hidden="true"></i></span></div><div class="kpi-value"><small>R$</small> {{ m.brl(ind.saldo_estimado_compras_vendas) }}</div>{% set pressao = ind.saldo_estimado_compras_vendas %}<div class="kpi-foot">{% if pressao is none %}—{% elif pressao > 0 %}Compras acima das vendas no período{% elif pressao < 0 %}Vendas acima das compras no período{% else %}Compras iguais às vendas no período{% endif %}</div></div>
     </div>
 </div>
 <div class="mb-4">{{ m.nota_pressao() }}</div>
@@ -60,7 +93,7 @@
         <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Maior faturamento</span><span class="kpi-icon"><i class="bi bi-cash-stack"></i></span></div><div class="fw-bold mt-1">{{ ind.produto_maior_faturamento_nome or '—' }}</div><div class="kpi-foot">R$ {{ m.brl(ind.produto_maior_faturamento_valor) }}</div></div>
     </div>
     <div class="col-12 col-md-4">
-        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Maior saldo estimado parado</span><span class="kpi-icon"><i class="bi bi-archive"></i></span></div><div class="fw-bold mt-1">{{ ind.produto_maior_saldo_parado_nome or 'Não calculado' }}</div><div class="kpi-foot">{% if ind.saldo_estimado_parado is not none %}{{ m.num(ind.saldo_estimado_parado) }} un em saldo{% else %}—{% endif %}</div></div>
+        <div class="kpi-tile"><div class="kpi-top"><span class="kpi-label">Maior saldo estimado parado</span><span class="kpi-icon"><i class="bi bi-archive" aria-hidden="true"></i></span></div><div class="fw-bold mt-1">{{ ind.produto_maior_saldo_parado_nome or 'Não calculado' }}</div><div class="kpi-foot">{% if ind.saldo_estimado_parado is not none %}{{ m.num(ind.saldo_estimado_parado) }} un compradas a mais do que as vendidas{% else %}Nenhum produto comprado acima do vendido, ou o relatório de compras não traz produto e quantidade.{% endif %}</div></div>
     </div>
 </div>
 
@@ -73,7 +106,7 @@
     </div>
     <div class="col-12 col-lg-7">
         <div class="nexo-card h-100">
-            <div class="nexo-card-head"><div><h2>Gráfico de Pareto · Curva ABC</h2><p class="sub">Faturamento por produto + % acumulado (Top 10)</p></div></div>
+            <div class="nexo-card-head"><div><h2>Curva ABC: produtos que mais faturaram</h2><p class="sub">Faturamento dos 10 primeiros e quanto somam do total</p></div></div>
             <div class="nexo-card-body">
                 {% if abc_chart %}<div id="chartAbcAnalise" class="chart-box sm"></div>{% else %}
                 <p class="text-muted-2 mb-0" style="font-size:0.9rem;">Curva ABC não disponível para esta análise.</p>{% endif %}
@@ -86,7 +119,7 @@
 {% set cont = {'A': 0, 'B': 0, 'C': 0} %}
 {% for p in analise.curva_abc %}{% if cont.update({p.classe_abc: cont[p.classe_abc] + 1}) %}{% endif %}{% endfor %}
 <div class="nexo-card-head px-0" style="border:none;">
-    <div><h2><i class="bi bi-bezier2 text-purple"></i> Classificação ABC dos produtos</h2><p class="sub">Filtre por classe para ver os produtos estratégicos, táticos ou operacionais</p></div>
+    <div><h2><i class="bi bi-bezier2 text-purple" aria-hidden="true"></i> Classificação ABC dos produtos</h2><p class="sub">Todos os produtos do período, do que mais faturou ao que menos faturou. Use os filtros para ver cada classe.</p></div>
 </div>
 
 {# ---- Pílulas de filtro dinâmico (sem reload) ---- #}
@@ -100,7 +133,7 @@
 <div class="table-wrap mb-3">
     <div class="table-responsive-x">
         <table class="nexo-table" id="abcTable">
-            <thead><tr><th>#</th><th>Produto</th><th>Classe</th><th class="text-end">Qtde vendida</th><th class="text-end">Faturamento</th><th class="text-end">% individual</th><th class="text-end">% acumulado</th></tr></thead>
+            <thead><tr><th>#</th><th>Produto</th><th>Classe</th><th class="text-end">Qtde vendida</th><th class="text-end">Faturamento</th><th class="text-end">% do total</th><th class="text-end">% acumulado</th></tr></thead>
             <tbody>
                 {% for p in analise.curva_abc %}
                 <tr data-classe="{{ p.classe_abc }}">
@@ -124,43 +157,14 @@
 <div class="nexo-card mb-5">
     <div class="empty-state">
         <div class="es-icon"><i class="bi bi-bar-chart-line"></i></div>
-        <h3>Indicadores ainda não foram gerados para esta análise.</h3>
-        <p>A devolutiva estratégica abaixo já está disponível.</p>
+        <h3>Os números desta análise não estão disponíveis.</h3>
+        <p>A devolutiva, no início da página, traz a leitura do período.</p>
     </div>
 </div>
 {% endif %}
 
-{# ===================== Seção 2 — Síntese executiva (semáforos 5W2H) ===================== #}
-{% if semaforos %}
-<div class="nexo-card-head px-0" style="border:none;">
-    <div><h2><i class="bi bi-stoplights text-purple"></i> Síntese executiva</h2><p class="sub">Indicadores de risco e oportunidade · ação direta (5W2H)</p></div>
-</div>
-<div class="semaforo-grid mb-5">
-    {% for card in semaforos %}{{ m.semaforo_card(card) }}{% endfor %}
-</div>
-{% endif %}
-
-{# ===================== Seção 3 — Devolutiva do consultor ===================== #}
-<div class="nexo-card-head px-0" style="border:none;">
-    <div><h2><i class="bi bi-file-earmark-text text-purple"></i> Devolutiva estratégica</h2></div>
-</div>
-<div class="nexo-card {{ 'ia-doc' if (rel and rel.gerado_por_ia) }}">
-    {% if rel and rel.gerado_por_ia %}
-    <div class="ia-banner"><i class="bi bi-robot" aria-hidden="true"></i><span>Gerado por <strong>Inteligência Artificial Nexo</strong> · síntese automática dos indicadores e da Curva ABC</span></div>
-    {% endif %}
-    <div class="nexo-card-body relatorio-doc">
-        {% if rel.resumo_executivo %}
-        <div class="relatorio-block">
-            <div class="rb-label"><i class="bi bi-card-text"></i> Resumo executivo</div>
-            <div class="rb-body">{{ rel.resumo_executivo }}</div>
-        </div>
-        {% endif %}
-        <div class="relatorio-block is-conclusao mb-0">
-            <div class="rb-label"><i class="bi bi-flag"></i> Conclusão estratégica</div>
-            <div class="rb-body">{{ rel.conclusao_estrategica }}</div>
-        </div>
-    </div>
-</div>
+{# ---------------- Origem dos números desta análise (no fim) ---------------- #}
+{{ audit.barra(auditoria) }}
 {% endblock %}
 
 {% block extra_js %}

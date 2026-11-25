@@ -12,7 +12,7 @@
         </div>
     </div>
 
-    <form method="POST" action="{{ url_for('auth.ativar_acesso', token=token) }}">
+    <form method="POST" action="{{ url_for('auth.ativar_acesso', token=token) }}" data-envio-unico>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -28,11 +28,12 @@
             <label for="nova_senha" class="nexo-label">Crie sua senha</label>
             <div class="password-field">
                 <input type="password" name="nova_senha" id="nova_senha" class="form-control"
-                       placeholder="Mínimo de 12 caracteres" minlength="12" required autofocus autocomplete="new-password">
+                       minlength="12" required autofocus autocomplete="new-password" aria-describedby="nova_senha_dica">
                 <button type="button" class="password-toggle" data-toggle-pw="nova_senha" aria-label="Mostrar senha" title="Mostrar senha">
                     <i class="bi bi-eye" aria-hidden="true"></i>
                 </button>
             </div>
+            <p class="field-hint mt-1 mb-0" id="nova_senha_dica">Mínimo de 12 caracteres; pode ser uma frase. Não use seu nome nem seu e-mail.</p>
         </div>
         <div class="mb-4">
             <label for="confirma_senha" class="nexo-label">Confirme a senha</label>
@@ -45,7 +46,7 @@
             </div>
         </div>
         <button type="submit" class="btn-nexo auth-submit w-100 justify-content-center">
-            Ativar conta e acessar <i class="bi bi-shield-check"></i>
+            Ativar minha conta <i class="bi bi-shield-check" aria-hidden="true"></i>
         </button>
     </form>
 
@@ -53,7 +54,7 @@
         <a href="{{ url_for('auth.login') }}" style="color:#c4a0fb;font-weight:600;text-decoration:none;"><i class="bi bi-arrow-left"></i> Já tenho acesso</a>
     </p>
 </div>
-<p class="auth-tagline">Nexo: segurança em primeiro lugar.</p>
+<p class="auth-tagline">Por segurança, este link vale 15 minutos a partir do envio do e-mail.</p>
 {% endblock %}
 
 {% block extra_js %}
@@ -65,7 +66,33 @@
       if (!inp) return;
       var mostrar = inp.type === 'password';
       inp.type = mostrar ? 'text' : 'password';
+      var rotulo = mostrar ? 'Ocultar senha' : 'Mostrar senha';
+      btn.setAttribute('aria-label', rotulo);
+      btn.setAttribute('title', rotulo);
       if (ic) ic.className = mostrar ? 'bi bi-eye-slash' : 'bi bi-eye';
+    });
+  });
+  /* Um envio por vez (o data-envio-unico do base.html não chega a estas telas): um segundo toque
+     chegaria com o link já usado, ou com a sessão já renovada, e mostraria erro com a senha salva.
+     Libera em 10 s ou quando o navegador devolve a página pelo Voltar. */
+  document.querySelectorAll('form[data-envio-unico]').forEach(function (form) {
+    form.addEventListener('submit', function (evento) {
+      if (form.dataset.enviado) { evento.preventDefault(); return; }
+      form.dataset.enviado = '1';
+      var botao = form.querySelector('button[type="submit"]');
+      if (botao) botao.disabled = true;
+      window.setTimeout(function () {
+        delete form.dataset.enviado;
+        if (botao) botao.disabled = false;
+      }, 10000);
+    });
+  });
+  window.addEventListener('pageshow', function (evento) {
+    if (!evento.persisted) return;
+    document.querySelectorAll('form[data-envio-unico]').forEach(function (form) {
+      delete form.dataset.enviado;
+      var botao = form.querySelector('button[type="submit"]');
+      if (botao) botao.disabled = false;
     });
   });
 </script>

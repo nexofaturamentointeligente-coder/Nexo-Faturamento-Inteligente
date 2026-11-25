@@ -281,8 +281,9 @@ REGISTROS = (
             "para envio, abra um chamado em Suporte para a equipe NEXO avaliar."
         ),
         passos=(
-            "Abra Enviar Relatórios e veja se o cartão da análise ainda está lá (status Aguardando relatório "
-            "ou Relatório recebido).",
+            "Abra Enviar Relatórios e veja se o cartão da análise ainda está lá (selo Falta 1 relatório, "
+            "Faltam 2 relatórios, Relatório recebido ou Precisa de correção; status Aguardando relatório ou "
+            "Relatório recebido).",
             "No espaço do tipo errado (Vendas ou Compras), anexe o arquivo correto e clique em Reenviar. Em "
             "Vendas, informe de novo o total do PDV.",
             "Confira o nome do arquivo exibido no cartão: ele deve ser o do novo envio.",

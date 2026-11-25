@@ -23,6 +23,19 @@
     <h2 class="config-secao-titulo" id="titulo-perfil">Perfil e segurança</h2>
     <div class="config-grade">
         <div class="nexo-card">
+            <div class="nexo-card-head"><div><h3><i class="bi bi-buildings text-purple" aria-hidden="true"></i> Sua empresa</h3></div></div>
+            <div class="nexo-card-body">
+                <dl class="dados-contrato">
+                    <div><dt>Empresa</dt><dd>{{ empresa.nome_fantasia or empresa.razao_social }}</dd></div>
+                    <div><dt>Plano</dt><dd>{{ m.badge_plano(empresa.plano_atual.nome_plano) }}</dd></div>
+                    <div><dt>Situação da conta</dt><dd>{{ m.badge_conta(empresa.status_conta) }}</dd></div>
+                    <div><dt>E-mail de contato da empresa</dt><dd>{{ m.email(empresa.email_contato) }}</dd></div>
+                </dl>
+                <p class="field-hint mt-3 mb-0">Para mudar algum destes dados, <a href="{{ url_for('cliente.tickets', novo=1) }}">abra um chamado</a> para a equipe NEXO.</p>
+            </div>
+        </div>
+
+        <div class="nexo-card">
             <div class="nexo-card-head"><div><h3><i class="bi bi-person-gear text-purple" aria-hidden="true"></i> Dados do responsável</h3></div></div>
             <div class="nexo-card-body">
                 <form method="POST" action="{{ url_for('cliente.configuracoes_perfil') }}" class="config-form" data-envio-unico>
@@ -39,12 +52,6 @@
                     </div>
                     <button type="submit" class="btn-nexo"><i class="bi bi-check2" aria-hidden="true"></i> Salvar dados</button>
                 </form>
-                <dl class="dados-contrato">
-                    <div><dt>Empresa</dt><dd>{{ empresa.nome_fantasia or empresa.razao_social }}</dd></div>
-                    <div><dt>Plano</dt><dd>{{ m.badge_plano(empresa.plano_atual.nome_plano) }}</dd></div>
-                    <div><dt>Situação da conta</dt><dd>{{ m.badge_conta(empresa.status_conta) }}</dd></div>
-                    <div><dt>E-mail de contato da empresa</dt><dd>{{ m.email(empresa.email_contato) }}</dd></div>
-                </dl>
             </div>
         </div>
 
@@ -52,7 +59,7 @@
             <div class="nexo-card-head">
                 <div>
                     <h3><i class="bi bi-shield-lock text-purple" aria-hidden="true"></i> Alterar senha</h3>
-                    <p class="sub">As outras sessões abertas são encerradas{% if envio_ativo %} e você recebe um aviso por e-mail{% endif %}.</p>
+                    <p class="sub">Depois da troca, será preciso entrar de novo em outros aparelhos ou navegadores{% if envio_ativo %}, e você recebe um aviso por e-mail{% endif %}.</p>
                 </div>
             </div>
             <div class="nexo-card-body">
@@ -65,7 +72,7 @@
             <div class="nexo-card-head">
                 <div>
                     <h3><i class="bi bi-envelope-at text-purple" aria-hidden="true"></i> Alterar e-mail de acesso</h3>
-                    <p class="sub">As outras sessões abertas são encerradas{% if envio_ativo %} e o endereço atual recebe um aviso{% endif %}.</p>
+                    <p class="sub">Depois da troca, será preciso entrar de novo em outros aparelhos ou navegadores{% if envio_ativo %}, e o endereço atual recebe um aviso{% endif %}.</p>
                 </div>
             </div>
             <div class="nexo-card-body">
@@ -86,7 +93,7 @@
                         <label class="nexo-label" for="senha_atual_email">Senha atual <span class="req">*</span></label>
                         <input type="password" class="form-control" id="senha_atual_email" name="senha_atual" autocomplete="current-password" required>
                     </div>
-                    <p class="field-hint mb-0">O e-mail de contato da empresa não muda com esta troca: para alterá-lo, abra um chamado em Suporte.</p>
+                    <p class="field-hint mb-0">O e-mail de contato da empresa não muda com esta troca. Para alterá-lo, <a href="{{ url_for('cliente.tickets', novo=1) }}">abra um chamado no Suporte</a>.</p>
                     <button type="submit" class="btn-nexo"><i class="bi bi-envelope-check" aria-hidden="true"></i> Alterar e-mail</button>
                 </form>
             </div>
@@ -120,9 +127,17 @@
                 <form method="POST" action="{{ url_for('cliente.configuracoes_solicitar_exclusao') }}" class="config-form" data-envio-unico
                       data-confirm="Abrir um chamado pedindo a exclusão dos dados da sua empresa? Nada será apagado agora: a equipe NEXO fará a tratativa.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-ghost is-danger"><i class="bi bi-eraser" aria-hidden="true"></i> Solicitar Exclusão de Dados</button>
+                    <button type="submit" class="btn-ghost is-danger"><i class="bi bi-eraser" aria-hidden="true"></i> Solicitar exclusão dos dados</button>
                 </form>
                 {% endif %}
+            </div>
+        </div>
+
+        <div class="nexo-card config-largo">
+            <div class="nexo-card-head"><div><h3><i class="bi bi-star text-purple" aria-hidden="true"></i> Sua avaliação da NEXO</h3></div></div>
+            <div class="nexo-card-body">
+                <p class="t-mut">Avalie a NEXO ou consulte a avaliação que você já enviou, com a situação dela e a autorização de publicação.</p>
+                <a href="{{ url_for('avaliacoes.minha_avaliacao') }}" class="btn-ghost"><i class="bi bi-star" aria-hidden="true"></i> Minha avaliação</a>
             </div>
         </div>
 
@@ -198,13 +213,13 @@
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" role="switch" id="lembrete_renovacao" name="lembrete_renovacao" value="1" {{ 'checked' if preferencias.lembrete_renovacao }} {{ 'disabled' if not esquema_disponivel }}>
-                        <label class="form-check-label" for="lembrete_renovacao">Lembretes de renovação contratual</label>
-                        <small class="field-hint">{% if situacao.contratual %}A faixa aparece na Visão Geral quando o contrato estiver a até {{ dias_aviso_renovacao }} dias do fim; o sininho e o e-mail saem quando a equipe NEXO dispara o lembrete.{% else %}Este lembrete passa a valer quando a gestão do seu contrato estiver ativa no portal. Sua escolha fica guardada.{% endif %}</small>
+                        <label class="form-check-label" for="lembrete_renovacao">Lembrete de renovação do contrato</label>
+                        <small class="field-hint">{% if situacao.contratual %}Faltando {{ dias_aviso_renovacao }} dias ou menos para o fim do contrato, aparece um aviso na Visão Geral. A equipe NEXO também pode mandar o lembrete pelo sininho e por e-mail.{% else %}O portal ainda não acompanha as datas do seu contrato, então este lembrete não aparece por enquanto. Sua escolha fica guardada.{% endif %}</small>
                     </div>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" role="switch" id="alerta_chamado" name="alerta_chamado" value="1" {{ 'checked' if preferencias.alerta_chamado }} {{ 'disabled' if not esquema_disponivel }}>
                         <label class="form-check-label" for="alerta_chamado">Alertas de chamados do suporte</label>
-                        <small class="field-hint">No sininho quando a equipe responde ou resolve um chamado{% if envio_ativo %}, e por e-mail quando resolve. O e-mail de contato da empresa, se for outro, continua recebendo{% endif %}.</small>
+                        <small class="field-hint">Chega um aviso no sininho quando a equipe responde ou resolve um chamado{% if envio_ativo %}, e um e-mail quando resolve. Desligar não vale para o e-mail de contato da empresa, se ele for diferente do seu{% endif %}.</small>
                     </div>
                     <button type="submit" class="btn-nexo" {{ 'disabled' if not esquema_disponivel }}><i class="bi bi-check2" aria-hidden="true"></i> Salvar preferências</button>
                 </form>

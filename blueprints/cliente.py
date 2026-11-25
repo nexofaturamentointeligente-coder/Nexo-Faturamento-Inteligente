@@ -73,6 +73,10 @@ cliente_bp = Blueprint("cliente", __name__)
 # Estados em que uma análise ainda aceita anexos do cliente.
 STATUS_ACEITA_UPLOAD = ("AGUARDANDO_RELATORIO", "RELATORIO_RECEBIDO")
 
+# Recusa do próprio processo de leitura (resposta fora do protocolo): o cliente não precisa do detalhe técnico.
+MENSAGEM_ARQUIVO_NAO_LIDO = ("Não conseguimos ler este arquivo. Exporte de novo do seu sistema e tente outra vez; "
+                             "se o erro continuar, abra um chamado para a equipe NEXO.")
+
 # Categorias de ticket (token persistido -> rótulo exibido).
 CATEGORIAS_TICKET = {
     "FINANCEIRO": "Financeiro",
@@ -93,8 +97,8 @@ def cliente_required(f):
 
 
 MENSAGEM_PDF_ENCERRADO = (
-    "Seu prazo para exportação de relatórios foi encerrado. As análises históricas "
-    "autorizadas continuam disponíveis para consulta durante o período de suspensão."
+    "Seu prazo para exportação de relatórios foi encerrado. As análises liberadas "
+    "continuam disponíveis para consulta no portal enquanto durar a suspensão."
 )
 
 
@@ -355,7 +359,7 @@ def configuracoes_senha():
     _situacao_cliente()
     erro = trocar_senha_autenticada(current_user._get_current_object(), request.form.get("senha_atual"),
                                     request.form.get("nova_senha"), request.form.get("confirmacao_nova_senha"))
-    flash(erro or "Senha alterada. As outras sessões abertas foram encerradas.", "danger" if erro else "success")
+    flash(erro or "Senha alterada. Em outros aparelhos ou navegadores, será preciso entrar de novo.", "danger" if erro else "success")
     return redirect(url_for("cliente.configuracoes"))
 
 
@@ -366,8 +370,8 @@ def configuracoes_email():
     _situacao_cliente()
     erro = trocar_email_autenticado(current_user._get_current_object(), request.form.get("senha_atual"),
                                     request.form.get("novo_email"), request.form.get("confirmacao_novo_email"))
-    flash(erro or "E-mail de acesso alterado: use o novo endereço no próximo login. As outras sessões foram "
-                  "encerradas.", "danger" if erro else "success")
+    flash(erro or "E-mail de acesso alterado. Use o novo endereço para entrar; em outros aparelhos ou navegadores, "
+                  "será preciso entrar de novo.", "danger" if erro else "success")
     return redirect(url_for("cliente.configuracoes"))
 
 
@@ -566,7 +570,7 @@ def analise(id_analise):
     if not pode_consultar_analise(situacao, analise):
         return _acesso_restrito(
             "Análise indisponível",
-            "O período desta análise não está coberto pelos períodos contratados e efetivamente pagos.",
+            "O período desta análise não está entre os períodos pagos do seu contrato.",
         )
 
     semaforos = gerar_semaforos(analise.indicador, analise.curva_abc) if analise.indicador else []
@@ -605,7 +609,7 @@ def analise_pdf(id_analise):
     if not pode_consultar_analise(situacao, analise):
         return _acesso_restrito(
             "Análise indisponível",
-            "O período desta análise não está coberto pelos períodos contratados e efetivamente pagos.",
+            "O período desta análise não está entre os períodos pagos do seu contrato.",
         )
     if not pode_exportar_pdf(situacao, analise):
         return _acesso_restrito("Exportação encerrada", MENSAGEM_PDF_ENCERRADO)
@@ -690,9 +694,9 @@ def upload():
         nome_seguro = secure_filename(arquivo.filename)
         ext = os.path.splitext(nome_seguro)[1].lower().lstrip(".")
         if ext not in current_app.config["ALLOWED_EXTENSIONS"]:
-            flash(
-                f"Extensão .{ext} não suportada. Aceitos: {sorted(current_app.config['ALLOWED_EXTENSIONS'])}.", "danger",
-            )
+            aceitos = " ou ".join("." + e for e in sorted(current_app.config["ALLOWED_EXTENSIONS"]))
+            flash(f"O relatório de {tipo.capitalize()} não foi enviado. Formato de arquivo não aceito: envie em {aceitos}."
+                  + (" Abra o .xls no Excel e salve como .xlsx." if ext == "xls" else ""), "danger")
             return redirect(url_for("cliente.upload"))
         # Trava do total do PDV: só VENDAS entra no faturamento. required no HTML não protege.
         valor_pdv = None
@@ -746,11 +750,18 @@ def upload():
             url_for("admin.analise_upload", id_analise=id_analise),
         )
         db.session.commit()
-        flash(f"Relatório de {tipo} enviado. A equipe NEXO fará a validação e o processamento.", "success")
+        falta = "Compras" if tipo == "VENDAS" else "Vendas"
+        flash(f"Relatório de {tipo.capitalize()} recebido. "
+              + ("Os dois relatórios estão com a equipe NEXO para validação." if outro
+                 else f"Falta enviar o relatório de {falta}."), "success")
         return redirect(url_for("cliente.upload"))
     except ETLInputError as erro:
         db.session.rollback()
-        flash(erro.safe_message, "danger")
+        relatorio = {"VENDAS": "Vendas", "COMPRAS": "Compras"}.get(
+            (request.form.get("tipo_relatorio") or "").strip().upper())
+        texto = (MENSAGEM_ARQUIVO_NAO_LIDO if erro.code in ("worker", "output", "request")
+                 else erro.safe_message)
+        flash(f"O relatório de {relatorio} não foi enviado. {texto}" if relatorio else texto, "danger")
         return redirect(url_for("cliente.upload"))
     except SQLAlchemyError as erro:
         db.session.rollback()
@@ -782,7 +793,7 @@ def tickets():
         mensagem = chamados_suporte.normalizar_mensagem(request.form.get("mensagem"))
 
         if not assunto or not mensagem:
-            flash("Informe um assunto e descreva a sua dúvida.", "warning")
+            flash("Preencha o assunto e a mensagem para abrir o chamado.", "warning")
             return redirect(url_for("cliente.tickets"))
         if categoria not in CATEGORIAS_TICKET:
             flash("Selecione uma categoria válida.", "danger")
@@ -825,7 +836,7 @@ def tickets():
         id_chamado = chamado.id_chamado
         db.session.commit()
         configuracoes_conta.avisar_novo_chamado(id_chamado, CATEGORIAS_TICKET[categoria])
-        flash("Chamado aberto com sucesso. A equipe NEXO responderá em breve.", "success")
+        flash(f"Chamado aberto: #{id_chamado}. A equipe NEXO foi avisada.", "success")
         return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))
 
     chamados = db.session.execute(
@@ -853,7 +864,7 @@ def ticket_detalhe(id_chamado):
     if request.method == "POST":
         texto = chamados_suporte.normalizar_mensagem(request.form.get("mensagem"))
         if not texto:
-            flash("Digite uma mensagem.", "warning")
+            flash("Escreva a mensagem antes de enviar.", "warning")
             return redirect(url_for("cliente.ticket_detalhe", id_chamado=id_chamado))
         if chamados_suporte.mensagem_longa_demais(texto):
             flash(chamados_suporte.MENSAGEM_LONGA, "warning")

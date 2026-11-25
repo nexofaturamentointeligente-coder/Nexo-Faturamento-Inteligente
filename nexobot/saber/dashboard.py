@@ -18,14 +18,17 @@ REGISTROS = (
             "andamento e um card de contato."
         ),
         explicacao=(
-            "De cima para baixo: barra de origem dos dados; aviso de conta suspensa (quando for o caso); "
-            "cartão da empresa (razão social, CNPJ, plano e status); cards de faturamento total, total "
-            "comprado e Indicador de Pressão de Estoque; síntese executiva em semáforos; cards de produto "
-            "mais vendido, maior faturamento e maior saldo estimado parado; gráficos Compras x Vendas e "
-            "Indicador de Pressão de Estoque; card do relatório estratégico com botão para a análise "
-            "completa; gráfico de Pareto da Curva ABC; histórico comparativo; tabela de histórico recente; "
-            "tabela de análises em andamento; e o card Contato NEXO.\n\n"
-            "Sem análise publicada, a página mostra “Sua primeira análise está em preparação”."
+            "De cima para baixo: avisos de contrato ou de conta suspensa (quando for o caso); o próximo passo, "
+            "quando um período espera os seus relatórios, com o botão Enviar relatórios; o aviso de diferença no "
+            "total de vendas (quando houver); o painel Evolução & Conquistas (com Raio-X do PDV); o resumo da "
+            "análise mais recente, com o botão “Abrir análise completa”; cards de faturamento total, total "
+            "comprado e Indicador de Pressão de Estoque; síntese executiva em semáforos; cards de produto mais "
+            "vendido, maior faturamento e maior saldo estimado parado; gráficos Compras x Vendas e Indicador de "
+            "Pressão de Estoque; gráfico da Curva ABC; histórico comparativo; barra de origem dos dados; tabela "
+            "de histórico recente; tabela de análises em andamento; cartão da empresa (razão social, CNPJ, plano "
+            "e status); e o card Contato NEXO.\n\n"
+            "Sem análise publicada, a página diz o próximo passo: se um período espera os seus relatórios, "
+            "mostra o botão Enviar relatórios; senão, mostra “Sua primeira análise está em preparação”."
         ),
         perguntas=(
             "O que é a Visão Geral?", "O que tem no dashboard?", "O que aparece na página inicial?",
@@ -105,9 +108,9 @@ REGISTROS = (
         titulo="Que informações da empresa aparecem no painel?",
         categoria="Visão Geral do painel",
         resumo=(
-            "O cartão no topo da Visão Geral mostra razão social, CNPJ, plano (Bronze, Prata ou Ouro) e "
-            "status da conta (Ativa, Suspensa ou Cancelada). Ao lado do seu nome, no topo, aparece o perfil "
-            "(Cliente)."
+            "O cartão da empresa, perto do fim da Visão Geral, mostra razão social, CNPJ, plano (Bronze, Prata "
+            "ou Ouro) e status da conta (Ativa, Suspensa ou Cancelada). Ao lado do seu nome, no topo, aparece o "
+            "perfil (Cliente)."
         ),
         perguntas=(
             "Onde vejo o nome da minha empresa?", "O que é o cartão da empresa?", "Onde aparece o status da conta?",
@@ -122,13 +125,15 @@ REGISTROS = (
         titulo="O que é a barra de origem dos dados?",
         categoria="Visão Geral do painel",
         resumo=(
-            "É a faixa no topo da Visão Geral e de cada análise que informa com que base a análise foi feita: "
-            "a empresa, o período dos dados e os arquivos importados de Vendas e Compras."
+            "É a faixa que informa com que base a análise foi feita: a empresa, o período analisado e os "
+            "relatórios de Vendas e Compras usados. Na Visão Geral, ela fecha o bloco da análise mais recente; "
+            "na página de cada análise, fica no fim."
         ),
         explicacao=(
-            "Quando o processamento consegue ler o período no cabeçalho do relatório do PDV, a barra mostra "
-            "essas datas com um ícone indicando que foram lidas automaticamente; caso contrário, mostra o "
-            "período declarado da análise. Serve para você conferir se o arquivo certo foi usado."
+            "Quando o NEXO consegue ler o período no cabeçalho do relatório do PDV, a barra mostra essas datas "
+            "com um ícone indicando que foram lidas do próprio relatório; caso contrário, mostra o período "
+            "declarado da análise. Serve para você conferir se o arquivo certo foi usado. O rodapé da barra diz "
+            "que os números são calculados pelo NEXO a partir dos relatórios de vendas e de compras do período."
         ),
         perguntas=(
             "O que é a barra de auditoria?", "O que significa período dos dados?", "O que é base de dados no topo da página?",
@@ -145,11 +150,12 @@ REGISTROS = (
         categoria="Visão Geral do painel",
         resumo=(
             "Porque ainda não existe nenhuma análise publicada para a sua empresa. Os indicadores e gráficos "
-            "só aparecem depois que a equipe NEXO processa os relatórios e publica a devolutiva."
+            "só aparecem depois que a equipe NEXO recebe os relatórios de vendas e de compras do período e "
+            "publica a análise."
         ),
         explicacao=(
-            "Enquanto isso, a tabela “Análises em andamento” mostra o status do período aberto. Se você ainda "
-            "não enviou os relatórios, comece por Enviar Relatórios."
+            "Enquanto isso, a tabela “Análises em andamento” mostra o status do período aberto. Se o período "
+            "espera os seus relatórios, a própria Visão Geral mostra o botão Enviar relatórios."
         ),
         perguntas=(
             "Por que meu painel está vazio?", "Primeira análise em preparação, o que significa?",
@@ -166,13 +172,14 @@ REGISTROS = (
         categoria="Visão Geral do painel",
         tipo="procedimento",
         resumo=(
-            "Na Visão Geral, clique em “Abrir análise completa” no card do relatório estratégico, ou abra o "
+            "Na Visão Geral, clique em “Abrir análise completa”, no resumo da análise mais recente, ou abra o "
             "Histórico e clique em “Abrir análise” na linha do período desejado."
         ),
         explicacao=(
-            "A página da análise traz: barra de origem dos dados, indicadores do período, gráficos, a tabela "
-            "da Curva ABC com filtro por classe, a síntese executiva em semáforos, a devolutiva (resumo "
-            "executivo e conclusão estratégica) e os botões Exportar PDF, Histórico e Voltar ao painel."
+            "A página da análise traz, nesta ordem: a devolutiva (resumo executivo e conclusão estratégica), a "
+            "síntese executiva em semáforos, os indicadores do período, os gráficos, a tabela da Curva ABC com "
+            "filtro por classe e, no fim, a barra de origem dos dados. No topo ficam os botões Exportar PDF, "
+            "Histórico e Voltar ao painel."
         ),
         perguntas=(
             "Como abro a análise completa?", "Onde vejo a devolutiva inteira?", "Como vejo todos os produtos da curva ABC?",

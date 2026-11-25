@@ -410,7 +410,7 @@ def desconhecida(semente: str) -> Montagem:
 _OPERACOES = (
     (r"^(?:exclu|apag|delet|remov|limp|zer)", "excluir ou apagar dados",
      "Exclusões são tratadas pela equipe NEXO: abra um chamado em Suporte ou, para os dados da empresa, use "
-     "“Solicitar Exclusão de Dados” em Configurações.",
+     "“Solicitar exclusão dos dados” em Configurações.",
      "suporte"),
     (r"^(?:publiq|public|despubliq|despublic)", "publicar ou despublicar análises",
      "A publicação é feita pela equipe NEXO depois da validação, e você é avisado no sininho "

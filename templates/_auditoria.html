@@ -1,38 +1,38 @@
 {# ===================================================================
-   NEXO — Barra de auditoria de origem dos dados (reutilizável).
+   NEXO — Barra de origem dos dados da análise (reutilizável).
    Importar com:  {% import "_auditoria.html" as audit %}
    Uso:  {{ audit.barra(auditoria) }}   (auditoria vem de cliente._auditoria)
-   Mostra empresa/base, período (lido do relatório via pandas) e arquivos,
-   com o selo de origem do Motor ETL Nexo. Não renderiza nada se auditoria=None.
+   Mostra a empresa, o período analisado (lido do relatório quando possível) e os
+   relatórios usados, com a frase de origem dos números. Não renderiza nada se auditoria=None.
    =================================================================== #}
 {%- macro barra(auditoria) -%}
 {% if auditoria %}
 <div class="audit-bar mb-4">
     <div class="audit-row">
         <div class="audit-item">
-            <span class="audit-ico"><i class="bi bi-database-check"></i></span>
-            <div><span class="audit-k">Base de dados</span><span class="audit-v">{{ auditoria.empresa }}</span></div>
+            <span class="audit-ico"><i class="bi bi-database-check" aria-hidden="true"></i></span>
+            <div><span class="audit-k">Empresa</span><span class="audit-v">{{ auditoria.empresa }}</span></div>
         </div>
         <div class="audit-sep"></div>
         <div class="audit-item">
-            <span class="audit-ico"><i class="bi bi-calendar3"></i></span>
+            <span class="audit-ico"><i class="bi bi-calendar3" aria-hidden="true"></i></span>
             <div>
-                <span class="audit-k">Período dos dados {% if auditoria.periodo_derivado %}<i class="bi bi-magic" title="Lido automaticamente do cabeçalho do relatório importado"></i>{% endif %}</span>
+                <span class="audit-k">Período analisado {% if auditoria.periodo_derivado %}<i class="bi bi-magic" aria-hidden="true" title="Datas lidas do próprio relatório"></i><span class="visually-hidden">(datas lidas do próprio relatório)</span>{% endif %}</span>
                 <span class="audit-v">{{ auditoria.periodo_inicio.strftime('%d/%m/%Y') }} a {{ auditoria.periodo_fim.strftime('%d/%m/%Y') }}</span>
             </div>
         </div>
         <div class="audit-sep"></div>
         <div class="audit-item">
-            <span class="audit-ico"><i class="bi bi-file-earmark-spreadsheet"></i></span>
+            <span class="audit-ico"><i class="bi bi-file-earmark-spreadsheet" aria-hidden="true"></i></span>
             <div>
-                <span class="audit-k">Arquivo(s) importado(s)</span>
+                <span class="audit-k">Relatórios usados</span>
                 <span class="audit-v t-mono">{{ auditoria.arquivo_vendas or '—' }}{% if auditoria.arquivo_compras %} · {{ auditoria.arquivo_compras }}{% endif %}</span>
             </div>
         </div>
     </div>
     <div class="audit-foot">
-        <i class="bi bi-shield-check"></i>
-        Análise gerada pelo <strong>Motor ETL Nexo v1.0</strong> — dados processados localmente com integridade garantida.
+        <i class="bi bi-shield-check" aria-hidden="true"></i>
+        Números calculados pelo NEXO a partir dos relatórios de vendas e de compras deste período.
     </div>
 </div>
 {% endif %}

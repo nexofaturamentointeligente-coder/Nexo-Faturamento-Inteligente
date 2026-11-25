@@ -553,6 +553,12 @@
           var label = dz.querySelector('[data-dz-label]');
           var estado = dz.querySelector('[data-dz-estado]');
           var erro = dz.querySelector('[data-dz-erro]');
+          /* Opcionais: [data-dz-dica] com data-selecionado lembra o botão depois da escolha;
+             data-max-bytes confere o tamanho antes de subir (só na dropzone de um arquivo: a de
+             vários confere o total em planos.js). */
+          var dica = dz.querySelector('[data-dz-dica]');
+          var dicaOriginal = dica ? dica.textContent : '';
+          var maxBytes = dz.hasAttribute('data-dz-multiplo') ? 0 : (parseInt(dz.getAttribute('data-max-bytes') || '0', 10) || 0);
           var form = dz.closest('form');
           if (!input) return;
           var aceitos = (input.getAttribute('accept') || '').split(',')
@@ -579,6 +585,7 @@
             dz.classList.toggle('is-recebido', jaRecebido);
             if (label) label.textContent = label.getAttribute('data-vazio') || label.textContent;
             if (estado) estado.textContent = estado.getAttribute('data-vazio') || '';
+            if (dica) dica.textContent = dicaOriginal;
           }
           function refletir() {
             limparErro();
@@ -587,13 +594,24 @@
             if (!valido(arquivo.name)) {
               input.value = '';
               limparSelecao();
-              mostrarErro('Formato não aceito: envie um arquivo ' + aceitos.join(' ou ') + '.');
+              /* .xls (Excel antigo) onde só .csv e .xlsx valem: diz como converter. */
+              var xls = /\.xls$/i.test(arquivo.name) && aceitos.indexOf('.xls') < 0;
+              mostrarErro('Formato não aceito: envie um arquivo ' + aceitos.join(' ou ') + '.' +
+                (xls ? ' Abra o .xls no Excel e salve como .xlsx.' : ''));
+              return;
+            }
+            if (maxBytes && arquivo.size > maxBytes) {
+              input.value = '';
+              limparSelecao();
+              mostrarErro('Arquivo de ' + (arquivo.size / 1048576).toFixed(1).replace('.', ',') + ' MB: o limite é ' +
+                Math.round(maxBytes / 1048576) + ' MB. Nada foi enviado: exporte um arquivo menor e tente de novo.');
               return;
             }
             dz.classList.add('is-selecionado');
             dz.classList.remove('is-recebido');
             if (estado) estado.textContent = 'Selecionado para envio';
             if (label) label.textContent = arquivo.name;
+            if (dica && dica.getAttribute('data-selecionado')) dica.textContent = dica.getAttribute('data-selecionado');
           }
           input.addEventListener('change', refletir);
           ['dragenter', 'dragover'].forEach(function (ev) {
@@ -609,8 +627,43 @@
             refletir();
           });
           if (form) {
+            /* Envio demorado (form[data-envio-aguarde], tela de envio do cliente): com arquivo, o botão
+               fica ocupado ("Enviando…") e o [data-envio-andamento] mostra a frase de espera até a
+               próxima página. Solta na volta pelo histórico, se a navegação parar ou depois de um
+               prazo de reserva (a fila espera até 20 s e a leitura isolada até 120 s). */
+            var aguarde = form.hasAttribute('data-envio-aguarde');
+            var botao = form.querySelector('button[type="submit"]');
+            var andamento = form.querySelector('[data-envio-andamento]');
+            var rotuloBotao = botao ? botao.innerHTML : '';
+            var reserva = null;
+            var liberarEnvio = function () {
+              window.clearTimeout(reserva);
+              reserva = null;
+              if (botao) { botao.disabled = false; botao.removeAttribute('aria-busy'); botao.innerHTML = rotuloBotao; }
+              if (andamento) andamento.textContent = '';
+            };
+            if (aguarde) {
+              window.addEventListener('pageshow', function (ev) { if (ev.persisted) liberarEnvio(); });
+              if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+                window.navigation.addEventListener('navigateerror', liberarEnvio);
+              }
+            }
             form.addEventListener('submit', function (e) {
-              if (input.files && input.files.length) return;
+              if (input.files && input.files.length) {
+                if (aguarde && !e.defaultPrevented) {
+                  /* O botão só é travado depois que o navegador montou o envio. */
+                  window.setTimeout(function () {
+                    if (!botao) return;
+                    botao.disabled = true;
+                    botao.setAttribute('aria-busy', 'true');
+                    botao.textContent = 'Enviando…';
+                  }, 0);
+                  if (andamento) andamento.textContent = andamento.getAttribute('data-envio-andamento') || '';
+                  window.clearTimeout(reserva);
+                  reserva = window.setTimeout(liberarEnvio, 200000);
+                }
+                return;
+              }
               e.preventDefault();
               /* O guarda de envio único (data-envio-unico) já marcou o formulário: como o envio
                  parou aqui, a marca sai, e o próximo clique com arquivo não é descartado. */

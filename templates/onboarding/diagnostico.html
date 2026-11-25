@@ -11,12 +11,14 @@
 <div class="page-head">
     <div>
         <h1>Raio-X do PDV</h1>
-        <p class="sub">O que os seus relatórios de vendas mostram: vendas sem custo informado, vendas abaixo do preço normal ou do custo e uma estimativa do dinheiro que dá para recuperar.</p>
+        <p class="sub">Quanto dinheiro a sua loja deixa escapar vendendo abaixo do custo ou do preço normal, e o que conferir no cadastro.</p>
     </div>
+    {% if raio_x %}
     <div class="page-head-actions">
-        {% if raio_x and plano_acao %}{{ acao.botao() }}{% endif %}
+        {% if plano_acao %}{{ acao.botao() }}{% endif %}
         <a href="{{ url_for('onboarding.planos') }}" class="btn-ghost"><i class="bi bi-layers" aria-hidden="true"></i> Planos</a>
     </div>
+    {% endif %}
 </div>
 
 {% if raio_x %}
@@ -29,7 +31,7 @@
 <p class="raio-x-meta">
     <i class="bi bi-clock" aria-hidden="true"></i> Raio-X de {{ m.horario(linha_raio_x.gerado_em) }} ·
     {{ linha_raio_x.arquivos }} {{ 'arquivo enviado' if linha_raio_x.arquivos == 1 else 'arquivos enviados' }}
-    {%- if raio_x.periodo.inicio %} · vendas de {{ raio_x.periodo.inicio[8:10] }}/{{ raio_x.periodo.inicio[5:7] }}/{{ raio_x.periodo.inicio[0:4] }} a {{ raio_x.periodo.fim[8:10] }}/{{ raio_x.periodo.fim[5:7] }}/{{ raio_x.periodo.fim[0:4] }} ({{ raio_x.periodo.meses }} {{ 'mês' if raio_x.periodo.meses == 1 else 'meses' }}){% endif %}
+    {%- if raio_x.periodo.inicio and not plano_acao %} · vendas de {{ raio_x.periodo.inicio[8:10] }}/{{ raio_x.periodo.inicio[5:7] }}/{{ raio_x.periodo.inicio[0:4] }} a {{ raio_x.periodo.fim[8:10] }}/{{ raio_x.periodo.fim[5:7] }}/{{ raio_x.periodo.fim[0:4] }} ({{ raio_x.periodo.meses }} {{ 'mês' if raio_x.periodo.meses == 1 else 'meses' }}){% endif %}
 </p>
 
 {{ pl.recomendacao_plano(recomendacao, raio_x.recuperavel, plano_atual, ex.recuperavel, plano_acao) }}
@@ -43,7 +45,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="saudeTitulo"><i class="bi bi-heart-pulse text-purple" aria-hidden="true"></i> Saúde do cadastro</h2>
-            <p class="sub">Sem o custo do produto, não dá para saber quanto sobra de cada venda. Veja quanto do que você vendeu tem custo informado e não tem confusão de código e nome.</p>
+            <p class="sub">Quanto das suas vendas veio com custo e sem confusão de código ou nome. Sem o custo, não dá para saber quanto sobra de cada venda.</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -74,11 +76,11 @@
         {% set dicas = ex.inconsistencias %}
         <h3 class="raio-x-subtitulo">Pontos para conferir no cadastro</h3>
         <dl class="dados-contrato raio-x-inconsistencias">
-            <div><dt>Mesmo código com nomes diferentes</dt><dd>{{ m.num(inc.codigo_com_varios_nomes) }}</dd><dd class="raio-x-dica">{{ dicas.codigo_com_varios_nomes }}</dd></div>
-            <div><dt>Mesmo nome com códigos diferentes</dt><dd>{{ m.num(inc.nome_com_varios_codigos) }}</dd><dd class="raio-x-dica">{{ dicas.nome_com_varios_codigos }}</dd></div>
-            <div><dt>Produtos com estoque abaixo de zero</dt><dd>{{ m.num(inc.estoque_negativo) }}</dd><dd class="raio-x-dica">{{ dicas.estoque_negativo }}</dd></div>
-            <div><dt>Itens que saíram sem valor</dt><dd>{{ m.num(inc.venda_sem_valor) }}</dd><dd class="raio-x-dica">{{ dicas.venda_sem_valor }}</dd></div>
-            <div><dt>Produtos com margem negativa</dt><dd>{{ m.num(negativos) }}</dd><dd class="raio-x-dica">{{ dicas.itens_margem_negativa }}</dd></div>
+            <div{% if inc.codigo_com_varios_nomes == 0 %} class="is-ok"{% endif %}><dt>Mesmo código com nomes diferentes</dt><dd>{{ m.num(inc.codigo_com_varios_nomes) }}</dd><dd class="raio-x-dica">{{ dicas.codigo_com_varios_nomes }}</dd></div>
+            <div{% if inc.nome_com_varios_codigos == 0 %} class="is-ok"{% endif %}><dt>Mesmo nome com códigos diferentes</dt><dd>{{ m.num(inc.nome_com_varios_codigos) }}</dd><dd class="raio-x-dica">{{ dicas.nome_com_varios_codigos }}</dd></div>
+            <div{% if inc.estoque_negativo == 0 %} class="is-ok"{% endif %}><dt>Produtos com estoque abaixo de zero</dt><dd>{{ m.num(inc.estoque_negativo) }}</dd><dd class="raio-x-dica">{{ dicas.estoque_negativo }}</dd></div>
+            <div{% if inc.venda_sem_valor == 0 %} class="is-ok"{% endif %}><dt>Itens que saíram sem valor</dt><dd>{{ m.num(inc.venda_sem_valor) }}</dd><dd class="raio-x-dica">{{ dicas.venda_sem_valor }}</dd></div>
+            <div{% if negativos == 0 %} class="is-ok"{% endif %}><dt>Produtos com margem negativa</dt><dd>{{ m.num(negativos) }}</dd><dd class="raio-x-dica">{{ dicas.itens_margem_negativa }}</dd></div>
             {%- if confirmar and confirmar.itens %}
             <div><dt>Custo a confirmar</dt><dd>{{ m.num(confirmar.itens) }}</dd><dd class="raio-x-dica">{{ dicas.custo_a_confirmar }}</dd></div>
             {%- endif %}
@@ -91,14 +93,14 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="scannerTitulo"><i class="bi bi-upc-scan text-purple" aria-hidden="true"></i> Produtos vendidos fora do preço normal</h2>
-            <p class="sub">No mesmo mês, o produto saiu por mais de um preço ou por um preço diferente do de tabela. Veja quanto deixou de entrar nas vendas abaixo do preço normal: o preço de tabela do relatório ou, sem ele, o preço que mais saiu no mês.</p>
+            <p class="sub">Produtos que, no mesmo mês, saíram por mais de um preço ou fora do preço de tabela. A lista começa pelos que mais deixaram dinheiro na mesa.</p>
         </div>
     </div>
     <div class="nexo-card-body">
         {% if not scanner.variacao_visivel %}
         <div class="nota-pressao mb-3">
             <i class="bi bi-info-circle" aria-hidden="true"></i>
-            <span>Seus relatórios não trazem o preço de tabela e o valor cobrado lado a lado em cada linha: assim não dá para ver se o preço variou dentro do mês. Para ver, envie o relatório com o preço unitário e o valor total de cada linha, ou o relatório com uma linha por venda.</span>
+            <span>Seus relatórios não mostram o preço de cada venda, então não dá para ver descontos. Exporte o relatório com o preço unitário e o valor total de cada linha (ou uma linha por venda) e refaça o Raio-X.</span>
         </div>
         {% endif %}
         <div class="row g-3 mb-3">
@@ -129,17 +131,17 @@
                 <div class="table-responsive-x">
                     <table class="nexo-table" id="tabelaScanner">
                         <caption class="visually-hidden">Produtos vendidos fora do preço normal, os com mais dinheiro abaixo do preço normal primeiro</caption>
-                        <thead><tr><th>Produto</th><th class="text-end">Linhas de venda</th><th class="text-end">Qtde vendida</th><th class="text-end">Faturamento</th><th class="text-end">Menor e maior preço</th><th class="text-end">Preço normal</th><th class="text-end">Abaixo do preço normal</th><th class="text-end">Custo por unidade</th><th class="text-end">Margem bruta (R$)</th><th class="text-end">Margem bruta (%)</th></tr></thead>
+                        <thead><tr><th>Produto</th><th class="text-end">Abaixo do preço normal</th><th class="text-end">Preço normal</th><th class="text-end">Menor e maior preço</th><th class="text-end">Faturamento</th><th class="text-end">Qtde vendida</th><th class="text-end">Linhas de venda</th><th class="text-end">Custo por unidade</th><th class="text-end">Margem bruta (R$)</th><th class="text-end">Margem bruta (%)</th></tr></thead>
                         <tbody id="corpoScanner">
                             {% for linha in linhas %}{% set item = linha.item %}
                             <tr data-texto="{{ linha.texto }}" data-marcas="{{ linha.marcas }}">
                                 <td>{{ item.produto }}{% if item.codigo %} <span class="t-mut t-mono">· {{ item.codigo }}</span>{% endif %}</td>
-                                <td class="text-end t-mono">{{ m.num(item.linhas) }}</td>
-                                <td class="text-end t-mono">{{ pl.qtd(item.quantidade) }}</td>
-                                <td class="text-end t-mono">R$ {{ m.brl(item.faturamento) }}</td>
-                                <td class="text-end t-mono">R$ {{ m.brl(item.preco_min) }} – {{ m.brl(item.preco_max) }}</td>
-                                <td class="text-end t-mono">{% if item.preco_referencia is defined and item.preco_referencia is not none %}R$ {{ m.brl(item.preco_referencia) }} <span class="t-mut">({{ 'de tabela' if item.referencia_tabela else 'o que mais saiu' }})</span>{% else %}—{% endif %}</td>
                                 <td class="text-end t-mono">R$ {{ m.brl(item.vazamento) }}</td>
+                                <td class="text-end t-mono">{% if item.preco_referencia is defined and item.preco_referencia is not none %}R$ {{ m.brl(item.preco_referencia) }} <span class="t-mut">({{ 'de tabela' if item.referencia_tabela else 'o que mais saiu' }})</span>{% else %}—{% endif %}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(item.preco_min) }} – {{ m.brl(item.preco_max) }}</td>
+                                <td class="text-end t-mono">R$ {{ m.brl(item.faturamento) }}</td>
+                                <td class="text-end t-mono">{{ pl.qtd(item.quantidade) }}</td>
+                                <td class="text-end t-mono">{{ m.num(item.linhas) }}</td>
                                 <td class="text-end t-mono">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(item.custo_medio)) if item.custo_medio is not none else '—', plano_margem, url_upgrade(plano_margem), 'Custo por unidade') }}</td>
                                 <td class="text-end t-mono">{{ pl.dado_protegido(not prot.margem, ('R$ ' ~ m.brl(item.margem_valor)) if item.margem_valor is not none else '—', plano_margem, url_upgrade(plano_margem), 'Margem bruta') }}</td>
                                 <td class="text-end t-mono">{{ pl.dado_protegido(not prot.margem, pl.pct(item.margem_percentual), plano_margem, url_upgrade(plano_margem), 'Margem %', '00,0%') }}{% if linha.a_confirmar %} <span class="nexo-badge b-amber selo-a-confirmar">custo a confirmar</span>{% endif %}</td>
@@ -166,7 +168,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="fatiasTitulo"><i class="bi bi-calendar3 text-purple" aria-hidden="true"></i> Mês a mês: perdas e dinheiro recuperável</h2>
-            <p class="sub">Cada linha é um mês, ou o relatório inteiro quando ele não é mensal ou não traz as datas{% if plano_atual and plano_atual.limite_historico_meses %}, dentro do histórico do seu plano ({{ plano_atual.historico | lower }}){% endif %}.{% if ordenado %} Por padrão, vêm primeiro os {{ unidade.plural }} com mais dinheiro a recuperar.{% endif %}</p>
+            <p class="sub">{% if ap.fatias_mensais %}Um mês por linha{% else %}Um período por linha: o relatório inteiro, quando ele não é mensal ou não traz as datas{% endif %}{% if plano_atual and plano_atual.limite_historico_meses %}, dentro do histórico do seu plano ({{ plano_atual.historico | lower }}){% endif %}.{% if ordenado %} Primeiro, os {{ unidade.plural }} com mais dinheiro a recuperar.{% endif %}</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -226,7 +228,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="envioTitulo">{{ 'Atualizar o Raio-X' if raio_x else 'Fazer o seu Raio-X' }}</h2>
-            <p class="sub">Envie o relatório de vendas por produto do seu sistema, o mesmo das análises mensais: um arquivo por mês, até {{ max_arquivos }} arquivos (3 anos).{% if raio_x %} O resultado novo substitui o atual.{% endif %}</p>
+            <p class="sub">Envie o relatório de vendas por produto do seu sistema, o mesmo das análises mensais: um arquivo por mês, até {{ max_arquivos }} arquivos (3 anos). Traga as colunas de custo e de preço unitário: sem elas, parte das perdas não aparece.{% if raio_x %} O resultado novo substitui o atual.{% endif %}</p>
         </div>
     </div>
     <div class="nexo-card-body">
@@ -243,8 +245,10 @@
                        aria-labelledby="envioTitulo dzEstadoRaioX dzNomeRaioX" aria-describedby="dzHintRaioX">
             </label>
             <button type="submit" class="btn-nexo mt-3"><i class="bi bi-activity" aria-hidden="true"></i> Gerar Raio-X</button>
+            <p class="envio-andamento" role="status" data-envio-andamento="O NEXO está lendo os relatórios. Não feche nem recarregue esta página: o resultado aparece aqui quando terminar."></p>
         </form>
         <p class="field-hint mt-3 mb-0">Seus arquivos são lidos num ambiente separado e apagados logo depois: o NEXO guarda só o resultado. Com muitos meses, a leitura pode levar até dois minutos.</p>
+        {% if not raio_x %}<p class="field-hint mt-2 mb-0"><a href="{{ url_for('onboarding.planos') }}">Conheça os planos</a> e veja o que cada um libera depois do Raio-X.</p>{% endif %}
     </div>
 </section>
 {% endblock %}

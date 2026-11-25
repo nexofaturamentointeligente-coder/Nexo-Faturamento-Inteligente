@@ -395,7 +395,7 @@ def admin_aprovar(id_avaliacao):
         lambda a: ("Avaliação aprovada e publicada na landing." if a.no_ar
                    else "Avaliação aprovada internamente. Sem autorização do cliente, ela não será publicada."),
         lambda a: ("Sua avaliação foi aprovada e já aparece nos depoimentos da NEXO." if a.no_ar
-                   else "Sua avaliação foi revisada pela equipe NEXO. Obrigado!"),
+                   else "Sua avaliação foi aprovada pela equipe NEXO. Ela não é publicada porque você não autorizou."),
     )
 
 

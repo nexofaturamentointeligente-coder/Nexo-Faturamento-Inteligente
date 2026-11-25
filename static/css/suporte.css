@@ -1,0 +1,37 @@
+/* =====================================================================
+   NEXO — Suporte do cliente: templates/cliente/tickets.html e ticket_detalhe.html.
+   Só leiaute e hierarquia. As cores dos temas continuam em nexo.css e nexo-tema-claro.css;
+   as poucas regras do claro ficam aqui, como em avaliacoes.css (nexo.css não pode citar o
+   atributo do tema: tests/test_tema_interface.py).
+   ===================================================================== */
+
+/* Lista em cartões (o script do base.html liga .em-cartoes quando a tabela não cabe): três faixas
+   em vez de seis blocos. Cada valor mantém o rótulo da coluna (data-label). Sem largura para dois
+   por linha (~320 px), as faixas 2 e 3 empilham sozinhas. */
+.table-responsive-x.em-cartoes .tabela-chamados tbody tr { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.table-responsive-x.em-cartoes .tabela-chamados tbody td { flex: 1 1 9.5rem; border-bottom: 0; }
+.table-responsive-x.em-cartoes .tabela-chamados tbody td:first-child { flex: 0 0 auto; }
+.table-responsive-x.em-cartoes .tabela-chamados tbody td:nth-child(2) { flex-basis: 12rem; padding-top: 12px; }
+.table-responsive-x.em-cartoes .tabela-chamados tbody td.celula-acoes { align-self: flex-end; }
+
+/* Fora do modo cartões, "Ver chamado" fica numa linha só e a coluna, na largura do botão (o mesmo acerto de
+   .col-acao em nexo.css). Nos cartões vale a regra de nexo.css, que deixa o rótulo quebrar dentro do cartão. */
+.table-responsive-x:not(.em-cartoes) .tabela-chamados td:last-child { width: 1%; white-space: nowrap; }
+
+/* Categoria em tom neutro: a cor fica só com o status; o texto e o ícone continuam distinguindo. */
+:is(.tabela-chamados, .page-head-chamado) .cat-badge,
+html[data-theme="light"] :is(.tabela-chamados, .page-head-chamado) .cat-badge {
+  background: transparent; border-color: var(--border-strong); color: var(--text-muted);
+}
+
+/* O assunto é texto do cliente (até 160 caracteres), não título de seção. */
+.page-head-chamado h1 { font-size: clamp(1.2rem, 1rem + 0.6vw, 1.5rem); font-weight: 700; }
+
+/* De quem é a vez, acima da conversa. */
+.chamado-situacao { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 14px; font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.chamado-situacao .bi { margin-top: 2px; color: #c4a0fb; }
+html[data-theme="light"] .chamado-situacao .bi { color: var(--primary-2); }
+
+/* Cabeçalho da mensagem: sem espaço, o horário desce inteiro para a linha de baixo. */
+.chat-meta { flex-wrap: wrap; row-gap: 2px; }
+.chat-time { white-space: nowrap; }

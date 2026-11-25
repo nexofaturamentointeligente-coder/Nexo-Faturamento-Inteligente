@@ -67,7 +67,7 @@ class DadoInvalido(ValueError):
 
 def exigir_esquema() -> None:
     if not esquema_configuracoes_disponivel():
-        raise DadoInvalido("Este ajuste ainda não está disponível: a atualização do banco de dados não foi aplicada.")
+        raise DadoInvalido("Este ajuste ainda não está disponível. Tente de novo mais tarde.")
 
 
 # ---------------------------------------------------------------------------

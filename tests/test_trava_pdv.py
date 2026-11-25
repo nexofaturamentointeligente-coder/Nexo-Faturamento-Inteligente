@@ -630,6 +630,79 @@ class CampoDoFormularioTests(TravaPdvCase):
         self.assertFalse(any("script" in m for m in self._flashes(self.cli)))
 
 
+class TelaDeEnvioDepoisDaFalhaTests(TravaPdvCase):
+    """Enviar relatórios depois de um processamento que falhou: os dois arquivos ficam com Erro e a mesma mensagem
+    (admin.processar_analise). O aviso vermelho não mostra essa mensagem, que só o consultor vê, e o arquivo novo de
+    um dos dois tira o período de "Precisa de correção", como diz o aviso do reenvio."""
+
+    # Frase do processo isolado (código "output"): falha do processamento, não do arquivo do cliente.
+    MOTIVO = "Resultado excede o orcamento permitido."
+    BOTAO = re.compile(r'<button type="submit" class="(btn-nexo|btn-ghost) w-100[^"]*"><i class="bi bi-upload"'
+                       r' aria-hidden="true"></i> (?:Enviar|Reenviar) (Vendas|Compras)</button>')
+    SELO_ERRO = '<span class="nexo-badge b-red"><span class="dot"></span>Erro</span>'
+
+    def _processar_com_falha(self):
+        from models import UploadRelatorio
+        with patch("etl_regras.calcular_kpis_em_memoria",
+                   side_effect=etl_processor.ETLValidationError(self.MOTIVO, "output")):
+            self.assertEqual(self._processar().status_code, 302)
+        self.db.session.expire_all()
+        self.assertEqual({(u.tipo_relatorio, u.status_processamento, u.mensagem_erro)
+                          for u in self.db.session.query(UploadRelatorio)},
+                         {("VENDAS", "ERRO", self.MOTIVO), ("COMPRAS", "ERRO", self.MOTIVO)})
+
+    def _falhar(self):
+        self.assertEqual(self._enviar_cliente().status_code, 302)
+        self.assertEqual(self._enviar_cliente(tipo="COMPRAS", conteudo=COMPRAS, total=None).status_code, 302)
+        self.cli.get("/cliente/upload")  # consome os avisos dos dois envios
+        self._processar_com_falha()
+
+    def _tela(self):
+        resposta = self.cli.get("/cliente/upload")
+        self.assertEqual(resposta.status_code, 200)
+        return self._texto(resposta)
+
+    def _botoes(self, corpo):
+        return {tipo: classe for classe, tipo in self.BOTAO.findall(corpo)}
+
+    def test_falha_pede_correcao_sem_mostrar_a_mensagem_gravada(self):
+        self._falhar()
+        corpo = self._tela()
+        self.assertIn("Precisa de correção", corpo)
+        self.assertIn("Não conseguimos ler os relatórios deste período.", corpo)
+        self.assertIn("Confira se os arquivos são os relatórios de vendas e de compras do período.", corpo)
+        self.assertNotIn(self.MOTIVO, corpo)
+        self.assertEqual(corpo.count("upload-slot is-error"), 2)
+        self.assertEqual(self._botoes(corpo), {"Vendas": "btn-nexo", "Compras": "btn-nexo"})
+        self.assertNotIn("Pronto: os dois relatórios foram recebidos.", corpo)
+        # O consultor continua vendo o motivo no quadro do arquivo (depois de consumir o aviso do processamento).
+        self.adm.get("/admin/dashboard")
+        self.assertIn(self.MOTIVO, self._texto(self.adm.get(self.pagina_admin)))
+
+    def test_arquivo_novo_depois_da_falha_tira_o_pedido_de_correcao(self):
+        self._falhar()
+        self.assertEqual(self._enviar_cliente().status_code, 302)  # só Vendas, como o aviso orienta
+        self.assertEqual(self._flashes(self.cli),
+                         ["Relatório de Vendas recebido. Os dois relatórios estão com a equipe NEXO para validação."])
+        corpo = self._tela()
+        self.assertNotIn("Precisa de correção", corpo)
+        self.assertNotIn("Não conseguimos ler os relatórios deste período.", corpo)
+        self.assertIn('<span class="nexo-badge b-info"><span class="dot"></span>Relatório recebido</span>', corpo)
+        self.assertIn("Pronto: os dois relatórios foram recebidos.", corpo)
+        self.assertNotIn("upload-slot is-error", corpo)
+        self.assertEqual(corpo.count("upload-slot is-done"), 2)
+        self.assertEqual(self._botoes(corpo), {"Vendas": "btn-ghost", "Compras": "btn-ghost"})
+        # O selo do quadro de Compras continua verdadeiro: sai quando a equipe processar os dois de novo.
+        self.assertEqual(corpo.count(self.SELO_ERRO), 1)
+        self.assertIn("Aguardando validação", corpo)
+        # Se o processamento falhar de novo, o pedido de correção volta.
+        self._processar_com_falha()
+        corpo = self._tela()
+        self.assertIn("Precisa de correção", corpo)
+        self.assertEqual(corpo.count("upload-slot is-error"), 2)
+        self.assertEqual(self._botoes(corpo), {"Vendas": "btn-nexo", "Compras": "btn-nexo"})
+
+
 class CardNoPainelTests(TravaPdvCase):
     def _painel_cliente(self):
         resposta = self.cli.get("/cliente/dashboard")
@@ -672,7 +745,7 @@ class CardNoPainelTests(TravaPdvCase):
         self._enviar_e_processar("1.515,00")
         corpo = self._painel_cliente()
         self.assertIn('aviso-contrato is-alerta', corpo)
-        for trecho in ("1.515,00", "Valor total calculado pelo ETL", "1.500,00", "Divergência apurada", "R$ 15,00", "preliminares"):
+        for trecho in ("1.515,00", "Total de vendas calculado pelo NEXO", "1.500,00", "Diferença entre os totais", "R$ 15,00", "preliminares"):
             self.assertIn(trecho, corpo)
 
     def test_cliente_em_periodo_nao_pago_nao_recebe_calculado_nem_divergencia(self):
@@ -683,7 +756,7 @@ class CardNoPainelTests(TravaPdvCase):
         corpo = self._painel_cliente()
         self.assertIn("Diferença no total de vendas de 01/2026", corpo)
         self.assertIn("1.515,00", corpo)  # o que ele mesmo informou
-        for trecho in ("1.500,00", "Valor total calculado", "Divergência apurada", "R$ 15,00", "preliminares"):
+        for trecho in ("1.500,00", "Total de vendas calculado", "Diferença entre os totais", "R$ 15,00", "preliminares"):
             self.assertNotIn(trecho, corpo)
 
     def test_periodo_nao_pago_nao_mostra_total_digitado_pelo_consultor(self):
@@ -697,7 +770,7 @@ class CardNoPainelTests(TravaPdvCase):
         corpo = self._painel_cliente()
         self.assertIn("Diferença no total de vendas", corpo)
         self.assertNotIn("1.777,77", corpo)
-        self.assertNotIn("Valor informado no PDV", corpo)
+        self.assertNotIn("Total de vendas no PDV (informado)", corpo)
 
     def test_periodo_nao_pago_nao_mostra_o_calculado_redigitado_na_tela_de_envio(self):
         from models import Analise
@@ -731,7 +804,7 @@ class CardNoPainelTests(TravaPdvCase):
         self.pagar(date(2026, 1, 1), date(2026, 1, 31))
         self.ativar_regras()
         self._enviar_e_processar("1.515,00")
-        self.assertIn("Divergência apurada", self._painel_cliente())
+        self.assertIn("Diferença entre os totais", self._painel_cliente())
 
     def test_outra_empresa_nao_ve_o_card(self):
         from models import Usuario

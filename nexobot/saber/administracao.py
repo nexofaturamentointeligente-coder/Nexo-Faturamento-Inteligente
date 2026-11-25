@@ -221,8 +221,8 @@ REGISTROS = (
         ),
         explicacao=(
             "Análises individuais também podem ser excluídas pela equipe, com todos os seus dados. Nenhuma "
-            "exclusão é feita pelo cliente nem pelo NexoBot; o pedido é feito em Configurações (“Solicitar Exclusão "
-            "de Dados”, que abre um chamado) ou pelo Suporte."
+            "exclusão é feita pelo cliente nem pelo NexoBot; o pedido é feito em Configurações (“Solicitar exclusão "
+            "dos dados”, que abre um chamado) ou pelo Suporte."
         ),
         perguntas=(
             "O que é a Lixeira?", "O que acontece quando uma empresa vai para a lixeira?",

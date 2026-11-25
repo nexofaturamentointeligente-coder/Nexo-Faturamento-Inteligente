@@ -24,7 +24,7 @@ Passam pela Baia o envio do cliente (`/cliente/upload`), o do consultor (`/admin
 
 ### 1.2 O que é recusado
 
-A mensagem ao usuário é sempre `Arquivo fora do padrão aceito para auditoria.`, às vezes seguida de uma orientação fixa. Não há caminho, nome de arquivo nem detalhe do servidor na mensagem. No Raio-X ela leva o número do arquivo (`Arquivo 2: arquivo fora do padrão…`).
+A mensagem ao usuário é sempre `Arquivo fora do padrão aceito.` (até 24/11/2026, `Arquivo fora do padrão aceito para auditoria.`), às vezes seguida de uma orientação fixa. Não há caminho, nome de arquivo nem detalhe do servidor na mensagem. No Raio-X ela leva o número do arquivo (`Arquivo 2: arquivo fora do padrão…`).
 
 | Motivo (no código `quarentena:<motivo>` e no log) | Exemplos |
 |---|---|

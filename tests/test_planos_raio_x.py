@@ -912,7 +912,8 @@ class RaioXPortalTests(_PlanosCase):
         self.assertIn("Há outro envio ou processamento em andamento", html)
         self.assertEqual((api.status_code, api.headers.get("Retry-After")), (503, "30"))
         self.assertEqual(api.get_json()["erro"],
-                         "Há outro envio ou processamento em andamento. Tente novamente em cerca de 30 segundos.")
+                         "Há outro envio ou processamento em andamento e nada foi salvo. Tente novamente em cerca de "
+                         "30 segundos.")
         self.assertIsNone(self._linha())
 
     def test_assinatura_suspensa_durante_a_leitura_nao_grava(self):

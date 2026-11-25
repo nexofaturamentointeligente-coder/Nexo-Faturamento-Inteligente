@@ -33,7 +33,7 @@ _CHUNK_SIZE = 64 * 1024
 ESPERA_MAXIMA_S = 20
 MAX_NA_ESPERA = 4
 TENTAR_DE_NOVO_S = 30
-MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento. Tente novamente em cerca de "
+MENSAGEM_OCUPADO = ("Há outro envio ou processamento em andamento e nada foi salvo. Tente novamente em cerca de "
                     f"{TENTAR_DE_NOVO_S} segundos.")
 
 

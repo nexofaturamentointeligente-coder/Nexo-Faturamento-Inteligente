@@ -28,8 +28,8 @@
 {% block content %}
 <div class="page-head">
     <div>
-        <h1>Avalie sua experiência com a NEXO</h1>
-        <p class="sub">Sua opinião nos ajuda a melhorar nossos serviços e oferecer uma experiência cada vez melhor.</p>
+        <h1>{{ 'Editar sua avaliação' if editando else 'Avalie sua experiência com a NEXO' }}</h1>
+        <p class="sub">{{ 'Ajuste o que quiser e salve.' if editando else 'Dê uma nota e conte como tem sido.' }}</p>
     </div>
     <div class="page-head-actions">
         <a href="{{ url_for('avaliacoes.minha_avaliacao') if editando else url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar</a>
@@ -100,8 +100,7 @@
 
                 <div class="campo">
                     <div class="campo-topo">
-                        <label class="nexo-label" for="comentario">Conte como foi sua experiência</label>
-                        <span class="req" aria-hidden="true">*</span>
+                        <label class="nexo-label" for="comentario">Conte como foi sua experiência <span class="req" aria-hidden="true">*</span></label>
                     </div>
                     <textarea class="form-control" id="comentario" name="comentario" rows="5" required
                               minlength="{{ limites.comentario_min }}" maxlength="{{ limites.comentario_max }}"
@@ -206,7 +205,7 @@
         <p class="visually-hidden" id="avaliacaoStatus" role="status" aria-live="polite"></p>
 
         <div class="avaliacao-acoes">
-            <button type="submit" class="btn-nexo avaliacao-enviar" id="avaliacaoEnviar"><i class="bi bi-send" aria-hidden="true"></i> <span id="avaliacaoEnviarRotulo">Enviar Avaliação</span></button>
+            <button type="submit" class="btn-nexo avaliacao-enviar" id="avaliacaoEnviar"><i class="bi bi-send" aria-hidden="true"></i> <span id="avaliacaoEnviarRotulo">{{ 'Salvar alterações' if editando else 'Enviar avaliação' }}</span></button>
         </div>
     </form>
 </div>

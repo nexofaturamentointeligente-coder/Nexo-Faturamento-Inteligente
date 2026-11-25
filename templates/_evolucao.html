@@ -49,12 +49,16 @@
             <p class="evolucao-sub">{% if ev.estado == 'comparado' %}Marco Zero: Raio-X de {{ ev.marco.data }} · último fechamento: Raio-X de {{ ev.atual.data }}{% else %}Marco Zero: Raio-X de {{ ev.marco.data }}{% endif %}</p>
         </div>
         {%- if link_historico %}
-        <a class="btn-ghost evolucao-link" href="{{ url_for('cliente.historico') }}#evolucaoLinhaDoTempo"><i class="bi bi-clock-history" aria-hidden="true"></i> Linha do tempo</a>
+        <div class="evolucao-acoes">
+            <a class="btn-ghost evolucao-link" href="{{ url_for('onboarding.diagnostico') }}#planoAcao"><i class="bi bi-bullseye" aria-hidden="true"></i> Ver o Plano de Ação</a>
+            <a class="btn-ghost evolucao-link" href="{{ url_for('cliente.historico') }}#evolucaoLinhaDoTempo"><i class="bi bi-clock-history" aria-hidden="true"></i> Linha do tempo</a>
+        </div>
         {%- endif %}
     </div>
     {%- if ev.estado == 'inicial' %}
     {{ inicial(ev) }}
     {%- else %}
+    <p class="evolucao-resumo"><i class="bi bi-chat-quote" aria-hidden="true"></i> <span>{{ ev.resumo }}</span></p>
     <div class="evolucao-cartoes">
         <div class="evolucao-cartao{{ ' is-positivo' if conta and eco.positiva }}{{ ' is-negativo' if conta and eco.negativa }}">
             <span class="evolucao-rotulo">Economia Gerada no Mês</span>
@@ -137,8 +141,6 @@
         </li>
         {%- endfor %}
     </ul>
-
-    <p class="evolucao-resumo"><i class="bi bi-chat-quote" aria-hidden="true"></i> <span>{{ ev.resumo }}</span></p>
     {%- endif %}
 </section>
 {%- endmacro -%}
@@ -149,7 +151,7 @@
     <div class="nexo-card-head">
         <div>
             <h2 id="evolucaoLinhaTitulo"><i class="bi bi-award" aria-hidden="true"></i> Evolução mês a mês</h2>
-            <p class="sub">Um fechamento por mês (o Raio-X do PDV feito no mês), comparado ao Marco Zero: as metas do Plano de Ação original.</p>
+            <p class="sub">Cada mês, o Raio-X do PDV comparado ao seu ponto de partida (Marco Zero) e às metas do Plano de Ação.</p>
         </div>
     </div>
     <div class="nexo-card-body">

@@ -121,6 +121,12 @@ body {
 
 h1, h2, h3, h4, h5, h6 { font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 a { text-decoration: none; }
+/* Foco do teclado no "x" das mensagens, no tema escuro: o Bootstrap pinta o botão invertido
+   (filter: invert…), e o anel azul a 25 % virava um cinza quase invisível; uma sombra preta sai
+   branca depois do filtro. */
+[data-bs-theme="dark"] .btn-close { --bs-btn-close-focus-shadow: 0 0 0 2px #000; }
+/* Links do conteúdo: o anel lilás dos botões (o tema claro tem a regra dele, nexo-tema-claro.css:118-120). */
+.main-area a:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
 .mono { font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
 
 ::selection { background: var(--primary-glow); color: #fff; }
@@ -254,6 +260,7 @@ a { text-decoration: none; }
   color: var(--text-dim);
   font-size: 0.78rem;
   text-align: center;
+  text-wrap: balance;
 }
 
 /* ===================== APP SHELL ================================= */
@@ -755,6 +762,8 @@ button.nav-logout { width: 100%; background: transparent; font: inherit; text-al
   box-shadow: 0 10px 24px -10px var(--primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 .app-shell .btn-nexo:focus-visible, .app-shell .btn-ghost:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
+/* Telas de acesso e de erro (fora do .app-shell): o mesmo anel lilás do portal. */
+.auth-card :is(.btn-nexo, .btn-ghost, .btn-link-dim, a):focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
 .btn-nexo:hover { background: var(--grad-hover); color: #fff; transform: translateY(-1px); box-shadow: 0 12px 26px -8px var(--primary-glow); }
 .app-shell .btn-nexo:hover { background: var(--grad-cta-hover); }
 .btn-nexo:active { transform: translateY(0); }
@@ -963,6 +972,19 @@ a.empresa-card:hover .ec-seta, a.empresa-card:focus-visible .ec-seta { color: #e
 .upload-slot-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 14px; }
 .upload-slot-head .title { display: flex; align-items: center; gap: 10px; font-weight: 700; }
 .upload-slot-head .title i { color: var(--primary); }
+
+/* Envio demorado em curso (tela de envio e Raio-X): a frase de espera que o script escreve no envio,
+   com um indicador que gira. Vazia, não ocupa espaço, mas continua na árvore de acessibilidade
+   (role="status" anuncia o texto quando ele entra). */
+.envio-andamento { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; color: var(--text); font-size: 0.88rem; font-weight: 600; }
+.envio-andamento::before {
+  content: ""; flex: 0 0 auto; width: 14px; height: 14px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: nexo-girar 0.8s linear infinite;
+}
+.envio-andamento:empty { margin: 0; }
+.envio-andamento:empty::before { content: none; }
+@keyframes nexo-girar { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .envio-andamento::before { animation: none; } }
 
 /* ===================== ALERTAS / AVISOS ========================= */
 [data-bs-theme="dark"] .alert { border-radius: var(--radius-sm); border: 1px solid var(--border); }
@@ -1303,6 +1325,8 @@ a.empresa-card:hover .ec-seta, a.empresa-card:focus-visible .ec-seta { color: #e
 
 .table-responsive-x.em-cartoes .nexo-table tbody td.celula-acoes { padding-top: 12px; padding-bottom: 10px; }
 .table-responsive-x.em-cartoes .nexo-table tbody td.celula-acoes .acoes { justify-content: flex-start; }
+/* No cartão, o botão da linha já diz o que faz: sem o rótulo "Ação" em cima. */
+.table-responsive-x.em-cartoes .nexo-table tbody td.celula-acoes::before { display: none; }
 .table-responsive-x.em-cartoes .nexo-table tbody td[colspan] { text-align: center !important; }
 .table-responsive-x.em-cartoes .dica-rolagem { display: none; }
 /* No cartão o botão pode quebrar o rótulo em vez de ultrapassar a largura do cartão. */
@@ -1333,6 +1357,10 @@ a.empresa-card:hover .ec-seta, a.empresa-card:focus-visible .ec-seta { color: #e
 .app-shell.nav-open ~ .nexobot { opacity: 0; visibility: hidden; pointer-events: none; }
 body:has(> .nexobot) .app-shell .page { padding-bottom: 104px; }
 body:has(> .nexobot) .nexo-toast-wrap { bottom: 96px; }
+/* Qualquer modal do Bootstrap aberto (o <body> recebe .modal-open): o NexoBot sai de cena e os avisos
+   em tempo real ficam atrás do véu, como já acontece no Plano de Ação. */
+body.modal-open .nexobot { opacity: 0; visibility: hidden; pointer-events: none; }
+body.modal-open .nexo-toast-wrap { z-index: 1040; }
 
 /* Link "Pular para o conteúdo": invisível até receber foco pelo teclado. */
 .skip-link {
@@ -1470,7 +1498,9 @@ body:has(> .nexobot) .nexo-toast-wrap { bottom: 96px; }
 @media (max-width: 575.98px) {
   .page-head { flex-direction: column; align-items: stretch; }
   .page-head-actions { width: 100%; }
-  .page-head-actions .btn-nexo, .page-head-actions .btn-ghost { flex: 1; justify-content: center; }
+  /* A ação principal ocupa a linha; voltar e atalhos ficam no tamanho do rótulo. */
+  .page-head-actions .btn-nexo { flex: 1 1 100%; justify-content: center; }
+  .page-head-actions .btn-ghost { flex: 0 1 auto; justify-content: center; }
   /* .kpi-value já é fluido via clamp() na regra principal — sem override aqui. */
   .auth-card { padding: 30px 22px; }
   /* Cubo e espaçamentos menores: o cartão cabe em 375x667 sem rolagem. */
@@ -1888,13 +1918,18 @@ input, textarea, select, option,
   min-width: 56px; height: 56px; padding: 0 16px 0 14px; border-radius: 999px; border: none; cursor: pointer;
   color: #fff; font: 600 0.9rem/1 var(--font-sans);
   background: var(--grad-cta); box-shadow: 0 12px 30px -8px var(--primary-glow), 0 4px 12px rgba(0,0,0,0.4);
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
 }
 .nexobot-launcher .bi { font-size: 1.35rem; }
 .nexobot-launcher-label { display: none; }
 .nexobot-launcher:hover { transform: translateY(-2px); box-shadow: 0 16px 34px -10px var(--primary-glow), 0 6px 14px rgba(0,0,0,0.45); }
 .nexobot-launcher.is-open { transform: scale(0.96); opacity: 0.92; }
 .nexobot.is-open .nexobot-launcher { display: none; }
+/* Rolando para baixo o botão sai de cena (nexobot.js marca .is-recolhido) e não cobre o conteúdo
+   que passa por baixo dele; volta ao rolar para cima, perto do fim da página e com o foco. */
+.nexobot.is-recolhido:not(.is-open) .nexobot-launcher {
+  opacity: 0; transform: translateY(calc(100% + 24px)); pointer-events: none;
+}
 
 .nexobot-launcher:focus-visible, .nexobot-close:focus-visible, .nexobot-send:focus-visible,
 .nexobot-msgs:focus-visible, .nb-chip:focus-visible, .nb-navigation:focus-visible, .nb-opcao:focus-visible {
@@ -2137,6 +2172,8 @@ input, textarea, select, option,
 .aviso-contrato > div { min-width: 0; }
 .aviso-contrato p { margin: 0; color: var(--text-muted); font-size: 0.88rem; overflow-wrap: anywhere; }
 .aviso-contrato strong { color: var(--text); overflow-wrap: anywhere; }
+/* Link dentro da frase: a cor sozinha não basta (1,2:1 contra o texto nos dois temas, WCAG 1.4.1). */
+.aviso-contrato p a, .field-hint a { text-decoration: underline; text-underline-offset: 2px; }
 .aviso-contrato.is-alerta { border-color: rgba(245, 158, 11, 0.3); background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--glass-strong); }
 .aviso-contrato.is-alerta i { color: var(--warning); }
 .aviso-contrato.is-perigo { border-color: rgba(239, 68, 68, 0.3); background: linear-gradient(var(--danger-bg), var(--danger-bg)), var(--glass-strong); }
@@ -2821,3 +2858,64 @@ body.plano-acao-aberto .nexobot { opacity: 0; visibility: hidden; pointer-events
 .plano-recurso small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 0.8rem; }
 .plano-recurso.is-herdado { color: var(--text-muted); }
 .selo-implantacao { margin-left: 4px; vertical-align: middle; }
+
+/* ==== UX painel_analise (início) ==== */
+/* Visão Geral: texto e ação na mesma linha; o botão desce para baixo do texto quando não cabe. */
+.bloco-acao { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; }
+.bloco-acao-texto { flex: 1 1 320px; min-width: 0; }
+.bloco-acao-texto h2 { margin: 0 0 4px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.bloco-acao-texto p { margin: 0; color: var(--text-muted); font-size: 0.88rem; }
+/* Próximo passo: um período espera os relatórios do cliente (a ação principal da Visão Geral). */
+.proximo-passo { border-left: 3px solid var(--primary); }
+/* Sua análise mais recente: o botão fica abaixo do texto, à esquerda, em todas as larguras. No canto direito da
+   primeira dobra, o botão do NexoBot o cobria com a página no topo, onde ele não se recolhe (nexobot.js). */
+.bloco-acao-empilhado .bloco-acao-texto { flex-basis: 100%; }
+/* Análise: "Dúvidas sobre esta análise?" fica solta sobre a paisagem, com a cor do subtítulo das páginas
+   (.page-head .sub); a do .text-muted-2 ficava abaixo de 4,5:1 na faixa clara do fundo. */
+.analise-duvidas { color: #b7b2d3; }
+
+/* Curva ABC no modo cartões: posição e classe na primeira linha; produto, quantidade e faturamento
+   na largura toda; as duas porcentagens lado a lado (7 linhas viram 5). Só a disposição visual
+   muda: a ordem do HTML, e a do leitor de tela, continua a mesma. */
+.table-responsive-x.em-cartoes #abcTable tbody tr[data-classe] {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense;
+}
+.table-responsive-x.em-cartoes #abcTable tbody tr[data-classe] > td:is(:nth-child(2), :nth-child(4), :nth-child(5)) { grid-column: 1 / -1; }
+.table-responsive-x.em-cartoes #abcTable tbody tr[data-classe] > td:nth-child(3) { padding-top: 12px; }
+.table-responsive-x.em-cartoes #abcTable tbody tr[data-classe] > td:nth-child(6) { border-bottom: none; }
+
+/* Filtros da Curva ABC: o mesmo anel de foco dos botões do portal (nexo.css:757). */
+.abc-pill:focus-visible { outline: 2px solid #d8c2fd; outline-offset: 2px; }
+
+/* Histórico no celular: sem a coluna Status a tabela (cerca de 410 px) fica entre 1 e 1,35 vez a largura
+   de um celular de 344 a 430 px, e o script do shell a deixaria rolando, com o "Abrir análise" cortado.
+   Fora do modo cartões, esta largura mínima faz o script montar os cartões, como antes; nos cartões ela
+   não vale. A partir de 480 px a tabela cabe inteira. */
+@media (max-width: 479.98px) {
+  .table-responsive-x:not(.em-cartoes) > .nexo-table.tabela-historico { min-width: 140%; }
+}
+/* ==== UX painel_analise (fim) ==== */
+
+/* ==== UX envio (início) ==== */
+/* Celular: o quadro de envio e a dropzone com menos recuo (o cartão já tem o seu), para o título da
+   dropzone caber a 320 px. Vale também no envio do consultor e nas dropzones do Raio-X. */
+@media (max-width: 575.98px) {
+  .upload-slot { padding: 16px; }
+  .dropzone { padding: 20px 14px; }
+}
+/* ==== UX envio (fim) ==== */
+
+/* ==== UX raio_x_planos (início) ==== */
+/* Raio-X: pontos do cadastro sem ocorrência ficam discretos e sem a explicação (o que pede atenção é o que não está zerado). */
+.raio-x-inconsistencias > .is-ok dt,
+.raio-x-inconsistencias > .is-ok dd { color: var(--text-muted); }
+.raio-x-inconsistencias > .is-ok .raio-x-dica { display: none; }
+/* Evolução na Visão Geral: os dois atalhos lado a lado, quebrando linha quando não cabem. */
+.evolucao-acoes { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Plano de Ação: o modal fica fora do .app-shell, onde o anel de foco dos botões do portal não chega. */
+.plano-acao .btn-ghost:focus-visible { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+/* Planos: o card do plano da chegada (/onboarding/planos#prata) em destaque. */
+.plano-card:target { border-color: var(--primary-2); box-shadow: 0 0 0 2px var(--primary-2), var(--shadow-glass); }
+/* Plano de Ação: com o botão "Marcar como concluída" no cartão, o selo e o botão ficam juntos à direita do título. */
+.plano-acao-etapa-cabeca h4 { margin-right: auto; }
+/* ==== UX raio_x_planos (fim) ==== */

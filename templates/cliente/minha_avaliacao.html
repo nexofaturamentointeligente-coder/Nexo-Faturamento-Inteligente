@@ -15,7 +15,7 @@
 <div class="page-head">
     <div>
         <h1>Minha avaliação</h1>
-        <p class="sub">Confira o que você enviou e decida o que pode ser publicado.</p>
+        <p class="sub">{% if avaliacao %}Confira o que você enviou e decida o que pode ser publicado.{% else %}Sua avaliação aparece aqui depois de enviada.{% endif %}</p>
     </div>
 </div>
 
@@ -84,7 +84,7 @@
                 <dl class="avaliacao-identificacao-dados">
                     <div><dt>Como aparece publicamente</dt><dd>{{ a.nome_exibicao or identificacao_anonima }}{% if a.autoriza_nome_empresa %} · {{ nome_empresa }}{% endif %}</dd></div>
                 </dl>
-                <form method="POST" action="{{ url_for('avaliacoes.retirar_consentimento') }}" data-confirm="Retirar a autorização de publicação? Sua avaliação deixa de aparecer nos canais públicos da NEXO.">
+                <form method="POST" action="{{ url_for('avaliacoes.retirar_consentimento') }}" data-envio-unico data-confirm="Retirar a autorização de publicação? Sua avaliação deixa de aparecer nos canais públicos da NEXO.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn-ghost is-danger w-100 justify-content-center"><i class="bi bi-x-circle" aria-hidden="true"></i> Retirar autorização</button>
                 </form>

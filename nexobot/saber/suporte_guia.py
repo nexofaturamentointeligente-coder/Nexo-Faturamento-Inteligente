@@ -82,7 +82,7 @@ REGISTROS = (
             "reaberto: basta enviar uma nova mensagem nele."
         ),
         explicacao=(
-            "A lista mostra número, assunto, categoria, status e data de abertura; clique em “Abrir” para ver a "
+            "A lista mostra número, assunto, categoria, status e data de abertura; clique em “Ver chamado” para ver a "
             "conversa completa. Quando a equipe responde ou resolve, você recebe um aviso no sininho."
         ),
         perguntas=(

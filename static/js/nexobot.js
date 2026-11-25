@@ -500,4 +500,21 @@
   });
 
   if (movimentoReduzido.matches) raiz.classList.add('nb-sem-movimento');
+
+  /* Rolando para baixo, o botão sai de cena e não cobre a linha ou o botão que passa por baixo
+     dele; volta ao rolar para cima, perto do fim da página (onde há espaço reservado) e com o
+     foco do teclado. Com o painel aberto, nada muda. */
+  var ultimoY = window.scrollY || 0, quadro = null;
+  function acompanharRolagem() {
+    quadro = null;
+    var y = window.scrollY || 0;
+    var pertoDoFim = y + window.innerHeight >= document.documentElement.scrollHeight - 120;
+    if (!panel.hidden || pertoDoFim || y < 80 || y < ultimoY - 4) raiz.classList.remove('is-recolhido');
+    else if (y > ultimoY + 4 && document.activeElement !== launcher) raiz.classList.add('is-recolhido');
+    if (Math.abs(y - ultimoY) > 4) ultimoY = y;
+  }
+  window.addEventListener('scroll', function () {
+    if (!quadro) quadro = window.requestAnimationFrame(acompanharRolagem);
+  }, { passive: true });
+  launcher.addEventListener('focus', function () { raiz.classList.remove('is-recolhido'); });
 })();

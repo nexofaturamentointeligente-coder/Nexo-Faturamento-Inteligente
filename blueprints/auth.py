@@ -530,7 +530,7 @@ def login():
                     resposta = make_response(render_template("auth/conta_encerrada.html"))
                     resposta.headers["Cache-Control"] = "no-store"
                     return resposta
-                flash("Esta conta está desativada. Contacte o administrador.", "danger")
+                flash("Esta conta está desativada. Para reativar o acesso, fale com a equipe NEXO.", "danger")
                 return render_template("auth/login.html", email_digitado=email)
 
             # Efetua o login na sessão (sem "remember": cookie morre ao fechar o
@@ -612,7 +612,7 @@ def logout():
         return resposta
     logout_user()
     session.clear()
-    flash("Sessão terminada com sucesso.", "success")
+    flash("Você saiu do portal.", "success")
     return redirect(url_for("auth.login"))
 
 
@@ -640,7 +640,8 @@ def primeiro_acesso():
             return render_template("auth/primeiro_acesso.html")
 
         if not _atualizar_credencial(estado, nova, renovar_sessao=True):
-            flash("Não foi possível definir a senha. Faça login ou solicite um novo link.", "danger")
+            flash("Não foi possível salvar a senha. Entre de novo ou use “Esqueci minha senha” "
+                  "para receber um link por e-mail.", "danger")
             return redirect(url_for("auth.login"))
         flash("Senha definida com sucesso. Bem-vindo(a) ao NEXO!", "success")
         return redirect(url_for("cliente.dashboard"))
@@ -768,8 +769,8 @@ def ativar_acesso(token):
     estado = _ler_token_ativacao(token)
     if estado is None:
         flash(
-            "Seu link de definição de senha é inválido ou expirou (validade de 15 minutos). "
-            "Informe seu e-mail abaixo para receber um novo link.", "danger",
+            "Este link de ativação expirou ou já foi usado. "
+            "Se já criou sua senha, entre pelo login; se não, peça outro link abaixo.", "danger",
         )
         return redirect(url_for("auth.recuperar_senha"))
 
@@ -784,9 +785,10 @@ def ativar_acesso(token):
             return render_template("auth/primeiro_acesso_token.html", token=token, usuario=usuario)
 
         if not _atualizar_credencial(estado, nova):
-            flash("Seu link de definição de senha é inválido ou expirou. Solicite um novo link.", "danger")
+            flash("Este link de ativação expirou ou já foi usado. "
+                  "Se já criou sua senha, entre pelo login; se não, peça outro link abaixo.", "danger")
             return redirect(url_for("auth.recuperar_senha"))
-        flash("Senha definida com sucesso! Já pode acessar o portal.", "success")
+        flash("Conta ativada. Agora entre com seu e-mail e a senha que você criou.", "success")
         return redirect(url_for("auth.login"))
 
     return render_template("auth/primeiro_acesso_token.html", token=token, usuario=usuario)

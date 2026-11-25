@@ -244,7 +244,7 @@ class SessionRevocationCases:
             lambda: client.post("/auth/logout", data={"csrf_token": csrf}))
         body = self._assert_unavailable_page(response)
         self.assertIn("Você continua conectado", body)
-        self.assertNotIn("Sessão terminada", body)
+        self.assertNotIn("Você saiu do portal", body)
         with client.session_transaction() as session:
             self.assertEqual(session["_user_id"], str(self.ids["active"]))
         self.assertEqual(self._session_rows(), [(False, None)])
@@ -645,7 +645,7 @@ class SessionRevocationCases:
             response = client.post("/auth/logout", data={"csrf_token": self._csrf(client, "/auth/logout")})
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("PRIVATE_LOGOUT_SENTINEL", response.get_data(as_text=True))
-        self.assertNotIn("Sessão terminada", response.get_data(as_text=True))
+        self.assertNotIn("Você saiu do portal", response.get_data(as_text=True))
         self.assertEqual(self._session_rows(), [(False, None)])
         self._logout(client)
         self.assertEqual(self._session_rows(), [(True, "logout")])

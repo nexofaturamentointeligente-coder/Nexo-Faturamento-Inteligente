@@ -11,17 +11,22 @@
         <h1>Guia do Portal</h1>
         <p class="sub">Respostas rápidas para as dúvidas mais comuns sobre o uso do NEXO.</p>
     </div>
+    {% if total %}
     <div class="page-head-actions">
-        <a href="{{ url_for('cliente.tickets') }}" class="btn-ghost"><i class="bi bi-life-preserver"></i> Abrir chamado</a>
+        <a href="{{ url_for('cliente.tickets', novo=1) }}" class="btn-ghost"><i class="bi bi-life-preserver" aria-hidden="true"></i> Abrir chamado</a>
     </div>
+    {% endif %}
 </div>
 
 {% if total == 0 %}
 <div class="nexo-card">
     <div class="empty-state">
-        <div class="es-icon"><i class="bi bi-book"></i></div>
-        <h3>Guia em construção.</h3>
-        <p>Em breve a equipe NEXO publicará as dúvidas mais comuns aqui. Precisa de ajuda agora? Abra um chamado em “Suporte” ou fale com o NexoBot.</p>
+        <div class="es-icon"><i class="bi bi-book" aria-hidden="true"></i></div>
+        <h3>Ainda não há perguntas publicadas</h3>
+        <p>Para tirar uma dúvida agora, pergunte ao NexoBot, no canto inferior direito, ou abra um chamado para a equipe NEXO.</p>
+        <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+            <a href="{{ url_for('cliente.tickets', novo=1) }}" class="btn-nexo"><i class="bi bi-life-preserver" aria-hidden="true"></i> Abrir chamado</a>
+        </div>
     </div>
 </div>
 {% else %}
@@ -35,13 +40,13 @@
     {% for t in topicos %}
     {% set aberto = catloop.first and loop.first %}
     <div class="accordion-item guia-item">
-        <h2 class="accordion-header" id="head-{{ t.id }}">
+        <h3 class="accordion-header" id="head-{{ t.id }}">
             <button class="accordion-button {{ '' if aberto else 'collapsed' }}" type="button"
                     data-bs-toggle="collapse" data-bs-target="#body-{{ t.id }}"
                     aria-expanded="{{ 'true' if aberto else 'false' }}" aria-controls="body-{{ t.id }}">
                 {{ t.pergunta }}
             </button>
-        </h2>
+        </h3>
         <div id="body-{{ t.id }}" class="accordion-collapse collapse {{ 'show' if aberto }}"
              aria-labelledby="head-{{ t.id }}" data-bs-parent="#guiaCat{{ catloop.index }}">
             <div class="accordion-body">
@@ -63,7 +68,7 @@
         <i class="bi bi-robot"></i>
         <span>Não achou o que procurava? Fale com o <strong>NexoBot</strong> no canto inferior direito, ou abra um chamado.</span>
     </div>
-    <a href="{{ url_for('cliente.tickets') }}" class="btn-nexo btn-sm-x"><i class="bi bi-chat-dots"></i> Abrir chamado</a>
+    <a href="{{ url_for('cliente.tickets', novo=1) }}" class="btn-nexo btn-sm-x"><i class="bi bi-life-preserver" aria-hidden="true"></i> Abrir chamado</a>
 </div>
 {% endif %}
 {% endblock %}

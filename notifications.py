@@ -50,6 +50,19 @@ def classificar_notificacao(texto: str) -> dict:
         return {"tipo": "aberto", "rotulo": "Contrato"}
     if t.startswith(("a caixa que recebe a cópia", "encontramos uma diferença")):
         return {"tipo": "aberto", "rotulo": "Aviso"}
+    # Avisos com começo fixo: o selo repete o que a tela mostra, e o texto livre entre aspas (assunto do
+    # chamado, nome da empresa) não decide o selo ("indisponível" no assunto virava "Nova Análise", e
+    # "Erro não resolvido", "Resolvido").
+    if t.startswith("recebemos e processamos"):
+        return {"tipo": "analise", "rotulo": "Em análise"}
+    if t.startswith("a equipe nexo respondeu seu chamado"):
+        return {"tipo": "aberto", "rotulo": "Resposta"}
+    if t.startswith("seu chamado “") and t.endswith("foi marcado como resolvido."):
+        return {"tipo": "resolvido", "rotulo": "Resolvido"}
+    if t.startswith(("novo chamado de ", "nova resposta de ", "nova planilha de ", "nova avaliação de ")):
+        return {"tipo": "aberto", "rotulo": "Aberto"}
+    if t.startswith("sua avaliação"):
+        return {"tipo": "analise", "rotulo": "Avaliação"}
     if "resolvid" in t:
         return {"tipo": "resolvido", "rotulo": "Resolvido"}
     if ("dispon" in t) or ("relatório estrat" in t) or ("relatorio estrat" in t) or ("processamos" in t):

@@ -9,29 +9,26 @@
 <div class="page-head">
     <div>
         <h1>Histórico de análises</h1>
-        <p class="sub">Todas as devolutivas publicadas para {% if empresa %}{{ empresa.nome_fantasia or empresa.razao_social }}{% else %}sua empresa{% endif %}.</p>
+        <p class="sub">Todas as análises publicadas para {% if empresa %}{{ empresa.nome_fantasia or empresa.razao_social }}{% else %}sua empresa{% endif %}.</p>
     </div>
 </div>
 
 {% if situacao and situacao.contratual and situacao.suspensa %}
 <div class="banner-suspensa" role="status">
     <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
-    <div><strong>Conta suspensa: são exibidas apenas as análises dos períodos contratados e efetivamente pagos{% if situacao.suspensao_limite %}, disponíveis até {{ situacao.suspensao_limite|instante_local }}{% endif %}.</strong></div>
+    <div><strong>Conta suspensa: aqui aparecem só as análises de períodos pagos{% if situacao.suspensao_limite %}, disponíveis até {{ situacao.suspensao_limite|instante_local }}{% endif %}.</strong></div>
 </div>
 {% endif %}
 
-{% if evolucao %}{{ evo.linha_do_tempo(evolucao) }}{% endif %}
-
-<div class="table-wrap">
+<div class="table-wrap mb-4">
     {% if analises %}
     <div class="table-responsive-x">
-        <table class="nexo-table">
+        <table class="nexo-table tabela-historico">
             <thead>
                 <tr>
                     <th>Período</th>
                     <th>Tipo</th>
-                    <th>Publicação</th>
-                    <th>Status</th>
+                    <th>Publicada em</th>
                     <th class="text-end">Ação</th>
                 </tr>
             </thead>
@@ -41,19 +38,26 @@
                     <td class="t-strong t-mono t-periodo">{{ m.periodo(a.periodo_inicio, a.periodo_fim) }}</td>
                     <td>{{ 'Quinzenal' if a.tipo_analise == 'QUINZENAL' else 'Mensal' }}</td>
                     <td class="t-mut t-mono">{{ a.relatorio.data_publicacao.strftime('%d/%m/%Y') if (a.relatorio and a.relatorio.data_publicacao) else '—' }}</td>
-                    <td>{{ m.badge_analise(a.status_analise) }}</td>
-                    <td class="text-end"><a href="{{ url_for('cliente.analise', id_analise=a.id_analise) }}" class="btn-ghost btn-sm-x"><i class="bi bi-box-arrow-up-right"></i> Abrir análise</a></td>
+                    <td class="text-end"><a href="{{ url_for('cliente.analise', id_analise=a.id_analise) }}" class="btn-ghost btn-sm-x"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Abrir análise<span class="visually-hidden"> de {{ a.periodo_inicio.strftime('%d/%m/%Y') }} a {{ a.periodo_fim.strftime('%d/%m/%Y') }}</span></a></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% else %}
+    {% set pode_enviar_hist = not (empresa and empresa.status_conta == 'SUSPENSA') and not (situacao and situacao.suspensa) %}
     <div class="empty-state">
-        <div class="es-icon"><i class="bi bi-clock-history"></i></div>
-        <h3>Sua primeira análise está em preparação.</h3>
-        <p>Quando a equipe NEXO publicar uma devolutiva para a sua empresa, ela aparecerá aqui.</p>
+        <div class="es-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></div>
+        <h3>Nenhuma análise para consultar ainda</h3>
+        <p>Cada análise aparece aqui quando a equipe NEXO a publica{% if situacao and situacao.contratual %}, desde que o período esteja pago{% endif %}.{% if pode_enviar_hist %} Se ainda não enviou os relatórios de vendas e de compras do período, comece por eles.{% endif %}</p>
+        {% if pode_enviar_hist %}
+        <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+            <a href="{{ url_for('cliente.upload') }}" class="btn-nexo"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Enviar relatórios</a>
+        </div>
+        {% endif %}
     </div>
     {% endif %}
 </div>
+
+{% if evolucao %}{{ evo.linha_do_tempo(evolucao) }}{% endif %}
 {% endblock %}

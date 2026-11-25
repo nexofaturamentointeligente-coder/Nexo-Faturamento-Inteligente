@@ -192,6 +192,9 @@
                             <div class="plano-acao-etapa-cabeca">
                                 <h4 id="planoEtapaTitulo{{ etapa.numero }}">Etapa {{ etapa.numero }} <span class="plano-acao-prazo">({{ etapa.prazo }} — {{ etapa.titulo }})</span></h4>
                                 <span class="nexo-badge {{ 'b-green' if etapa.concluida_sozinha else 'b-amber' }} plano-acao-status" data-plano-status="{{ etapa.numero }}">{{ 'Concluída' if etapa.concluida_sozinha else 'Pendente' }}</span>
+                                {%- if not etapa.concluida_sozinha %}
+                                <button type="button" class="btn-ghost btn-sm-x plano-acao-nao-imprime" data-plano-marcar="{{ etapa.numero }}" aria-describedby="planoEtapaTitulo{{ etapa.numero }}">Marcar como concluída</button>
+                                {%- endif %}
                             </div>
                             {%- if etapa.estado == 'pendente' %}
                             <p class="plano-acao-orientacao">{{ etapa.orientacao }}</p>

@@ -5,6 +5,7 @@
 
 {% block title %}Suporte — NEXO{% endblock %}
 {% block page_title %}Suporte{% endblock %}
+{% block extra_css %}<link href="{{ url_for('static', filename='css/suporte.css') }}" rel="stylesheet">{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -24,25 +25,28 @@
 <div class="nexo-card mb-4 {{ '' if request.args.get('novo') else 'd-none' }}" id="formNovoChamado">
     <div class="nexo-card-head"><div><h2>Abrir novo chamado</h2><p class="sub">Descreva sua dúvida ou problema</p></div></div>
     <div class="nexo-card-body">
-        <form method="POST" action="{{ url_for('cliente.tickets') }}">
+        <form method="POST" action="{{ url_for('cliente.tickets') }}" data-envio-unico>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="row g-3">
                 <div class="col-12 col-md-8">
-                    <label class="kpi-label">Assunto</label>
-                    <input type="text" name="assunto" class="form-control nexo-input" maxlength="160" placeholder="Resuma o assunto" required>
+                    <label class="nexo-label" for="chamadoAssunto">Assunto</label>
+                    <input type="text" id="chamadoAssunto" name="assunto" class="form-control nexo-input" maxlength="160" placeholder="Ex.: Erro ao enviar a planilha de compras" required>
                 </div>
                 <div class="col-12 col-md-4">
-                    <label class="kpi-label">Categoria</label>
-                    <select name="categoria" class="form-select nexo-input" required>
+                    {% set dicas_categoria = {'FINANCEIRO': 'plano, contrato, cobrança', 'DUVIDA_TECNICA': 'uso do portal, análise', 'ERRO_INTEGRACAO': 'arquivo, envio de relatório'} %}
+                    <label class="nexo-label" for="chamadoCategoria">Categoria</label>
+                    <select id="chamadoCategoria" name="categoria" class="form-select nexo-input" aria-describedby="categoria_dica" required>
                         <option value="" disabled selected>Selecione…</option>
                         {% for token, rotulo in categorias.items() %}
                         <option value="{{ token }}">{{ rotulo }}</option>
                         {% endfor %}
                     </select>
+                    {#- O campo fechado não tem largura para a explicação: ela fica na dica, e a opção só com o nome. #}
+                    <p class="field-hint mt-1 mb-0" id="categoria_dica">{% for token, rotulo in categorias.items() if dicas_categoria.get(token) %}{{ rotulo }}: {{ dicas_categoria[token] }}{{ '.' if loop.last else ' · ' }}{% endfor %}</p>
                 </div>
                 <div class="col-12">
-                    <label class="kpi-label">Mensagem</label>
-                    <textarea name="mensagem" class="form-control nexo-input" rows="4" placeholder="Descreva com detalhes…" aria-describedby="mensagem_dica" maxlength="{{ LIMITE_MENSAGEM_CHAMADO }}" required></textarea>
+                    <label class="nexo-label" for="chamadoMensagem">Mensagem</label>
+                    <textarea id="chamadoMensagem" name="mensagem" class="form-control nexo-input" rows="4" placeholder="Conte o que aconteceu: período, nome do arquivo e a mensagem de erro, se houver." aria-describedby="mensagem_dica" maxlength="{{ LIMITE_MENSAGEM_CHAMADO }}" required></textarea>
                     <p class="field-hint mt-1 mb-0" id="mensagem_dica">Até {{ LIMITE_MENSAGEM_CHAMADO_TEXTO }} caracteres por mensagem.</p>
                 </div>
             </div>
@@ -58,7 +62,7 @@
 {% if chamados %}
 <div class="table-wrap">
     <div class="table-responsive-x">
-        <table class="nexo-table">
+        <table class="nexo-table tabela-chamados">
             <thead><tr><th>#</th><th>Assunto</th><th>Categoria</th><th>Status</th><th>Aberto em</th><th class="text-end">Ação</th></tr></thead>
             <tbody>
                 {% for c in chamados %}
@@ -68,7 +72,7 @@
                     <td>{{ m.badge_categoria(c.categoria, categorias) }}</td>
                     <td>{{ m.badge_chamado(c.status_chamado) }}</td>
                     <td class="t-mut t-mono">{{ m.horario(c.data_abertura, 'data') }}</td>
-                    <td class="text-end"><a href="{{ url_for('cliente.ticket_detalhe', id_chamado=c.id_chamado) }}" class="btn-ghost btn-sm-x"><i class="bi bi-chat-dots"></i> Abrir</a></td>
+                    <td class="text-end"><a href="{{ url_for('cliente.ticket_detalhe', id_chamado=c.id_chamado) }}" class="btn-ghost btn-sm-x"><i class="bi bi-chat-dots" aria-hidden="true"></i> Ver chamado<span class="visually-hidden"> #{{ c.id_chamado }}</span></a></td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -78,9 +82,10 @@
 {% else %}
 <div class="nexo-card">
     <div class="empty-state">
-        <div class="es-icon"><i class="bi bi-life-preserver"></i></div>
+        <div class="es-icon"><i class="bi bi-life-preserver" aria-hidden="true"></i></div>
         <h3>Você ainda não abriu nenhum chamado.</h3>
-        <p>Precisa de ajuda com sua análise, faturamento ou integração? Abra um chamado e a equipe NEXO responde por aqui.</p>
+        <p>Dúvida sobre o envio de relatórios, a sua análise ou o seu plano? Abra um chamado: a equipe NEXO responde nesta página.</p>
+        <button type="button" class="btn-nexo mt-3" data-toggle-novo><i class="bi bi-plus-lg" aria-hidden="true"></i> Novo chamado</button>
     </div>
 </div>
 {% endif %}
@@ -88,14 +93,39 @@
 
 {% block extra_js %}
 <script nonce="{{ csp_nonce }}">
-  /* Mostra/esconde o formulário de novo chamado. */
+  /* Mostra/esconde o formulário de novo chamado. Ao abrir, o foco vai para o Assunto; ao cancelar,
+     volta para o botão que abriu. aria-expanded e aria-controls entram por aqui, e não no HTML,
+     para o cabeçalho continuar saindo do servidor byte a byte como hoje. */
   (function () {
     var form = document.getElementById('formNovoChamado');
-    document.querySelectorAll('[data-toggle-novo]').forEach(function (btn) {
+    if (!form) return;
+    var botoes = Array.prototype.slice.call(document.querySelectorAll('[data-toggle-novo]'));
+    var abridores = botoes.filter(function (btn) { return !form.contains(btn); });
+    var origem = abridores[0] || null;
+    function refletir() {
+      var aberto = !form.classList.contains('d-none');
+      abridores.forEach(function (btn) {
+        btn.setAttribute('aria-controls', 'formNovoChamado');
+        btn.setAttribute('aria-expanded', aberto ? 'true' : 'false');
+      });
+    }
+    botoes.forEach(function (btn) {
       btn.addEventListener('click', function () {
-        if (form) { form.classList.toggle('d-none'); if (!form.classList.contains('d-none')) form.scrollIntoView({behavior:'smooth'}); }
+        var dentro = form.contains(btn);
+        if (!dentro) origem = btn;
+        form.classList.toggle('d-none');
+        refletir();
+        if (form.classList.contains('d-none')) {
+          if (dentro && origem) origem.focus();
+          return;
+        }
+        var reduzir = !!(window.NEXO && NEXO.reduzMovimento);
+        form.scrollIntoView({ behavior: reduzir ? 'auto' : 'smooth' });
+        var campo = form.querySelector('[name="assunto"]');
+        if (campo) campo.focus({ preventScroll: true });
       });
     });
+    refletir();
   })();
 </script>
 {% endblock %}

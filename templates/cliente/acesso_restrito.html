@@ -7,7 +7,6 @@
 <div class="page-head">
     <div>
         <h1>{{ titulo }}</h1>
-        <p class="sub">Acesso conforme a situação contratual da sua empresa.</p>
     </div>
 </div>
 
@@ -15,10 +14,10 @@
     <div class="empty-state">
         <div class="es-icon"><i class="bi bi-lock" aria-hidden="true"></i></div>
         <h3>{{ mensagem }}</h3>
-        <p>Em caso de dúvida sobre sua situação contratual, abra um chamado no Suporte.</p>
+        <p>Para regularizar ou tirar dúvidas sobre o contrato, abra um chamado para a equipe NEXO.</p>
         <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
-            <a href="{{ url_for('cliente.historico') }}" class="btn-ghost"><i class="bi bi-clock-history"></i> Histórico</a>
-            <a href="{{ url_for('cliente.tickets') }}" class="btn-ghost"><i class="bi bi-life-preserver"></i> Suporte</a>
+            <a href="{{ url_for('cliente.tickets', novo=1) }}" class="btn-nexo"><i class="bi bi-life-preserver" aria-hidden="true"></i> Abrir chamado</a>
+            <a href="{{ url_for('cliente.historico') }}" class="btn-ghost"><i class="bi bi-clock-history" aria-hidden="true"></i> Ver histórico</a>
         </div>
     </div>
 </div>

@@ -71,6 +71,8 @@
       }
       var cartao = modal.querySelector('[data-plano-etapa-cartao="' + numero + '"]');
       if (cartao) cartao.classList.toggle('is-concluida', caixa.checked);
+      var marcar = modal.querySelector('[data-plano-marcar="' + numero + '"]');
+      if (marcar) marcar.textContent = caixa.checked ? 'Desmarcar' : 'Marcar como concluída';
     });
     var total = caixas.length;
     if (barra) barra.setAttribute('aria-valuenow', String(feitas));
@@ -97,6 +99,15 @@
       atualizar();
     });
   });
+  // O botão do cartão marca ou desmarca a caixa do checklist: a mesma conta, o mesmo salvamento.
+  Array.prototype.slice.call(modal.querySelectorAll('[data-plano-marcar]')).forEach(function (botao) {
+    botao.addEventListener('click', function () {
+      var caixa = modal.querySelector('input[data-plano-etapa="' + botao.getAttribute('data-plano-marcar') + '"]');
+      if (!caixa || caixa.disabled) return;
+      caixa.checked = !caixa.checked;
+      caixa.dispatchEvent(new Event('change'));
+    });
+  });
   // Outra aba (o Raio-X e a Auditoria usam a mesma chave) marcou ou desmarcou uma etapa.
   window.addEventListener('storage', function (evento) {
     if (evento.key === chave) aplicar(ler());
@@ -106,7 +117,14 @@
 
   // Impressão: só o plano (a folha de impressão olha a classe no <body> enquanto o modal está aberto).
   modal.addEventListener('show.bs.modal', function () { document.body.classList.add('plano-acao-aberto'); });
-  modal.addEventListener('hidden.bs.modal', function () { document.body.classList.remove('plano-acao-aberto'); });
+  modal.addEventListener('hidden.bs.modal', function () {
+    document.body.classList.remove('plano-acao-aberto');
+    // Aberto pelo atalho (#planoAcao): ao fechar, a âncora sai do endereço sem criar entrada no histórico, para
+    // recarregar a página ou voltar a ela não abrir o plano de novo.
+    if (window.location.hash === '#planoAcao' && window.history && history.replaceState) {
+      history.replaceState(history.state, '', window.location.pathname + window.location.search);
+    }
+  });
   var imprimir = modal.querySelector('[data-plano-imprimir]');
   if (imprimir) {
     imprimir.addEventListener('click', function () {
@@ -144,4 +162,10 @@
       instancia.hide();
     });
   });
+
+  // Quem chega pelo atalho da Visão Geral (/onboarding/diagnostico#planoAcao) já encontra o plano aberto. Depois
+  // dos ouvintes acima: o show() dispara na hora o show.bs.modal, que põe a classe da impressão no <body>.
+  if (window.location.hash === '#planoAcao' && window.bootstrap && bootstrap.Modal) {
+    bootstrap.Modal.getOrCreateInstance(modal).show();
+  }
 })();

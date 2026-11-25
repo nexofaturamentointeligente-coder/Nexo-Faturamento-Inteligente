@@ -47,6 +47,8 @@ limite_raio_x = limiter.shared_limit("10 per hour", scope="raio-x", key_func=cha
                                      deduct_when=deduzir_cota)
 
 MENSAGEM_OCUPADO = _MENSAGEM_VAGA
+# Só na página: depois do redirecionamento o campo de arquivos volta vazio. A API (JSON) usa a de cima.
+MENSAGEM_OCUPADO_PAGINA = MENSAGEM_OCUPADO + " Ao tentar de novo, selecione os relatórios outra vez."
 ESPERA_SEGUNDOS = 30
 # Código do etl_runtime quando a vaga do processo isolado (_ADMISSION) está ocupada: a resposta é
 # a mesma da vaga de entrada (etl_uploads._UPLOAD_ADMISSION).
@@ -251,14 +253,14 @@ def diagnostico_enviar():
     aviso = None
     with vaga_de_entrada() as livre:
         if not livre:
-            flash(MENSAGEM_OCUPADO, "warning")
+            flash(MENSAGEM_OCUPADO_PAGINA, "warning")
             return redirect(url_for("onboarding.diagnostico"), 303)
         try:
             quantidade, aviso = _executar_raio_x()
         except ETLInputError as erro:
             db.session.rollback()
             if erro.code == CODIGO_OCUPADO:
-                flash(MENSAGEM_OCUPADO, "warning")
+                flash(MENSAGEM_OCUPADO_PAGINA, "warning")
             else:
                 flash(erro.safe_message, "danger")
         except SQLAlchemyError as erro:

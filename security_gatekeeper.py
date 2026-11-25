@@ -67,7 +67,7 @@ from etl_erros import ETLInputError
 
 logger = logging.getLogger(__name__)
 
-MENSAGEM_PADRAO = "Arquivo fora do padrão aceito para auditoria."
+MENSAGEM_PADRAO = "Arquivo fora do padrão aceito."
 # Teto da especificação. O ETLLimits já é menor (20 MiB, ver etl_limits._HARD_CAPS): este
 # valor só impede que um teto futuro mais alto passe dos 50 MiB.
 TETO_ABSOLUTO_BYTES = 50 * 1024 * 1024

@@ -669,7 +669,7 @@ class ExclusaoTests(_ConfigCase):
         self.assertEqual(self._empresa().deletado_em, None)
         self.assertEqual(self.client.get(f"/cliente/tickets/{chamado.id_chamado}").status_code, 200)
         self.assertIn(f"chamado #{chamado.id_chamado}", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
-        self.assertNotIn("Solicitar Exclusão de Dados", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
+        self.assertNotIn("Solicitar exclusão dos dados", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
         # Enviar de novo (dois cliques, aba antiga) não duplica nem avisa de novo.
         self.assertIn("Já existe uma solicitação", self._enviar(self.ROTA).get_data(as_text=True))
         self.assertEqual(self._contar(ChamadoSuporte), 1)
@@ -682,7 +682,7 @@ class ExclusaoTests(_ConfigCase):
                                            assunto=configuracoes_conta.ASSUNTO_EXCLUSAO_DADOS,
                                            categoria="DUVIDA_TECNICA"))
         self.db.session.commit()
-        self.assertIn("Solicitar Exclusão de Dados", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
+        self.assertIn("Solicitar exclusão dos dados", self.client.get(PAGINA_CLIENTE).get_data(as_text=True))
         self._enviar(self.ROTA)
         minha = ChamadoSuporte.id_empresa == self.empresa_id
         self.assertEqual(self._contar(ChamadoSuporte, minha), 1)
@@ -1580,7 +1580,7 @@ class CorrecoesDaRevisaoTests(_ConfigCase):
         cliente, _ = self._entrar()
         self._enviar("/cliente/tickets", cliente=cliente, pagina="/cliente/tickets", categoria="FINANCEIRO",
                      assunto=configuracoes_conta.ASSUNTO_EXCLUSAO_DADOS, mensagem="Boleto vencido")
-        self.assertIn("Solicitar Exclusão de Dados", cliente.get(PAGINA_CLIENTE).get_data(as_text=True))
+        self.assertIn("Solicitar exclusão dos dados", cliente.get(PAGINA_CLIENTE).get_data(as_text=True))
         self.assertIn("Solicitação registrada", self._enviar("/cliente/configuracoes/solicitar-exclusao", cliente=cliente)
                       .get_data(as_text=True))
         self.assertEqual(self._contar(ChamadoSuporte, ChamadoSuporte.prioridade == "ALTA"), 1)
@@ -1690,14 +1690,16 @@ class CorrecoesDaRevisaoTests(_ConfigCase):
     def test_tela_do_lembrete_e_dos_avisos_nao_promete_o_que_nao_acontece(self):
         cliente, _ = self._entrar()
         pagina = cliente.get(PAGINA_CLIENTE).get_data(as_text=True)
-        self.assertIn("passa a valer quando a gestão do seu contrato estiver ativa", pagina)
+        self.assertIn("O portal ainda não acompanha as datas do seu contrato, então este lembrete não aparece "
+                      "por enquanto.", pagina)
         self.assertNotIn("você recebe um aviso por e-mail", pagina)  # envio desligado nesta base
         self.app.config.update(MAIL_ATIVO=True, BREVO_API_KEY=None)
         self.assertIn("você recebe um aviso por e-mail", cliente.get(PAGINA_CLIENTE).get_data(as_text=True))
         self.contratar(data_inicio=date(2026, 1, 1), data_fim=date(2026, 12, 31))
         self.ativar_regras()
         cliente, _ = self._entrar()
-        self.assertIn("quando a equipe NEXO dispara o lembrete", cliente.get(PAGINA_CLIENTE).get_data(as_text=True))
+        self.assertIn("A equipe NEXO também pode mandar o lembrete pelo sininho e por e-mail.",
+                      cliente.get(PAGINA_CLIENTE).get_data(as_text=True))
 
     def test_pagina_do_admin_mostra_o_email_de_acesso(self):
         admin, _ = self._entrar(ADMIN)

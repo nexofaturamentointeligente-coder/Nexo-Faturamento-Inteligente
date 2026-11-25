@@ -42,8 +42,8 @@ MENSAGEM_LONGA = (f"A mensagem passa de {LIMITE_POR_EXTENSO} caracteres. Nada fo
                   "mais de uma mensagem.")
 MENSAGEM_CORPO_GRANDE = (f"A mensagem passa do tamanho permitido no suporte (até {LIMITE_POR_EXTENSO} caracteres "
                          "por mensagem). Nada foi gravado: encurte o texto e envie de novo.")
-MENSAGEM_CHAMADO_REPETIDO = "Este chamado já foi aberto há instantes. Nada foi duplicado: a conversa é esta."
-MENSAGEM_RESPOSTA_REPETIDA = "Esta mensagem já foi enviada há instantes. Nada foi duplicado."
+MENSAGEM_CHAMADO_REPETIDO = "Você já tinha aberto este chamado há instantes. Para não duplicar, siga por esta conversa."
+MENSAGEM_RESPOSTA_REPETIDA = "Esta mensagem já tinha sido enviada há instantes. Ela aparece uma vez só na conversa."
 
 
 def normalizar_mensagem(texto) -> str:

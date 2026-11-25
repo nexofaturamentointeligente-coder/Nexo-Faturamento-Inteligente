@@ -8,16 +8,11 @@
 <div class="page-head">
     <div>
         <h1>Enviar relatórios</h1>
-        <p class="sub">Anexe os relatórios do seu sistema ERP{% if pdv_disponivel %} e informe o total de vendas do período{% endif %}. A equipe NEXO valida e processa.</p>
+        <p class="sub">Envie os relatórios de Vendas e de Compras exportados do seu sistema{% if pdv_disponivel %} e informe o total de vendas do período{% endif %}. A equipe NEXO valida os arquivos e prepara a sua análise.</p>
     </div>
     <div class="page-head-actions">
-        <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left"></i> Voltar ao painel</a>
+        <a href="{{ url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar ao painel</a>
     </div>
-</div>
-
-<div class="nota-pressao mb-4">
-    <i class="bi bi-shield-check"></i>
-    <span>Fluxo guiado: você <strong>fornece os arquivos</strong> (Vendas e Compras) e o <strong>consultor NEXO homologa</strong> antes de executar o motor de análise. Formatos aceitos: <strong>.csv</strong> e <strong>.xlsx</strong> exportados do seu PDV/ERP.</span>
 </div>
 
 {% if situacao and situacao.contratual and situacao.suspensa %}
@@ -28,43 +23,59 @@
 {% endif %}
 
 {% if not analises %}
-<div class="nexo-card">
+<div class="nexo-card mb-4">
     <div class="empty-state">
-        <div class="es-icon"><i class="bi bi-inbox"></i></div>
-        <h3>Nenhuma análise aguardando relatórios.</h3>
-        <p>Quando a equipe NEXO abrir um novo período de análise para a sua empresa, ele aparecerá aqui para você anexar os arquivos.</p>
+        <div class="es-icon"><i class="bi bi-inbox" aria-hidden="true"></i></div>
+        <h3>Nenhum período aberto para envio agora.</h3>
+        <p>Quando a equipe NEXO abrir o próximo período da sua empresa, ele aparece aqui para você enviar os relatórios.</p>
     </div>
 </div>
 {% else %}
 {% for a in analises %}
 {% set up_v = (a.uploads | selectattr('tipo_relatorio', 'equalto', 'VENDAS') | list | first) %}
 {% set up_c = (a.uploads | selectattr('tipo_relatorio', 'equalto', 'COMPRAS') | list | first) %}
+{# Quando o processamento falha, os dois arquivos ficam com Erro (admin.processar_analise). Um arquivo novo
+   (PENDENTE) já está com a equipe NEXO, que processa os dois de novo: o período deixa de pedir correção. #}
+{% set reenviado = a.uploads | selectattr('status_processamento', 'equalto', 'PENDENTE') | list %}
+{% set up_erro = none if reenviado else (a.uploads | selectattr('status_processamento', 'equalto', 'ERRO') | list | first) %}
+{% set faltam = (0 if up_v else 1) + (0 if up_c else 1) %}
 <div class="nexo-card mb-4">
     <div class="nexo-card-head">
         <div>
-            <h2>Análise {{ 'Quinzenal' if a.tipo_analise == 'QUINZENAL' else 'Mensal' }} · ref. {{ '%02d'|format(a.mes_referencia) }}/{{ a.ano_referencia }}</h2>
-            <p class="sub">Período: {{ a.periodo_inicio.strftime('%d/%m/%Y') }} – {{ a.periodo_fim.strftime('%d/%m/%Y') }}</p>
+            <h2>Análise {{ 'quinzenal' if a.tipo_analise == 'QUINZENAL' else 'mensal' }} de {{ '%02d'|format(a.mes_referencia) }}/{{ a.ano_referencia }}{% if a.quinzena_referencia %} ({{ a.quinzena_referencia }}ª quinzena){% endif %}</h2>
+            <p class="sub">Período: {{ m.periodo(a.periodo_inicio, a.periodo_fim) }}</p>
         </div>
-        {{ m.badge_analise(a.status_analise) }}
+        {% if up_erro %}<span class="nexo-badge b-red"><span class="dot"></span>Precisa de correção</span>
+        {% elif faltam %}<span class="nexo-badge b-amber"><span class="dot"></span>{{ 'Falta 1 relatório' if faltam == 1 else 'Faltam 2 relatórios' }}</span>
+        {% else %}{{ m.badge_analise(a.status_analise) }}{% endif %}
     </div>
     <div class="nexo-card-body">
+        {% if up_erro %}
+        <div class="aviso-contrato is-perigo" role="status">
+            <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+            <div>
+                <strong>Não conseguimos ler os relatórios deste período.</strong>
+                <p>Confira se os arquivos são os relatórios de vendas e de compras do período. Envie de novo o arquivo corrigido; o que estiver certo pode ficar como está. Dúvidas? <a href="{{ url_for('cliente.tickets', novo=1) }}">Abra um chamado</a>.</p>
+            </div>
+        </div>
+        {% endif %}
         <div class="row g-3">
             {% for slot in [
-                {'tipo': 'VENDAS', 'titulo': 'Relatório de Vendas', 'desc': 'Giro de vendas por produto', 'up': up_v},
-                {'tipo': 'COMPRAS', 'titulo': 'Relatório de Compras', 'desc': 'Posição de compras do período', 'up': up_c}
+                {'tipo': 'VENDAS', 'titulo': 'Relatório de Vendas', 'desc': 'Vendas por produto no período: nome do produto, quantidade e valor', 'up': up_v},
+                {'tipo': 'COMPRAS', 'titulo': 'Relatório de Compras', 'desc': 'Compras ou notas de entrada do período: fornecedor ou produto e valor', 'up': up_c}
             ] %}
             <div class="col-12 col-md-6">
-                <div class="upload-slot {{ 'is-done' if slot.up else '' }}">
+                <div class="upload-slot {{ 'is-error' if up_erro and slot.up and slot.up.status_processamento == 'ERRO' else ('is-done' if slot.up else '') }}">
                     <div class="upload-slot-head">
                         <div class="title" id="dzTitulo{{ a.id_analise }}{{ slot.tipo }}"><i class="bi bi-filetype-csv"></i> {{ slot.titulo }}</div>
                         {% if slot.up %}
                             {% if slot.up.status_processamento == 'PROCESSADO' %}{{ m.badge_upload('PROCESSADO') }}
                             {% elif slot.up.status_processamento == 'ERRO' %}{{ m.badge_upload('ERRO') }}
-                            {% else %}<span class="nexo-badge b-info"><span class="dot"></span>AGUARDANDO VALIDAÇÃO</span>{% endif %}
-                        {% else %}<span class="nexo-badge b-muted">NÃO ENVIADO</span>{% endif %}
+                            {% else %}<span class="nexo-badge b-info"><span class="dot"></span>Aguardando validação</span>{% endif %}
+                        {% else %}<span class="nexo-badge b-muted">Não enviado</span>{% endif %}
                     </div>
-                    <p class="field-hint">{{ slot.desc }} · CSV ou XLSX</p>
-                    <form method="POST" action="{{ url_for('cliente.upload') }}" enctype="multipart/form-data">
+                    <p class="field-hint">{{ slot.desc }}</p>
+                    <form method="POST" action="{{ url_for('cliente.upload') }}" enctype="multipart/form-data" data-envio-unico data-envio-aguarde>
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="id_analise" value="{{ a.id_analise }}">
                         <input type="hidden" name="tipo_relatorio" value="{{ slot.tipo }}">
@@ -78,37 +89,39 @@
                                 <span class="input-group-text">R$</span>
                                 <input type="text" inputmode="decimal" class="form-control" id="valorPdv{{ a.id_analise }}" name="valor_pdv_informado" placeholder="Ex: 150.000,00" maxlength="32" autocomplete="off" aria-describedby="valorPdvDica{{ a.id_analise }}" required>
                             </div>
-                            <p class="field-hint mt-1 mb-0" id="valorPdvDica{{ a.id_analise }}">O total de vendas que o PDV mostra neste relatório, de {{ a.periodo_inicio.strftime('%d/%m/%Y') }} a {{ a.periodo_fim.strftime('%d/%m/%Y') }}.{% if ultimo_total is not none %} Último informado: R$ {{ m.brl(ultimo_total) }}.{% endif %}</p>
+                            <p class="field-hint mt-1 mb-0" id="valorPdvDica{{ a.id_analise }}">Copie o total de vendas que aparece neste mesmo relatório, de {{ a.periodo_inicio.strftime('%d/%m/%Y') }} a {{ a.periodo_fim.strftime('%d/%m/%Y') }}. O NEXO confere esse valor com a soma das vendas do arquivo.{% if ultimo_total is not none %} Último informado: R$ {{ m.brl(ultimo_total) }}.{% endif %}</p>
                         </div>
                         {% endif %}
                         {# Arquivo já recebido: aparece como "recebido", não como se estivesse
                            selecionado agora. O estado muda ao escolher ou arrastar um arquivo novo. #}
-                        <label class="dropzone {{ 'is-recebido' if slot.up }}" data-dz>
+                        <label class="dropzone {{ 'is-recebido' if slot.up }}"{% if config.MAX_CONTENT_LENGTH %} data-max-bytes="{{ config.MAX_CONTENT_LENGTH }}"{% endif %} data-dz>
                             <div class="dz-icon"><i class="bi {{ 'bi-file-earmark-check' if slot.up else 'bi-cloud-arrow-up' }}" aria-hidden="true"></i></div>
                             <div class="dz-estado" id="dzEstado{{ a.id_analise }}{{ slot.tipo }}" data-dz-estado data-vazio="{{ 'Arquivo recebido' if slot.up else '' }}">{{ 'Arquivo recebido' if slot.up else '' }}</div>
-                            <div class="dz-title" id="dzNome{{ a.id_analise }}{{ slot.tipo }}" data-dz-label data-vazio="{{ slot.up.nome_arquivo_original if slot.up else 'Arraste o arquivo ou clique para selecionar' }}">{{ slot.up.nome_arquivo_original if slot.up else 'Arraste o arquivo ou clique para selecionar' }}</div>
-                            <div class="dz-hint" id="dzHint{{ a.id_analise }}{{ slot.tipo }}">{{ 'Para reenviar, arraste ou selecione um arquivo novo (.csv ou .xlsx)' if slot.up else 'Formatos aceitos: .csv, .xlsx' }}</div>
+                            <div class="dz-title" id="dzNome{{ a.id_analise }}{{ slot.tipo }}" data-dz-label data-vazio="{{ slot.up.nome_arquivo_original if slot.up else 'Selecionar arquivo' }}">{{ slot.up.nome_arquivo_original if slot.up else 'Selecionar arquivo' }}</div>
+                            <div class="dz-hint" id="dzHint{{ a.id_analise }}{{ slot.tipo }}" data-dz-dica data-selecionado="Agora use o botão “{{ 'Reenviar' if slot.up else 'Enviar' }} {{ slot.tipo|capitalize }}” abaixo.">{{ 'Um arquivo novo substitui o atual' if slot.up else 'Ou arraste o arquivo até aqui' }} · .csv ou .xlsx{% if config.MAX_CONTENT_LENGTH %}, até {{ config.MAX_CONTENT_LENGTH // 1048576 }} MB{% endif %}</div>
                             <div class="dz-erro" data-dz-erro role="alert"></div>
                             <input type="file" name="arquivo" accept=".csv,.xlsx" data-dz-input
                                    {# Nome acessível com os textos visíveis (título do slot, estado e nome do arquivo), acompanhando o estado. #}
                                    aria-labelledby="dzTitulo{{ a.id_analise }}{{ slot.tipo }} dzEstado{{ a.id_analise }}{{ slot.tipo }} dzNome{{ a.id_analise }}{{ slot.tipo }}" aria-describedby="dzHint{{ a.id_analise }}{{ slot.tipo }}">
                         </label>
-                        <button type="submit" class="btn-ghost w-100 justify-content-center mt-3"><i class="bi bi-upload" aria-hidden="true"></i> {{ 'Reenviar' if slot.up else 'Enviar' }} {{ slot.tipo|capitalize }}</button>
+                        <button type="submit" class="{{ 'btn-ghost' if slot.up and (slot.up.status_processamento != 'ERRO' or not up_erro) else 'btn-nexo' }} w-100 justify-content-center mt-3"><i class="bi bi-upload" aria-hidden="true"></i> {{ 'Reenviar' if slot.up else 'Enviar' }} {{ slot.tipo|capitalize }}</button>
+                        <p class="envio-andamento" role="status" data-envio-andamento="Enviando e lendo o arquivo. Pode levar até 2 minutos: não feche esta página."></p>
                     </form>
                 </div>
             </div>
             {% endfor %}
         </div>
-        {% if up_v and up_c %}
+        {% if up_v and up_c and not up_erro %}
         <div class="nota-pressao mt-3" style="background:linear-gradient(var(--success-bg),var(--success-bg)),var(--glass-strong);border-color:rgba(34,197,94,0.25);">
-            <i class="bi bi-check-circle"></i>
-            <span>Os dois relatórios foram recebidos. A equipe NEXO já pode validar e processar esta análise.</span>
+            <i class="bi bi-check-circle" aria-hidden="true"></i>
+            <span>Pronto: os dois relatórios foram recebidos. A equipe NEXO valida os arquivos e avisa você pelo sininho quando eles forem processados.</span>
         </div>
         {% endif %}
     </div>
 </div>
 {% endfor %}
 {% endif %}
+<p class="field-hint mb-0">Dúvida para exportar os relatórios do seu sistema? Veja o <a href="{{ url_for('cliente.guia') }}">Guia</a> ou <a href="{{ url_for('cliente.tickets', novo=1) }}">abra um chamado</a>.</p>
 {% endblock %}
 
 {# O comportamento das dropzones (teclado, arrastar e soltar, estados e validação) é

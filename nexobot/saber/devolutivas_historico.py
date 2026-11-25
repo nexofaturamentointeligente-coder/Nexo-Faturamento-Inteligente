@@ -234,8 +234,8 @@ REGISTROS = (
         categoria="Histórico e PDF",
         tipo="procedimento",
         resumo=(
-            "Clique em Histórico no menu lateral. A página lista todas as devolutivas publicadas para a sua "
-            "empresa, com período, tipo, data de publicação, status e o botão “Abrir análise”."
+            "Clique em Histórico no menu lateral. A página lista todas as análises publicadas para a sua "
+            "empresa, com período, tipo, data de publicação e o botão “Abrir análise”."
         ),
         perguntas=(
             "Como abro o histórico?", "Onde fica o histórico?", "Como vejo minhas análises anteriores?",

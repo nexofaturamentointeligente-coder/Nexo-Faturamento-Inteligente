@@ -41,9 +41,9 @@
 
 {# ---- Badge: status da conta da empresa (Empresa.status_conta) ---- #}
 {%- macro badge_conta(status) -%}
-{%- if status == 'ATIVA' -%}<span class="nexo-badge b-green"><span class="dot"></span>ATIVA</span>
-{%- elif status == 'SUSPENSA' -%}<span class="nexo-badge b-amber"><span class="dot"></span>SUSPENSA</span>
-{%- elif status == 'CANCELADA' -%}<span class="nexo-badge b-red"><span class="dot"></span>CANCELADA</span>
+{%- if status == 'ATIVA' -%}<span class="nexo-badge b-green"><span class="dot"></span>Ativa</span>
+{%- elif status == 'SUSPENSA' -%}<span class="nexo-badge b-amber"><span class="dot"></span>Suspensa</span>
+{%- elif status == 'CANCELADA' -%}<span class="nexo-badge b-red"><span class="dot"></span>Cancelada</span>
 {%- else -%}<span class="nexo-badge b-muted">{{ status }}</span>
 {%- endif -%}
 {%- endmacro -%}
@@ -79,7 +79,7 @@
 
 {# ---- Card da divergência com o PDV. Só recebe cada valor quem pode vê-lo: o cliente
       de período não coberto vê apenas o total que ele mesmo digitou, ou nenhum ---- #}
-{%- macro aviso_divergencia_pdv(titulo, texto, informado=none, calculado=none, diferenca=none, classe='is-perigo', devolucoes=none, cancelado=none, link_url=none, link_texto=none) -%}
+{%- macro aviso_divergencia_pdv(titulo, texto, informado=none, calculado=none, diferenca=none, classe='is-perigo', devolucoes=none, cancelado=none, link_url=none, link_texto=none, consultor=false) -%}
 <div class="aviso-contrato {{ classe }}" role="status">
     <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
     <div class="flex-grow-1">
@@ -87,9 +87,9 @@
         <p>{{ texto }}{% if link_url %} <a href="{{ link_url }}">{{ link_texto }}</a>{% endif %}</p>
         {% if informado is not none or calculado is not none %}
         <dl class="dados-contrato mt-2">
-            {% if informado is not none %}<div><dt>Valor informado no PDV</dt><dd class="fw-num">R$ {{ brl(informado) }}</dd></div>{% endif %}
-            {% if calculado is not none %}<div><dt>Valor total calculado pelo ETL</dt><dd class="fw-num">R$ {{ brl(calculado) }}</dd></div>{% endif %}
-            {% if diferenca is not none %}<div><dt>Divergência apurada</dt><dd class="fw-num">R$ {{ brl(diferenca) }}</dd></div>{% endif %}
+            {% if informado is not none %}<div><dt>{{ 'Valor informado no PDV' if consultor else 'Total de vendas no PDV (informado)' }}</dt><dd class="fw-num">R$ {{ brl(informado) }}</dd></div>{% endif %}
+            {% if calculado is not none %}<div><dt>{{ 'Valor total calculado pelo ETL' if consultor else 'Total de vendas calculado pelo NEXO' }}</dt><dd class="fw-num">R$ {{ brl(calculado) }}</dd></div>{% endif %}
+            {% if diferenca is not none %}<div><dt>{{ 'Divergência apurada' if consultor else 'Diferença entre os totais' }}</dt><dd class="fw-num">R$ {{ brl(diferenca) }}</dd></div>{% endif %}
             {% if devolucoes is not none %}<div><dt>Devoluções e trocas, fora do bruto</dt><dd class="fw-num">R$ {{ brl(devolucoes) }}</dd></div>{% endif %}
             {% if cancelado is not none %}<div><dt>Vendas canceladas, fora do cálculo</dt><dd class="fw-num">R$ {{ brl(cancelado) }}</dd></div>{% endif %}
         </dl>
@@ -102,7 +102,7 @@
 {%- macro card_pdv_consultor(v, titulo, link_url=none, link_texto=none) -%}
 {%- set saida = 'A emissão e o compartilhamento com o cliente estão bloqueados. Corrija o total ou reenvie o relatório de Vendas na tela da análise e processe de novo.' -%}
 {%- set nota = '' if v.valor_devolucoes is not none else ' Este relatório não traz coluna de status ou operação: o calculado é a soma direta das linhas, e linhas negativas já entram nela.' -%}
-{{ aviso_divergencia_pdv(titulo, saida ~ nota, v.valor_pdv_informado, v.faturamento_bruto_calculado, v.diferenca, 'is-perigo', v.valor_devolucoes, v.valor_cancelado, link_url, link_texto) }}
+{{ aviso_divergencia_pdv(titulo, saida ~ nota, v.valor_pdv_informado, v.faturamento_bruto_calculado, v.diferenca, 'is-perigo', v.valor_devolucoes, v.valor_cancelado, link_url, link_texto, consultor=true) }}
 {%- endmacro -%}
 
 {# ---- Badge: plano comercial (Plano.nome_plano) ---- #}
@@ -116,9 +116,9 @@
 
 {# ---- Badge: status do upload (UploadRelatorio.status_processamento) ---- #}
 {%- macro badge_upload(status) -%}
-{%- if status == 'PROCESSADO' -%}<span class="nexo-badge b-green"><span class="dot"></span>PROCESSADO</span>
-{%- elif status == 'ERRO' -%}<span class="nexo-badge b-red"><span class="dot"></span>ERRO</span>
-{%- else -%}<span class="nexo-badge b-amber"><span class="dot"></span>PENDENTE</span>
+{%- if status == 'PROCESSADO' -%}<span class="nexo-badge b-green"><span class="dot"></span>Processado</span>
+{%- elif status == 'ERRO' -%}<span class="nexo-badge b-red"><span class="dot"></span>Erro</span>
+{%- else -%}<span class="nexo-badge b-amber"><span class="dot"></span>Pendente</span>
 {%- endif -%}
 {%- endmacro -%}
 
@@ -281,8 +281,8 @@
 {# ---- Legenda metodológica da Curva ABC (embasamento Pareto 80-20) ---- #}
 {%- macro nota_abc() -%}
 <div class="nota-pressao nota-abc">
-    <i class="bi bi-bezier2"></i>
-    <span><strong>Curva ABC (Princípio de Pareto):</strong> Classe A = até 80% do faturamento acumulado (estratégicos), Classe B = 80–95% (táticos), Classe C = ~5% restantes (operacionais).</span>
+    <i class="bi bi-bezier2" aria-hidden="true"></i>
+    <span><strong>Como ler a Curva ABC:</strong> Classe A reúne os produtos que, somados, fazem até 80% do faturamento; Classe B, os que levam a soma de 80% a 95%; Classe C, os que formam os 5% finais.</span>
 </div>
 {%- endmacro -%}
 

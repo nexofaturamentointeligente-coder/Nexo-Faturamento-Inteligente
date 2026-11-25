@@ -65,9 +65,9 @@ REGISTROS = (
             "análise nas listas e nos avisos."
         ),
         explicacao=(
-            "Quando o relatório importado traz o período no cabeçalho, o processamento lê essas datas e as "
-            "mostra na barra de origem dos dados da análise (“Período dos dados”), permitindo conferir se o "
-            "arquivo cobre o período esperado."
+            "Quando o relatório enviado traz o período no cabeçalho, o NEXO lê essas datas e as mostra na "
+            "barra de origem dos dados da análise (“Período analisado”), permitindo conferir se o arquivo "
+            "cobre o período esperado."
         ),
         perguntas=(
             "O que é período de referência?", "Qual período devo exportar?", "O que é mês de referência?",
@@ -89,8 +89,8 @@ REGISTROS = (
         explicacao=(
             "O processamento, os indicadores e a devolutiva são os mesmos nos dois tipos; o que muda é o "
             "tamanho do período e a frequência das entregas. As listas da Visão Geral, do Histórico e de Enviar "
-            "Relatórios mostram o tipo de cada análise (Mensal ou Quinzenal). A barra de auditoria mostra a "
-            "base de dados, o período dos dados e os arquivos importados."
+            "Relatórios mostram o tipo de cada análise (Mensal ou Quinzenal). A barra de origem dos dados "
+            "mostra a empresa, o período analisado e os relatórios usados."
         ),
         perguntas=(
             "Mensal ou quinzenal?", "O que é análise quinzenal?", "O que é análise mensal?",

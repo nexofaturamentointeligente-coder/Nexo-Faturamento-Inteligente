@@ -302,7 +302,7 @@ class AssinaturaTests(_Pasta):
         with self.assertRaises(SecurityGatekeeperError) as erro:
             baia.inspecionar_arquivo(self.arquivo(html, "xml"), "xml", leitura_direta=True, rotulo="Arquivo 2")
         self.assertEqual(erro.exception.safe_message,
-                         f"Arquivo 2: arquivo fora do padrão aceito para auditoria. {baia.ORIENTACAO_XML}")
+                         f"Arquivo 2: arquivo fora do padrão aceito. {baia.ORIENTACAO_XML}")
 
     def test_cada_condicao_da_planilha_xml_recusa_sozinha(self):
         """Pedido pelo teste de mutação da revisão final. Cada caso viola UMA condição de _e_planilha_xml e
@@ -343,8 +343,8 @@ class AssinaturaTests(_Pasta):
                     with self.assertRaises(SecurityGatekeeperError) as erro:
                         baia.inspecionar_arquivo(caminho, "xls", leitura_direta=direta, rotulo="Arquivo 1")
                     self.assertEqual(erro.exception.motivo, motivo)
-                    self.assertEqual(erro.exception.safe_message, "Arquivo 1: arquivo fora do padrão aceito para "
-                                     f"auditoria. {baia.ORIENTACAO_XLS_ILEGIVEL}")
+                    self.assertEqual(erro.exception.safe_message, "Arquivo 1: arquivo fora do padrão aceito. "
+                                     f"{baia.ORIENTACAO_XLS_ILEGIVEL}")
         self.assertEqual(self.recusa(html, "xls", "marcacao").safe_message,
                          f"{MENSAGEM_PADRAO} {baia.ORIENTACAO_XLS_ILEGIVEL}")
         # A frase diz o que fazer sem afirmar que o arquivo não é planilha: o motivo documento_ole também sai
@@ -373,7 +373,7 @@ class AssinaturaTests(_Pasta):
         caminho = self.arquivo(executavel_pe(), "csv")
         with self.assertRaises(SecurityGatekeeperError) as erro:
             baia.inspecionar_arquivo(caminho, "csv", rotulo="Arquivo 3")
-        self.assertEqual(erro.exception.safe_message, "Arquivo 3: arquivo fora do padrão aceito para auditoria.")
+        self.assertEqual(erro.exception.safe_message, "Arquivo 3: arquivo fora do padrão aceito.")
         self.assertEqual(erro.exception.motivo, "executavel_pe")
 
     def test_erro_da_baia_e_um_erro_de_entrada_do_etl(self):
@@ -863,7 +863,7 @@ class BaiaNoRaioXTests(DeployTestCase):
             with self.assertRaises(SecurityGatekeeperError) as erro:
                 raio_x_servico.processar_envio(arquivos, LIMITES)
         processo.assert_not_called()
-        self.assertEqual(erro.exception.safe_message, "Arquivo 2: arquivo fora do padrão aceito para auditoria.")
+        self.assertEqual(erro.exception.safe_message, "Arquivo 2: arquivo fora do padrão aceito.")
 
 
 class WorkerUsaABaiaTests(unittest.TestCase):

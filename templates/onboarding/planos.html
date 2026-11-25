@@ -7,13 +7,15 @@
 {% block page_title %}Planos{% endblock %}
 
 {% block content %}
+{% set superiores = (linhas | map(attribute='nivel') | selectattr('nivel_hierarquico', 'gt', atual.nivel_hierarquico if atual else 0) | list) if disponivel else [] %}
 <div class="page-head">
     <div>
         <h1>Planos e funcionalidades</h1>
         <p class="sub">O que cada nível do NEXO libera no portal. Valores e condições são tratados com a equipe NEXO.</p>
     </div>
     <div class="page-head-actions">
-        <a href="{{ url_for('onboarding.diagnostico') if disponivel else url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> Voltar</a>
+        {% if superiores %}<a href="#mudarPlano" class="btn-nexo"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Pedir mudança de plano</a>{% endif %}
+        <a href="{{ url_for('onboarding.diagnostico') if disponivel else url_for('cliente.dashboard') }}" class="btn-ghost"><i class="bi bi-arrow-left" aria-hidden="true"></i> {{ 'Voltar ao Raio-X' if disponivel else 'Voltar à Visão Geral' }}</a>
     </div>
 </div>
 
@@ -61,9 +63,8 @@
     {% endfor %}
 </div>
 
-{% set superiores = linhas | map(attribute='nivel') | selectattr('nivel_hierarquico', 'gt', atual.nivel_hierarquico if atual else 0) | list %}
 {% if superiores %}
-<section class="nexo-card mb-4" aria-labelledby="mudarPlanoTitulo">
+<section class="nexo-card mb-4" id="mudarPlano" aria-labelledby="mudarPlanoTitulo">
     <div class="nexo-card-head">
         <div>
             <h2 id="mudarPlanoTitulo"><i class="bi bi-arrow-up-circle text-purple" aria-hidden="true"></i> Mudar de plano</h2>
@@ -77,7 +78,7 @@
             <div class="mb-3">
                 <label class="nexo-label" for="planoDesejado">Plano desejado</label>
                 <select class="form-select" id="planoDesejado" name="assunto" required>
-                    {% for n in superiores %}<option value="Mudança de plano: {{ n.nome }}">{{ n.nome }}</option>{% endfor %}
+                    {% for n in superiores %}<option value="Mudança de plano: {{ n.nome }}" data-ancora="{{ n.ancora }}">{{ n.nome }}</option>{% endfor %}
                 </select>
             </div>
             <div class="mb-3">
@@ -97,4 +98,8 @@
 </section>
 {% endif %}
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/planos.js') }}" defer></script>
 {% endblock %}

@@ -478,7 +478,7 @@ def create_app(config_name: str = None) -> Flask:
         limite = limiter.current_limit
         minutos = max(1, math.ceil((limite.reset_at - 1 - time.time()) / 60)) if limite else 1
         espera = "um minuto" if minutos == 1 else f"{minutos} minutos"
-        mensagem = f"Você fez muitas requisições em pouco tempo. Aguarde {espera} e tente novamente."
+        mensagem = f"Houve muitas tentativas em pouco tempo. Aguarde {espera} e tente novamente."
         if _limite_por_endereco(limite):
             # Contado pelo endereço de rede (o login, por exemplo): colegas atrás do mesmo roteador ou do
             # mesmo provedor somam as tentativas, e quem esbarrou no limite pode não ter feito todas.
@@ -535,7 +535,7 @@ def create_app(config_name: str = None) -> Flask:
     @app.errorhandler(404)
     def _nao_encontrado(e):
         return _pagina_erro(404, "Página não encontrada",
-                            "O endereço não existe ou o item foi removido. Confira o link ou volte ao painel.")
+                            "Este endereço não existe ou o item foi removido. Confira o link.")
 
     @app.errorhandler(403)
     def _acesso_negado(e):

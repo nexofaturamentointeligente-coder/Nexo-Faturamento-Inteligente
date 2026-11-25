@@ -119,10 +119,12 @@
 
     if (!form) return;
     var botao = form.querySelector('button[type="submit"]');
+    var andamento = form.querySelector('[data-envio-andamento]');
     var textoBotao = botao ? botao.innerHTML : '';
     var liberar = null;
     function restaurar() {
       window.clearTimeout(liberar);
+      if (andamento) andamento.textContent = '';
       if (!botao) return;
       botao.disabled = false;
       botao.removeAttribute('aria-busy');
@@ -143,6 +145,7 @@
         botao.disabled = true;
         botao.setAttribute('aria-busy', 'true');
         botao.textContent = 'Lendo os relatórios…';
+        if (andamento) andamento.textContent = andamento.getAttribute('data-envio-andamento') || '';
         liberar = window.setTimeout(restaurar, 150000);
       }
     });
@@ -150,4 +153,17 @@
       if (evento.persisted) restaurar();
     });
   });
+
+  /* ---- Página de planos: quem chega pelo link de um plano (#prata) encontra esse plano já escolhido no pedido ---- */
+  var desejado = document.getElementById('planoDesejado');
+  function escolherPelaAncora() {
+    var ancora = (window.location.hash || '').slice(1).toLowerCase();
+    if (!desejado || !ancora) return;
+    Array.prototype.forEach.call(desejado.options, function (opcao) {
+      if (opcao.getAttribute('data-ancora') === ancora) desejado.value = opcao.value;
+    });
+  }
+  escolherPelaAncora();
+  // O link de um plano com a página de planos já aberta (o item travado do menu) só troca a âncora.
+  if (desejado) window.addEventListener('hashchange', escolherPelaAncora);
 })();

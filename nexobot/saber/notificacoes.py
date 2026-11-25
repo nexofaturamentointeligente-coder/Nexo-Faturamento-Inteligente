@@ -22,7 +22,7 @@ REGISTROS = (
             "Os avisos chegam quase em tempo real enquanto o portal está aberto (em até 30 segundos; aparece "
             "também um alerta no canto da tela) e ficam guardados para quando você entrar de novo. “Marcar "
             "todas como lidas” zera a "
-            "contagem. Cada aviso traz um selo: Nova Análise, Resolvido, Aberto, Contrato ou Aviso."
+            "contagem. Cada aviso traz um selo: Nova Análise, Em análise, Resposta, Resolvido, Avaliação, Contrato, Aviso ou Aberto."
         ),
         perguntas=(
             "Para que serve o sininho?", "Como recebo as notificações?", "Onde vejo meus avisos?",

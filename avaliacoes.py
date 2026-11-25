@@ -61,7 +61,7 @@ TEXTO_CONSENTIMENTO = (
 )
 VERSAO_AVISO_CONSENTIMENTO = "2026-11-01"
 
-MENSAGEM_SUCESSO = "Obrigado pela sua avaliação! Sua opinião é muito importante para a evolução da NEXO."
+MENSAGEM_SUCESSO = "Avaliação enviada. Obrigado! Acompanhe aqui a revisão da equipe NEXO."
 # Resposta do envio pelo modal da landing (JSON): depende da autorização marcada no envio.
 MENSAGEM_RECEBIDA = "Recebemos sua avaliação. Ela será publicada depois da revisão da equipe."
 MENSAGEM_RECEBIDA_SEM_PUBLICACAO = ("Recebemos sua avaliação. Como você não autorizou a publicação, ela fica só "

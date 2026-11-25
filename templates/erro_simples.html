@@ -31,7 +31,10 @@
             <div class="d-grid gap-2">
                 {% if painel_url %}
                 <a href="{{ painel_url }}" class="btn-nexo auth-submit"><i class="bi bi-speedometer2" aria-hidden="true"></i> Voltar ao painel</a>
-                <a href="{{ url_for('index') }}" class="btn-ghost justify-content-center"><i class="bi bi-house" aria-hidden="true"></i> Página inicial</a>
+                <a href="{{ url_for('index') }}" class="btn-ghost justify-content-center"><i class="bi bi-house" aria-hidden="true"></i> Site da NEXO</a>
+                {% elif codigo in (429, 503) %}
+                <a href="{{ url_for('auth.login') }}" class="btn-nexo auth-submit"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Entrar no portal</a>
+                <a href="{{ url_for('index') }}" class="btn-ghost justify-content-center"><i class="bi bi-house" aria-hidden="true"></i> Voltar ao início</a>
                 {% else %}
                 <a href="{{ url_for('index') }}" class="btn-nexo auth-submit"><i class="bi bi-house" aria-hidden="true"></i> Voltar ao início</a>
                 <a href="{{ url_for('auth.login') }}" class="btn-ghost justify-content-center"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Entrar no portal</a>

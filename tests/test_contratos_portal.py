@@ -815,7 +815,7 @@ class UploadContratualTests(PortalContratualCase):
     def _assert_enviado(self, resposta, id_analise):
         self.assertEqual(resposta.status_code, 302, self._texto(resposta)[:400])
         self.assertTrue(resposta.headers["Location"].endswith("/cliente/upload"))
-        self.assertIn("Relatório de VENDAS enviado. A equipe NEXO fará a validação e o processamento.",
+        self.assertIn("Relatório de Vendas recebido. Falta enviar o relatório de Compras.",
                       self._flashes(self.client_cli))
         [upload] = self._uploads(id_analise)
         self.assertEqual((upload.tipo_relatorio, upload.status_processamento), ("VENDAS", "PENDENTE"))

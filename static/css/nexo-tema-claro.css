@@ -658,3 +658,13 @@ html[data-theme="light"] .plano-acao .form-check-input:focus-visible { outline: 
 html[data-theme="light"] .avisos-raio-x { border-color: rgba(217, 119, 6, 0.4); }
 html[data-theme="light"] .avisos-corpo { border-top-color: rgba(217, 119, 6, 0.32); }
 html[data-theme="light"] .avisos-lista > li { background: var(--surface); }
+
+/* ==== UX painel_analise (início) ==== */
+html[data-theme="light"] .abc-pill:focus-visible { outline-color: var(--primary-2); }
+/* Sem a paisagem: a mesma cor dos subtítulos das páginas no claro. */
+html[data-theme="light"] .analise-duvidas { color: var(--text-muted); }
+/* ==== UX painel_analise (fim) ==== */
+
+/* ==== UX raio_x_planos (início) ==== */
+html[data-theme="light"] .plano-card:target { box-shadow: 0 0 0 2px var(--primary-2), 0 18px 40px -26px rgba(45, 27, 94, 0.35); }
+/* ==== UX raio_x_planos (fim) ==== */

@@ -533,8 +533,8 @@ REGISTROS = (
         resumo=(
             "Exclusivamente dos dois relatórios (Vendas e Compras) anexados à análise, enviados por você ou "
             "pela equipe NEXO em nome da sua empresa, e processados pela equipe NEXO. A barra de origem dos "
-            "dados, no topo da Visão Geral e de cada análise, mostra a empresa, o período e os nomes dos "
-            "arquivos usados."
+            "dados, no fim do bloco da análise mais recente na Visão Geral e no fim da página de cada análise, "
+            "mostra a empresa, o período e os nomes dos arquivos usados."
         ),
         perguntas=(
             "De onde vêm os números?", "Qual a origem dos dados do painel?", "Os indicadores usam que arquivos?",
